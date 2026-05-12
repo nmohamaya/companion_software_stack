@@ -1448,12 +1448,20 @@ TEST(PurePursuitTest, ConfigDefaultDisabled) {
 // ═════════════════════════════════════════════════════════════
 
 TEST(FallbackBehaviourTest, SearchFailureKeepsLastGoodPath) {
-    // First plan succeeds and caches a path.
-    // Then we wall off the grid so the next plan fails.
-    // The planner should keep following the cached path, NOT fly direct.
+    // First plan succeeds and caches a path along y=0.
+    // Then we add an obstacle OFF the cached path (y=2..4 only) so the
+    // cached path validation finds no occupied cells on the remaining
+    // waypoints.  Per the Issue #237 contract, the planner keeps the
+    // cached path rather than falling back to direct.
+    //
+    // Issue #698 / PR #704 made this safer: search failure now drops
+    // the cache only if the remaining cached cells are blocked.  Off-
+    // path obstacles still allow cache reuse.  See
+    // SearchFailureWithBlockedCachedPathHovers below for the inverse
+    // (on-path block → hover).
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
-    config.grid_extent_m      = 4.0f;  // small grid so wall is impassable
+    config.grid_extent_m      = 4.0f;
     config.inflation_radius_m = 0.5f;
     config.smoothing_alpha    = 1.0f;
     config.replan_interval_s  = 0.0f;
@@ -1470,7 +1478,61 @@ TEST(FallbackBehaviourTest, SearchFailureKeepsLastGoodPath) {
     EXPECT_FALSE(planner.cached_path().empty());
     size_t first_path_size = planner.cached_path().size();
 
-    // Wall off — complete barrier across the grid
+    // Wall off — barrier at x=1..2 but only y=2..4 (off the cached path
+    // which runs along y=0).  Cached path validation finds no occupied
+    // cells on the remaining waypoints.
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int y = 2; y <= 4; ++y) {
+        for (int x = 1; x <= 2; ++x) {
+            if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+            objects.objects[idx].position_x = static_cast<float>(x);
+            objects.objects[idx].position_y = static_cast<float>(y);
+            objects.objects[idx].position_z = 0.0f;
+            objects.objects[idx].confidence = 0.9f;
+            ++idx;
+        }
+    }
+    objects.num_objects = idx;
+    planner.update_obstacles(objects, pose);
+
+    // Second plan — cached path remains valid (off-path obstacle)
+    auto cmd2 = planner.plan(pose, target);
+    EXPECT_TRUE(cmd2.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+    EXPECT_EQ(planner.cached_path().size(), first_path_size);
+}
+
+TEST(FallbackBehaviourTest, SearchFailureWithBlockedCachedPathHovers) {
+    // Issue #698 / PR #704 — when D*Lite fails AND the cached path has
+    // been blocked by newly-promoted obstacles, the planner must drop
+    // the cache and hover, NOT follow the now-unsafe cached path.
+    // Scenario 33 run 2026-05-03_140302_ABORTED logged 82 stale-cached-
+    // path reuses; the drone collided with pillar_01 and a TemplateCube
+    // because the planner was following an old path through cells that
+    // were now occupied.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 4.0f;
+    config.inflation_radius_m = 0.5f;
+    config.smoothing_alpha    = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.snap_search_radius = 0;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    Waypoint         target{3.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+
+    // First plan — clear grid, populates the cache along y=0
+    auto cmd1 = planner.plan(pose, target);
+    EXPECT_TRUE(cmd1.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    // Now wall off the whole grid at x=1..2 (covers y=-4..4) — both
+    // blocks D*Lite from reaching the goal AND occupies cells on the
+    // cached path (idx 1=(1,0,0), idx 2=(2,0,0)).
     drone::ipc::DetectedObjectList objects{};
     uint32_t                       idx = 0;
     for (int y = -4; y <= 4; ++y) {
@@ -1486,12 +1548,17 @@ TEST(FallbackBehaviourTest, SearchFailureKeepsLastGoodPath) {
     objects.num_objects = idx;
     planner.update_obstacles(objects, pose);
 
-    // Second plan — search fails, but planner keeps the old cached path
+    // Second plan — D*Lite fails, cached path is now occupied → hover
     auto cmd2 = planner.plan(pose, target);
     EXPECT_TRUE(cmd2.valid);
-    EXPECT_FALSE(planner.using_direct_fallback());
-    EXPECT_FALSE(planner.cached_path().empty());
-    EXPECT_EQ(planner.cached_path().size(), first_path_size);
+    EXPECT_TRUE(planner.using_direct_fallback());
+    EXPECT_TRUE(planner.cached_path().empty());
+
+    // Velocity should be near-zero hover (XY only — z may drive
+    // toward target altitude per the hover fallback path).
+    float xy_speed =
+        std::sqrt(cmd2.velocity_x * cmd2.velocity_x + cmd2.velocity_y * cmd2.velocity_y);
+    EXPECT_LT(xy_speed, 0.1f) << "Expected near-zero XY velocity (hover), got speed=" << xy_speed;
 }
 
 TEST(FallbackBehaviourTest, NoCachedPathHoversInPlace) {
