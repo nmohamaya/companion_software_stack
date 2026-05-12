@@ -180,6 +180,107 @@ main (demo-ready throughout)
 3. **Each sub-issue PR gets reviewed independently** on the integration branch. The final PR to `main` is the fully-tested aggregate.
 4. **Run scenario tests on the integration branch** before the final merge — this is where integration bugs surface (e.g., radar ground-plane flooding wasn't visible until camera+radar+fusion were all running together).
 
+### Integration-to-main rollup — review process
+
+When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks) and is ready to merge into `main`, follow this checklist.  Tracked end-to-end in a GitHub issue (`Integration → main merge` template).
+
+#### Why a special process is needed
+
+Individual PRs are reviewed at land-time, but the **combined diff** going to `main` is much larger than any single PR.  Risks the standard PR review misses:
+
+- Cross-cutting interactions between features that landed separately
+- Documentation drift across PROGRESS.md / ROADMAP.md / API.md / TESTS.md
+- Test-baseline drift (TESTS.md counts go stale across many PRs)
+- Latent gaps where a per-site fix should have been a wrapper-level fix (see #720/#722 for an example)
+- Performance / CPU-usage regression that's invisible per-PR but compounds
+
+The standard `/review-pr` skill is designed for single-PR review (~hundreds of lines).  An integration rollup needs a different approach.
+
+#### Phase 1 — Pre-review cleanup
+
+Before kicking off agent reviews, get the branch into a clean baseline state:
+
+- [ ] **Resolve all known-failing tests.**  Either fix them or document acceptance.  `ctest` should be fully green.
+- [ ] **Refresh `docs/tracking/PROGRESS.md`** with improvement entries for every PR landed since the last main merge.
+- [ ] **Refresh `docs/tracking/ROADMAP.md`** — mark issues done (strikethrough + checkmark), update metrics table.
+- [ ] **Refresh `docs/design/API.md`** if any IPC types or HAL interfaces changed.
+- [ ] **Refresh `tests/TESTS.md`** — update test counts + add entries for new test files.
+- [ ] **Verify `bash deploy/run_ci_local.sh` clean** (build + format + tests + sanitizers).
+- [ ] **Triage all open follow-up issues** filed during the integration work — mark which block merge vs which are post-merge.
+
+#### Phase 2 — Scenario sweep on integration HEAD
+
+Run all Gazebo scenarios (and Cosys-AirSim scenarios if applicable) on the integration branch's HEAD.  Capture results in a tracking doc (`docs/tracking/INTEGRATION_MERGE_SCENARIO_SWEEP.md` or similar):
+
+- [ ] Each scenario: PASS / FAIL + key metrics (PX4 denies count, hover-fallback events, mission-complete state)
+- [ ] Document any scenarios known to be flaky on this machine
+- [ ] Compare against the last `main` baseline if available
+
+This is the **integration-test gate** — multi-agent code review cannot catch runtime regressions.  If a scenario regressed, it's a P1 blocker.
+
+#### Phase 3 — Themed multi-agent reviews
+
+Split the diff into ~5-7 thematic chunks of related PRs.  Run `/review-pr` (10-agent pipeline + Copilot) on each chunk separately to avoid context-window saturation.
+
+Typical themes:
+
+1. **Benchmark / observability infrastructure** (profilers, dashboards, GT emitters)
+2. **HAL / interface layer changes** (new HAL types, refactors)
+3. **Feature epics** (one per epic if there were multiple)
+4. **Scenario-specific stacks** (e.g. scenario 33 stack)
+5. **Review-fix waves** (Pass 1/2 follow-ups from individual PRs)
+6. **Safety / fault recovery changes**
+7. **Cross-cutting docs / tests / infra**
+
+For each pass, deliverables:
+
+- [ ] All P1 findings either fixed inline or filed as merge-blockers
+- [ ] All P2 findings filed or fixed
+- [ ] All P3 findings logged to `docs/tracking/IMPROVEMENTS.md`
+- [ ] Copilot findings overlap with agent findings — deduplicate
+
+#### Phase 4 — Fix findings
+
+Address P1 findings before merge.  P2 findings either fixed or explicitly deferred with rationale in DESIGN_RATIONALE.md (DR-NNN).  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
+
+#### Phase 5 — Open the integration→main PR
+
+- Title: `feat: merge feature/<name> into main (<duration> of work)`
+- Body must include:
+  - Summary of themes (link to the tracking issue)
+  - Link to the scenario-sweep results doc
+  - List of every merged PR with one-line description
+  - Link to the changes-since-main doc (e.g. `tasks/INTEGRATION_BRANCH_CHANGES_SINCE_MAIN.md`)
+  - Any DR-NNN entries written during the rollup
+
+#### Phase 6 — Final pre-merge validation
+
+- [ ] Re-run scenario sweep on the PR branch with main merged-in (catches surface regressions from any merge conflicts)
+- [ ] Verify `ctest` fully green
+- [ ] Verify CI workflow passes on the PR
+
+#### Phase 7 — Merge decision
+
+- **Squash** the rollup into one commit on main: keeps main linear, loses individual PR history
+- **Merge commit** (preserves all N commits): main retains the development arc, useful for `git log`/`bisect` on per-PR resolution
+
+**Default for integration rollups: merge commit.**  Each PR in the integration branch already had review evidence; squashing erases that audit trail.  Use squash only if a PR landed buggy and got rescued by follow-up commits that you don't want polluting `git log`.
+
+#### Phase 8 — Post-merge cleanup
+
+- [ ] Delete the integration branch on origin
+- [ ] Remove all integration-branch worktrees
+- [ ] Update `tasks/active-work.md` and similar trackers
+- [ ] Close the rollup tracking issue with a summary
+
+#### Cost estimate
+
+Typical integration rollup: **6-12 hours over 2-3 sessions**.  Phase 2 (scenario sweep) is often the longest because of Gazebo's slow iteration.  Phase 3 (themed reviews) is the most parallelisable.
+
+#### Example
+
+See [Issue #723 — Integration → main merge for feature/perception-v2-integration](https://github.com/nmohamaya/companion_software_stack/issues/723) for a fully-tracked rollup.  87 commits over 3 weeks; this checklist applied.
+
 ### Cleanup
 
 ```bash
