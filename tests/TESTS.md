@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **85 C++ + 5 shell + 1 Python** | **2028 (no SDK) / 2069 (+SDK) + 42 + 29 + 250+** | PR #712 removed 12 avoider dead-weight tests + entire `test_voxel_obstacle_surface.cpp` (9 tests) = -21 after empirical sweep validated Cosys scenario 33 passes without the three safety nets (DR-043). PR #704 added 15 cross_veto_decision + 35 radar_fov_gate + 15 occupancy_grid_cross_veto integration tests; VIO factory test inverted (Throw → Result). |
+| **Total** | **100 C++ + 5 shell + 1 Python** | **2074 (no SDK, 8 Cosys-SDK tests skipped) / 2082 (+SDK) + 42 + 29 + 250+** | Active baseline as of `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/perception-v2-integration` since PR #704: PR #711 net −7 (deletes `test_voxel_obstacle_surface.cpp` + 12 avoider dead-weight tests after empirical Cosys scenario 33 validation, DR-043); PR #717 +2 (`PreflightWaitsWhenFCNotArmable`, `PreflightSendsARMWhenFCBecomesArmable`); PR #725 +1 net (`SearchFailureWithBlockedCachedPathHovers` added, `SearchFailureKeepsLastGoodPath` updated for Issue #698 cached-path validation). For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -744,12 +744,16 @@ clamp + AABB-aware distance) after empirical sweep showed Cosys scenario 33 pass
 
 ---
 
-### test_dstar_lite_planner.cpp — 47 tests
+### test_dstar_lite_planner.cpp — 103 tests
 
-**What it tests:** D* Lite incremental path planner — occupancy grid basics, change tracking,
-D* Lite search algorithm, incremental replanning, wall-clock timeout, Z-band constraint,
-km reinit, `DStarLitePlanner` (IPathPlanner implementation) integration, grid cell hashing,
-factory registration.
+**What it tests:** D* Lite incremental path planner — occupancy grid basics (including
+Issue #635 static-cell TTL + Issue #636 promotion-state reset + HD-map immunity + radar
+promotion bypass + SAFETY-CRITICAL landing-pause override), change tracking, D* Lite
+search algorithm, incremental replanning, wall-clock timeout, Z-band constraint,
+km reinit, `DStarLitePlanner` integration (including snap-fallback/snap-accessor/snap-
+invalidation), grid cell hashing, factory registration, fallback behaviour (Issue #237
+keep-last-good-path + Issue #698 cached-path validation hover, both updated in PR #725),
+hover-fallback counter (Issue #645), and pure-pursuit look-ahead.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
