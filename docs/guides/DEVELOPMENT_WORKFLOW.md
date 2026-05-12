@@ -158,7 +158,10 @@ gh pr create --base main --head feature/perception-avoidance-integration \
   --title "feat: Perception-driven obstacle avoidance (Issues #222, #224, #225)" \
   --body "Complete camera+radar perception pipeline with tuned avoidance."
 
-# After review + CI green → squash merge to main
+# After review + CI green → squash merge to main (small integration: ~few PRs)
+# For larger rollups (50+ commits / weeks of work), prefer a merge commit
+# instead — see "Integration-to-main rollup — review process" below for
+# the full rationale.
 # Delete the integration branch
 ```
 
@@ -179,6 +182,116 @@ main (demo-ready throughout)
 2. **Use the REST API as a fallback** when `gh pr edit` fails due to GitHub's GraphQL projects-classic limitations.
 3. **Each sub-issue PR gets reviewed independently** on the integration branch. The final PR to `main` is the fully-tested aggregate.
 4. **Run scenario tests on the integration branch** before the final merge — this is where integration bugs surface (e.g., radar ground-plane flooding wasn't visible until camera+radar+fusion were all running together).
+
+### Integration-to-main rollup — review process
+
+When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks) and is ready to merge into `main`, follow this checklist.  Tracked end-to-end in a GitHub issue (use a plain bug-tracking issue — there is no dedicated template; tag it with `tech-debt` + `domain:integration` and link the relevant feature branch).
+
+#### Why a special process is needed
+
+Individual PRs are reviewed at land-time, but the **combined diff** going to `main` is much larger than any single PR.  Risks the standard PR review misses:
+
+- Cross-cutting interactions between features that landed separately
+- Documentation drift across PROGRESS.md / ROADMAP.md / API.md / TESTS.md
+- Test-baseline drift (TESTS.md counts go stale across many PRs)
+- Latent gaps where a per-site fix should have been a wrapper-level fix (see #720/#722 for an example)
+- Performance / CPU-usage regression that's invisible per-PR but compounds
+
+The standard `/review-pr` skill is designed for single-PR review (~hundreds of lines).  An integration rollup needs a different approach.
+
+#### Phase 1 — Pre-review cleanup
+
+Before kicking off agent reviews, get the branch into a clean baseline state:
+
+- [ ] **Resolve all failing tests** — `ctest -j$(nproc)` must be fully green at the integration HEAD.  A "fix" means either correcting the code-under-test or correcting the test itself with a documented rationale; **simply leaving a failing test in place is not acceptable**.  Tests that are intentionally inactive must be marked `GTEST_SKIP()` (counts as passed) or commented out with an explanation, not left as `FAILED`.
+- [ ] **Refresh `docs/tracking/PROGRESS.md`** with improvement entries for every PR landed since the last main merge.
+- [ ] **Refresh `docs/tracking/ROADMAP.md`** — mark issues done (strikethrough + checkmark), update metrics table.
+- [ ] **Refresh `docs/design/API.md`** if any IPC types or HAL interfaces changed.
+- [ ] **Refresh `tests/TESTS.md`** — update test counts + add entries for new test files.
+- [ ] **Verify `bash deploy/run_ci_local.sh` clean** (build + format + tests + sanitizers).
+- [ ] **Triage all open follow-up issues** filed during the integration work — mark which block merge vs which are post-merge.
+
+#### Phase 2 — Scenario sweep on integration HEAD
+
+Run all Gazebo scenarios (and Cosys-AirSim scenarios if applicable) on the integration branch's HEAD.  Capture results in a tracking doc (`docs/tracking/INTEGRATION_MERGE_SCENARIO_SWEEP.md` or similar):
+
+- [ ] Each scenario: PASS / FAIL + key metrics (PX4 denies count, hover-fallback events, mission-complete state)
+- [ ] Document any scenarios known to be flaky on this machine
+- [ ] Compare against the last `main` baseline if available
+
+This is the **integration-test gate** — multi-agent code review cannot catch runtime regressions.  If a scenario regressed, it's a P1 blocker.
+
+#### Phase 3 — Themed multi-agent reviews
+
+Split the diff into ~5-7 thematic chunks of related PRs.  Run `/review-pr` (10-agent pipeline + Copilot) on each chunk separately to avoid context-window saturation.
+
+Typical themes:
+
+1. **Benchmark / observability infrastructure** (profilers, dashboards, GT emitters)
+2. **HAL / interface layer changes** (new HAL types, refactors)
+3. **Feature epics** (one per epic if there were multiple)
+4. **Scenario-specific stacks** (e.g. scenario 33 stack)
+5. **Review-fix waves** (Pass 1/2 follow-ups from individual PRs)
+6. **Safety / fault recovery changes**
+7. **Cross-cutting docs / tests / infra**
+
+For each pass, deliverables (follow the standard severity policy defined in the [Review Comment Handling](#review-comment-handling) section below):
+
+- [ ] All P1 findings either fixed inline or filed as merge-blockers
+- [ ] All P2 findings fixed inline (per the standard "within PR" policy); explicit deferrals require a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md`
+- [ ] All P3 findings fixed inline OR deferred with a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` — **NOT** filed to `IMPROVEMENTS.md`.  Review-flagged items always route to `DESIGN_RATIONALE.md` per the "Critical distinction" rule documented under Step 7 ("Update Documentation").  `IMPROVEMENTS.md` is reserved for proactive findings the agent noticed itself, not review comments.
+- [ ] Copilot findings overlap with agent findings — deduplicate
+
+> **Note:** Rollup reviews tend to surface more P2/P3 findings than per-PR reviews (larger surface, more cross-cutting context).  Use judgement — if a P3 finding is genuinely a "would be nice but won't change correctness" comment, a one-line DR-NNN entry is appropriate.  If it's actionable in <15 minutes, fix it inline.
+
+#### Phase 4 — Fix findings
+
+Address all P1 findings before merge.  Apply the same severity policy as standard PRs (see [Review Comment Handling](#review-comment-handling)) — P2/P3 should be fixed inline; any deferral must be recorded as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` per the "Critical distinction" rule under Step 7.  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
+
+#### Phase 5 — Open the integration→main PR
+
+- Title: `feat: merge feature/<name> into main (<duration> of work)`
+- Body must include:
+  - Summary of themes (link to the tracking issue)
+  - Link to the scenario-sweep results doc
+  - List of every merged PR with one-line description
+  - Link to the changes-since-main doc (e.g. `tasks/INTEGRATION_BRANCH_CHANGES_SINCE_MAIN.md`)
+  - Any DR-NNN entries written during the rollup
+
+#### Phase 6 — Final pre-merge validation
+
+- [ ] Re-run scenario sweep on the PR branch with main merged-in (catches surface regressions from any merge conflicts)
+- [ ] Verify `ctest` fully green
+- [ ] Verify CI workflow passes on the PR
+
+#### Phase 7 — Merge decision
+
+Two options exist; the right one depends on the **size of the rollup**:
+
+- **Squash** the integration branch into one commit on main: keeps main linear, loses individual PR history
+- **Merge commit** (preserves all N commits): main retains the development arc, useful for `git log` / `git bisect` on per-PR resolution
+
+| Rollup size | Default | Why |
+|-------------|---------|-----|
+| **Small** (a few related PRs, <2 weeks) | **Squash** | Short-lived integration branches have lower audit-trail value; squash keeps `git log` tidy on `main`.  This is what the example earlier in this doc ("Integration Branch Pattern (Multi-Issue Features)") uses for the perception-avoidance integration (3 issues, 1 week). |
+| **Large** (50+ commits / weeks of work, this rollup process) | **Merge commit** | Every PR already has review evidence; squashing erases that audit trail.  Future `git bisect` across hundreds of commits needs per-PR resolution.  Worth paying the "non-linear main" cost. |
+
+**Default for this checklist (large rollups): merge commit.**  Use squash only if a PR landed buggy and got rescued by follow-up commits that you don't want polluting `git log` — in which case, squash that specific PR's portion via interactive rebase before opening the integration-to-main PR, then keep the rest as merge commit.
+
+#### Phase 8 — Post-merge cleanup
+
+- [ ] Delete the integration branch on origin
+- [ ] Remove all integration-branch worktrees
+- [ ] Update `tasks/active-work.md` and similar trackers
+- [ ] Close the rollup tracking issue with a summary
+
+#### Cost estimate
+
+Typical integration rollup: **6-12 hours over 2-3 sessions**.  Phase 2 (scenario sweep) is often the longest because of Gazebo's slow iteration.  Phase 3 (themed reviews) is the most parallelisable.
+
+#### Example
+
+See [Issue #723 — Integration → main merge for feature/perception-v2-integration](https://github.com/nmohamaya/companion_software_stack/issues/723) for a fully-tracked rollup.  87 commits over 3 weeks; this checklist applied.
 
 ### Cleanup
 
