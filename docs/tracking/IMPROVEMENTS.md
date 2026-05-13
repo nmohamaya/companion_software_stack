@@ -16,6 +16,30 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-13 (PR #741 — proactive safety / test-discipline findings during #740-A implementation)
+
+Two items noticed while implementing the ARM-gate debounce (PR #741, epic #740 / #727 Layer 1). Both are test-discipline / drift-hygiene, not flight-safety, so they're logged here rather than escalated. Adding them surfaces patterns worth catching during future review.
+
+#### Test-fixture ordering with `ScopedMockClock`
+
+- **P3** — `test-infra` — `ScopedMockClock` MUST be declared as a fixture member BEFORE the unit-under-test, because the UUT's constructor may query `drone::util::get_clock()` at construction time and capture the production clock if the override isn't installed yet. Member-init order is declaration order; violating this silently breaks mock-driven tests in a way that's hard to debug (mock advances do nothing, tests look like they should pass but the UUT sees real wall-clock time).
+  - **Suggested fix:** document the pattern in `docs/guides/CPP_PATTERNS_GUIDE.md` §5.7 (done in this PR), and check during review whenever a new `ScopedMockClock`-using test class is added.
+  - **Affected:** every test fixture that injects `ScopedMockClock`. Currently rare but will become common as we migrate more time-dependent code to `drone::util::get_clock()` (see next item).
+
+#### `std::chrono::steady_clock::now()` direct usage in process[1-7]_* code
+
+- **P3** — `architecture` — 35+ direct uses of `std::chrono::steady_clock::now()` remain in `process4_mission_planner/` alone (other processes likely similar). These are grandfathered under the new §5.7 rule but each one blocks unit-test mockability of the surrounding logic.
+  - **Suggested next step:** opportunistic migration when touching the surrounding code (the rule already says this). One-shot bulk migration as a separate refactor PR is also viable but would touch many files; review-pass-1 fault-recovery would likely raise concerns about subtle behaviour change so the touched-when-edited approach is safer.
+  - **Affected:** `mission_state_tick.h` (~10 sites), `fault_manager.cpp` (~8), `geofence.cpp`, `gcs_command_handler.h`, etc.
+
+#### `tests/TESTS.md` total drift
+
+- **P3** — `docs` — `tests/TESTS.md` top table claims 2074 base tests on `feature/perception-v2-integration` HEAD. My `ctest -N` on `feature/cold-start-hardening` HEAD (= main = `629bdcc`) shows 2058 base. That's a 16-test gap between docs and reality, pre-existing the PR-A changes. Either tests aren't being compiled in a standard build, or TESTS.md is stale.
+  - **Suggested next step:** reconciliation pass in a separate PR — run `ctest -N` against a fresh `main` build, walk the per-suite counts, and update TESTS.md to match. Bonus: add a CI gate that diffs TESTS.md against `ctest -N` output.
+  - **Affected:** documentation accuracy only, no functional impact.
+
+---
+
 ### 2026-05-11 (#712 cleanup — residual concerns observed during scenario 18 testing)
 
 Items observed in the field during the #710 → #712 work but **outside the cleanup scope**.  Both pre-date commit 3 (they were observable across multiple commits today on the integration branch) and reproduce on a clean tree.
