@@ -17,6 +17,7 @@
 #include "planner/mission_fsm.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
 #include "util/scoped_timer.h"
 
@@ -58,6 +59,19 @@ struct StateTickConfig {
     //   - 1 s wait log: visible to operators without spamming the log.
     int preflight_arm_retry_s{3};
     int preflight_wait_log_s{1};
+
+    // Issue #740 (epic #727 Layer 1) — debounce window on `fc_state.armable`
+    // before sending ARM.  Required because PX4's `health_all_ok` flickers
+    // true momentarily on Gazebo cold-start while EKF2 attitude estimate is
+    // still settling (gyro/accel bias estimates wandering).  Arming on a
+    // single-tick flicker causes asymmetric mixer commands → asymmetric
+    // rotor spin-up → drone tips on ground.  Requiring N consecutive seconds
+    // of continuous `armable=true` ensures EKF2 has actually converged before
+    // we hand control to PX4's arming flow.  3 s default chosen empirically:
+    // long enough to wait out the worst-case settling window observed across
+    // scenarios 02, 17, 18, 25, 26 (#727 reproduction matrix); short enough
+    // to keep mission startup latency acceptable on well-conditioned boots.
+    float preflight_armable_stable_s{3.0f};
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -190,6 +204,15 @@ private:
     std::chrono::steady_clock::time_point last_wait_log_time_ = std::chrono::steady_clock::now() -
                                                                 std::chrono::seconds(10);
 
+    // Issue #740 — first observation of `fc_state.armable == true` since the
+    // last `armable == false` transition.  Used to debounce the ARM trigger
+    // against momentary `health_all_ok` flickers on Gazebo cold-start.  Zero
+    // means "not currently observing armable=true" (either we never have, or
+    // it dropped back to false and reset the timer).  Sourced from
+    // `drone::util::get_clock().now_ns()` so unit tests can drive it with
+    // `ScopedMockClock` without sleeping.
+    uint64_t armable_first_seen_ns_ = 0;
+
     // Collision recovery state (Issue #226)
     enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
     bool                                  recovery_started_ = false;
@@ -237,8 +260,17 @@ private:
     // as a safety net for the rare case PX4 drops the ARM message after
     // armable went high.
     //
+    // Issue #740 (epic #727) — momentary `armable=true` is not enough.
+    // PX4's `health_all_ok` can flicker through OK while EKF2 attitude is
+    // still settling (gyro/accel bias estimates wandering for the first
+    // 1-15 s after spawn).  Arming on a single-tick flicker produces
+    // asymmetric mixer commands and the drone tips on the ground at
+    // takeoff.  We require `preflight_armable_stable_s` of *continuous*
+    // `armable=true` before sending ARM.  Any drop back to false resets
+    // `armable_first_seen_ns_` and restarts the stability window.
+    //
     // **No timeout / no fault escalation** (review-fault-recovery P2):
-    // if `armable` never becomes true (e.g. PX4 EKF stuck, MAVSDK
+    // if `armable` never becomes stably true (e.g. PX4 EKF stuck, MAVSDK
     // subscription silently lost, hardware sensor genuinely faulty), the
     // FSM remains in PREFLIGHT indefinitely with only the 1 Hz "Waiting
     // for FC preflight" INFO log.  FaultManager evaluates `fc_connected`
@@ -250,17 +282,21 @@ private:
         if (fc_state.armed) {
             DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
             fsm.on_takeoff();
-            takeoff_sent_ = false;
+            takeoff_sent_          = false;
+            armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
             return;
         }
         const auto now = std::chrono::steady_clock::now();
         if (!fc_state.armable) {
             // FC preflight not yet clear (EKF2 converging, sensors warming,
-            // GPS lock acquiring, etc.).  Log on the configurable wait-log
-            // throttle so operators can see we are waiting on the FC and
-            // not stuck.  Uses a separate throttle from `last_arm_time_`
-            // so the first ARM fires immediately once `armable` transitions
-            // to true.
+            // GPS lock acquiring, etc.).  Reset the stability tracker — any
+            // future `armable=true` will start a fresh window.  Log on the
+            // configurable wait-log throttle so operators can see we are
+            // waiting on the FC and not stuck.  Uses a separate throttle
+            // from `last_arm_time_` so the first ARM fires promptly once
+            // `armable` transitions to true and stays true through the
+            // stability window.
+            armable_first_seen_ns_ = 0;
             if (std::chrono::duration_cast<std::chrono::seconds>(now - last_wait_log_time_)
                     .count() >= config_.preflight_wait_log_s) {
                 DRONE_LOG_INFO("[Planner] Waiting for FC preflight (armable=false)");
@@ -268,9 +304,39 @@ private:
             }
             return;
         }
+
+        // armable == true — apply the #740 stability debounce.  First-time
+        // observation starts the window; subsequent observations check
+        // elapsed time against the configured threshold.
+        const uint64_t now_ns    = drone::util::get_clock().now_ns();
+        const uint64_t window_ns = static_cast<uint64_t>(
+            std::max(0.0, static_cast<double>(config_.preflight_armable_stable_s) * 1e9));
+
+        // First observation of armable=true since the last reset.  Start
+        // the window.  Guard against the unsigned-subtraction trap if the
+        // clock runs backward (e.g. ScopedMockClock manual reset or
+        // pathological host clock skew) by treating it as a fresh start.
+        if (armable_first_seen_ns_ == 0 || now_ns < armable_first_seen_ns_) {
+            armable_first_seen_ns_ = now_ns;
+            if (window_ns > 0) {
+                DRONE_LOG_INFO(
+                    "[Planner] FC armable=true — beginning {:.1f}s stability gate before ARM",
+                    config_.preflight_armable_stable_s);
+                return;  // wait for the window to elapse on a subsequent tick
+            }
+            // window == 0: gate disabled by config — fall through and ARM
+            // on this very tick (preserves legacy single-tick behaviour for
+            // headless dev / unit tests that don't exercise the debounce).
+        } else if ((now_ns - armable_first_seen_ns_) < window_ns) {
+            // Still within stability window — defer ARM.
+            return;
+        }
+        const uint64_t elapsed_ns = now_ns - armable_first_seen_ns_;
+
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_arm_time_).count() >=
             config_.preflight_arm_retry_s) {
-            DRONE_LOG_INFO("[Planner] FC armable — sending ARM command");
+            DRONE_LOG_INFO("[Planner] FC armable stable for {:.1f}s — sending ARM command",
+                           static_cast<double>(elapsed_ns) * 1e-9);
             send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
             last_arm_time_ = now;
         }

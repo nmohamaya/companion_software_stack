@@ -385,6 +385,15 @@ inline constexpr const char* OVERSHOOT_PROXIMITY_FACTOR =
 inline constexpr const char* WAYPOINTS        = "mission_planner.waypoints";
 inline constexpr const char* STATIC_OBSTACLES = "mission_planner.static_obstacles";
 
+// Issue #740 (epic #727) — debounce window on `fc_state.armable` before
+// sending ARM.  Required because PX4's `health_all_ok` can flicker true
+// momentarily while EKF2 attitude is still settling on Gazebo cold-start.
+// Arming on a single-tick flicker produces asymmetric rotor spin-up.
+// 3.0 s default matches the StateTickConfig field default; settable per
+// scenario in config/default.json under `mission_planner`.
+inline constexpr const char* PREFLIGHT_ARMABLE_STABLE_S =
+    "mission_planner.preflight_armable_stable_s";
+
 namespace path_planner {
 inline constexpr const char* BACKEND            = "mission_planner.path_planner.backend";
 inline constexpr const char* RESOLUTION_M       = "mission_planner.path_planner.resolution_m";

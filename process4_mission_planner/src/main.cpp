@@ -437,6 +437,11 @@ int main(int argc, char* argv[]) {
     tick_cfg.collision_hover_duration_s = collision_hover_duration;
     tick_cfg.stuck_detector             = stuck_cfg;
     tick_cfg.avoider_influence_radius_m = avoider_influence_radius;
+    // Issue #740 (epic #727) — ARM-gate debounce window.  Configurable so
+    // headless dev / unit-test scenarios can shrink it; production Gazebo
+    // and real-hardware use the 3.0 s default.
+    tick_cfg.preflight_armable_stable_s =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S, 3.0f);
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
