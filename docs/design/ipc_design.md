@@ -85,9 +85,10 @@ Every type is **trivially copyable** (no heap allocations, no virtual methods).
 
 | Type | Size | Content |
 |------|------|---------|
-| `ShmVideoFrame` | ~6.2 MB | 1920×1080×3 RGB24 mission camera |
-| `ShmStereoFrame` | ~600 KB | 640×480 grayscale × 2 (left + right) |
-| `ShmThermalFrame` | ~320 KB | 640×512 grayscale LWIR thermal |
+| `VideoFrame` | ~6.2 MB | 1920×1080×3 RGB24 mission camera |
+| `StereoFrame` | ~600 KB | 640×480 grayscale × 2 (left + right) |
+
+> Thermal frames are not currently a wire type. Thermal *zones* (`SystemHealth.thermal_zone`) and thermal fault bits (`FAULT_THERMAL_WARNING` / `FAULT_THERMAL_CRITICAL`) are published; a dedicated `ThermalFrame` would be added if/when a LWIR backend ships.
 
 ### Perception Output (P2 → P4)
 
@@ -329,7 +330,6 @@ SHM segment names map to Zenoh key expressions:
 |-------------|-----------|
 | `/drone_mission_cam` | `drone/video/frame` |
 | `/drone_stereo_cam` | `drone/video/stereo_frame` |
-| `/drone_thermal_cam` | `drone/video/thermal_frame` |
 | `/detected_objects` | `drone/perception/detections` |
 | `/slam_pose` | `drone/slam/pose` |
 | `/mission_status` | `drone/mission/status` |

@@ -106,6 +106,26 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 See `tests/TESTS.md` for the full test inventory.
 
+## Single Sources of Truth (SSOT)
+
+Quantitative facts about the project drift the moment they are duplicated. Each fact below has **one canonical source**; every other doc must defer to it (e.g. "see `tests/TESTS.md`") rather than restating the value.
+
+| Fact | Canonical source | How to read it |
+|---|---|---|
+| Test count + per-suite inventory | [`tests/TESTS.md`](tests/TESTS.md) | Live total at top of file; also derivable from `ctest -N --test-dir build` |
+| Scenario list + count | [`config/scenarios/`](config/scenarios/) | `ls config/scenarios/*.json \| wc -l` |
+| HAL interface list + count | [`common/hal/include/hal/`](common/hal/include/hal/) | `ls common/hal/include/hal/i*.h` |
+| IPC wire types | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) | Authoritative struct definitions; `docs/design/API.md` documents but does not define |
+| IPC topic constants | [`common/ipc/include/ipc/topic_resolver.h`](common/ipc/include/ipc/topic_resolver.h) and `zenoh_message_bus.h` | Topic strings live in code, not docs |
+| Config keys | [`common/util/include/util/config_keys.h`](common/util/include/util/config_keys.h) + [`config/default.json`](config/default.json) | Code declares, JSON provides defaults; `docs/guides/config_reference.md` is reference-only |
+| ADR catalogue | [`docs/adr/`](docs/adr/) | One file per ADR; `docs/adr/README.md` (when added) indexes them |
+| Agent roster | [`.claude/agents/`](.claude/agents/) + [`docs/adr/ADR-010-multi-agent-pipeline-architecture.md`](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Agent definitions in `.claude/agents/`; pipeline architecture in ADR-010 |
+| Dependency versions (per-OS) | [`docs/guides/INSTALL.md`](docs/guides/INSTALL.md) | Single matrix; do not restate versions elsewhere |
+| systemd units + service deps | [`deploy/systemd/`](deploy/systemd/) | Unit files are authoritative |
+| Process/thread map | This file (CLAUDE.md §Process Map) | Hand-maintained; update when process or thread count changes |
+
+**Rule:** when writing or updating a doc, never bake in a number or list that has a canonical source above — link to it instead. Reviewers and the doc-linter should reject docs that hardcode test counts, scenario lists, HAL interface counts, etc.
+
 ## Lint and Format
 
 ```bash
