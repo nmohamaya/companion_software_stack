@@ -1095,3 +1095,107 @@ The critical signal from Sweep A: `final_clamp_count` was 0 in the baseline run 
 3. A real-hardware deployment is approached.  Pre-flight checklist: re-run the Cosys-33 sweep on the production HW + perception pipeline before committing to the leaner avoider.
 
 **Date:** 2026-05-11 (PR #712 review-fault-recovery + review-api-contract — DR-NNN audit trail)
+
+## DR-044: Project frame glossary — NEU is canonical, not ENU
+
+**Question:** Multiple files across the perception + planner stack use inconsistent labels for the same internal frame convention.  Pass 2 of the [#723 themed review](https://github.com/nmohamaya/companion_software_stack/issues/723) flagged at least three different names appearing in source comments and identifiers:
+
+- "NEU" (`tests/test_world_transform.cpp`, `process2_perception/src/main.cpp:646`, `process3_slam_vio_nav/include/slam/ivio_backend.h:358-360`)
+- "ENU" (`process2_perception/include/perception/mask_depth_projector.h:28`, `tools/cosys_telemetry_poller/main.cpp:243-268`)
+- "aerospace-ENU" (assorted comments)
+
+All three names refer to the **same** internal axis convention used throughout the companion stack: `X = North`, `Y = East`, `Z = Up`.  The variation creates confusion when a new contributor cross-references files, and it was a small but real contributor to the [#727 cold-start race investigation](https://github.com/nmohamaya/companion_software_stack/issues/727) where the initial hypothesis was "ENU↔NED frame conversion bug" (later ruled out by reading both Cosys and Gazebo backend code and confirming the *internal* frame is uniformly NEU).
+
+**Canonical names (project glossary):**
+
+| Source frame | Convention | Used in |
+|--------------|------------|---------|
+| **NED** (North-East-Down) | `X=N, Y=E, Z=Down` | MAVLink / PX4 wire format; AirSim ground truth; MavlinkFCLink trajectory commands |
+| **ENU** (East-North-Up) | `X=E, Y=N, Z=Up` | Gazebo world frame; some gz-msgs Odometry topics |
+| **NEU** (North-East-Up) | `X=N, Y=E, Z=Up` | **Project-internal**.  All `drone::ipc::Pose` published on `drone/slam/pose`.  All P4 planner state, including waypoints in `config/scenarios/*.json`.  Body-frame velocity commands inside the companion stack. |
+| **FRD** (Forward-Right-Down) | `X=fwd, Y=right, Z=down` | MAVSDK Telemetry body-frame quaternion source |
+| **FLU** (Forward-Left-Up) | `X=fwd, Y=left, Z=up` | ROS / some Eigen rotation conventions |
+
+**Decision:** **NEU** is the canonical internal-frame label.  All future code and comments referring to the internal `drone::ipc::Pose` frame should use "NEU" verbatim.  "ENU" and "aerospace-ENU" should not appear in source comments describing internal frame; reserve "ENU" for the *source* frame (Gazebo world) before conversion.
+
+**For not enforcing globally now (rejected option):** "It's just a comment, doesn't change behaviour".  Counter: the #727 investigation lost an hour to chasing an ENU/NEU frame-conversion hypothesis that the comments suggested but the code disproved.  Comment hygiene matters when the code path is safety-critical.
+
+**Action items:**
+
+1. As part of [#734](https://github.com/nmohamaya/companion_software_stack/issues/734) (tracking-doc cleanup), grep for `ENU` in `process2_perception/`, `process3_slam_vio_nav/`, `tools/cosys_telemetry_poller/`, and `common/hal/` — for each hit, decide whether it refers to (a) the Gazebo world source frame (keep), (b) a transient pre-conversion variable (keep with explicit "source: ENU" comment), or (c) the project-internal NEU frame (rename to NEU).
+2. Add a one-paragraph glossary section near the top of `docs/design/API.md` cross-referencing this DR.
+3. Future PRs touching pose/frame code: PR review should fail on any new "ENU" comment that refers to internal frame.
+
+**Revisit when:** A real VIO backend (MSCKF, ORB-SLAM3, etc.) lands and introduces its own naming.  At that point reconsider whether NEU should be replaced by a more standard ROS or aerospace convention.
+
+**Date:** 2026-05-13 (#723 rollup Phase 3 Pass 2 P3 finding — DR-NNN audit trail)
+
+## DR-045: HAL factories throw `std::runtime_error` instead of returning `Result<unique_ptr<I>, Error>`
+
+**Question:** The project's documented error-handling convention is `Result<T, E>` monadic types — see CLAUDE.md "Error Handling Pattern".  All public APIs in `common/util`, `common/ipc`, and most `process*/` business logic return `[[nodiscard]] Result<...>`.  But every HAL factory in `common/hal/include/hal/hal_factory.h` (`create_camera`, `create_inference_backend`, `create_volumetric_map`, `create_event_camera`, `create_semantic_projector`, `create_fc_link`, `create_radar`, etc.) **throws `std::runtime_error`** on unknown backend strings or configuration failures.  Pass 2 of the [#723 rollup review](https://github.com/nmohamaya/companion_software_stack/issues/723) flagged this as a P3 recurring pattern across the rollup's new HAL types (PR #602, #603, #604).
+
+**Why the divergence exists:** The HAL factory contract was established pre-`Result<T, E>` (back when the project still used exceptions in some places).  Converting all factory call-sites to `Result<unique_ptr<I>, HalError>` is mechanical but touches every `process_main()` that constructs HAL backends — at least 7 files, 30+ call sites.
+
+**For converting now (rejected for this rollup):** Consistent with the project-wide rule; eliminates the exception-handling burden at every `main.cpp`.
+
+**For keeping for now (our decision):**
+
+1. The throw is at startup-time only — never inside the flight-critical hot path.  `process_main()` already wraps backend construction in try/catch and exits cleanly on failure, so the exception is fully observable.
+2. The new factories added in this rollup (`create_inference_backend`, `create_volumetric_map`, `create_event_camera`, `create_semantic_projector`) faithfully follow the existing convention — adding a new factory in a non-`Result<>` style would mean refactoring all the others first, which is out of scope for the rollup.
+3. Test coverage is via `EXPECT_THROW` already.  Conversion would require rewriting test expectations.
+
+**Decision:** Keep the throw pattern for HAL factories specifically.  Document the deliberate divergence here so future contributors don't propose a piecemeal conversion that leaves the codebase half-and-half.
+
+**Action items:**
+
+1. New HAL factories added in future PRs **may** continue to throw — explicitly *not* required to convert to `Result<>`.  Update CLAUDE.md "Error Handling Pattern" to call out HAL factories as the documented exception (no pun intended).
+2. If conversion is ever decided, do it as a single dedicated PR touching all factories + all call sites in one atomic change.
+
+**Revisit when:** Real-hardware deployment is approached and exception-safety guarantees of the startup path need re-auditing for systemd/init scenarios.
+
+**Date:** 2026-05-13 (#723 rollup Phase 3 Pass 2 P3 finding — DR-NNN audit trail)
+
+## DR-046: `std::optional<ScopedLatency>` per-site emplace pattern for opt-in profiler wiring
+
+**Question:** Throughout `process2_perception/src/main.cpp` (lines 79, 151, 289) and `process4_mission_planner/src/main.cpp` (lines 411, 462, 488), every flight-critical thread that emits per-stage latency telemetry wraps each measurement site in the same boilerplate:
+
+```cpp
+std::optional<drone::util::ScopedLatency> bench_<stage>;
+if (profiler_ptr) {
+    bench_<stage>.emplace(*profiler_ptr, "<stage>");
+}
+// ... work to be measured ...
+// bench_<stage> destructs at scope end → records elapsed
+```
+
+The pattern was chosen in PR #593 (Improvement #79, see DR-022) to ensure the profiler instrumentation pays **zero cost** when disabled in production (the optional stays empty, no construction, no destructor work).  Pass 1 of the [#723 rollup review](https://github.com/nmohamaya/companion_software_stack/issues/723) flagged this as a P3 recurring pattern — 6 sites today, will grow with every new measurement point.
+
+**Considered alternative — `ScopedBenchTimer` helper that no-ops when null:**
+
+```cpp
+drone::util::ScopedBenchTimer bench("<stage>", profiler_ptr);  // no-op constructor if profiler_ptr is null
+// ... work ...
+```
+
+Half the line count, eliminates the per-site comment drift.  But: the no-op path still pays a function-call cost (even if inlined to nothing) and the constructor takes `profiler_ptr` by raw pointer which the rest of the codebase has been moving away from.
+
+**For the helper (rejected for now):** Cleaner.  Easier to read.  Mechanical refactor.
+
+**For keeping the explicit optional-emplace (our decision):**
+
+1. The `if (profiler_ptr)` branch is loop-invariant and the optimiser hoists / eliminates it cleanly when `profiler_ptr == nullptr`.  Empirically verified in DR-022.
+2. The explicit pattern makes the conditional cost visible to every code reviewer — a future contributor adding instrumentation can't accidentally hide a cost behind a helper.
+3. The 6 current sites are tolerable.  If the count grows to 15+ sites, revisit.
+
+**Decision:** Keep `std::optional<ScopedLatency>` + `emplace()` pattern for now.  Document here as the deliberate choice so a future contributor doesn't propose a helper-class refactor.
+
+**Action items:**
+
+1. None immediately.  If a 7th or 8th measurement site lands, the threshold for revisit is "if adding more would push us past 10 sites total, design the helper and refactor as one PR".
+
+**Revisit when:**
+
+- New measurement sites push the per-site count past ~10 across the codebase.
+- A future profiler backend requires multiple constructor arguments (the helper-class refactor becomes more attractive when the per-site boilerplate is longer).
+
+**Date:** 2026-05-13 (#723 rollup Phase 3 Pass 1 P3 finding — DR-NNN audit trail)
