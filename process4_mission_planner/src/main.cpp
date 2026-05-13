@@ -72,10 +72,10 @@ int main(int argc, char* argv[]) {
     // Issue #720 / #722 — stale-message filter is now applied at the
     // ZenohSubscriber wrapper level (default-on, applies to every
     // timestamped IPC topic, not just pose).  The per-site filter that
-    // used to live here (PR #721) is subsumed by the wrapper.  See
-    // `common/ipc/include/ipc/zenoh_subscriber.h::on_sample` for the
-    // implementation and DR-NNN entry (in PR #745 review fixes if any)
-    // for the design rationale.
+    // used to live here (Issue #721) is subsumed by the wrapper.  See
+    // `common/ipc/include/ipc/zenoh_subscriber.h::on_sample` and the
+    // adjacent constructor docstring for the design rationale (100 ms
+    // slack, validate()-gated coverage, opt-out for replay tests).
     //
     // Effect: this planner subscribes to `drone/slam/pose` with the
     // default `filter_pre_birth_messages = true` — any pose stamped

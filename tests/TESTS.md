@@ -212,6 +212,28 @@ SHM zero-copy, and session management.  Tests are split into *always-compiled*
 
 ---
 
+### test_zenoh_coverage.cpp — 38 tests
+
+**What it tests:** Targeted branch-coverage tests for Zenoh internals —
+error paths, fallback branches, and edge cases not reached by the happy-
+path tests in `test_zenoh_ipc.cpp` and `test_zenoh_network.cpp`.  All
+tests require `HAVE_ZENOH`; under SHM-only builds the file compiles to a
+single stub test.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `ZenohNetworkConfigBranch` | 9 | `from_app_config()` JSON field branches, `to_json()` endpoint serialization |
+| `ZenohSubscriberBranch` | 8 | Size-mismatch `on_sample`, latency conditional, validate-fail path |
+| `ZenohSessionBranch` | 6 | Configure-after-open guards |
+| `ZenohServiceBranch` | 5 | `poll` when empty, `send_response` with bad correlation id, no-match poll |
+| `ZenohStaleMessageFilter` | 4 | Issue #722 wrapper-level stale-message filter — pre-birth drop, opt-out, fresh accept, zero-timestamp sentinel pass-through |
+| `ZenohPublisherBranch` | 3 | SHM-disabled fallback, constructor error count |
+| `LivelinessBranch` | 3 | Destructor branch, `extract_process_name` fallback |
+
+**Key files under test:** `ipc/zenoh_subscriber.h`, `ipc/zenoh_publisher.h`, `ipc/zenoh_network_config.h`, `ipc/zenoh_session.h`, `ipc/zenoh_service_client.h`, `ipc/zenoh_service_server.h`, `ipc/zenoh_liveliness.h`
+
+---
+
 ### test_zenoh_liveliness.cpp — 28 tests
 
 **What it tests:** Zenoh Phase F liveliness tokens for process health

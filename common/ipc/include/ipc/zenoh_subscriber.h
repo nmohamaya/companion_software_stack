@@ -57,12 +57,22 @@ public:
     ///                                   Zenoh's last-value cache delivering
     ///                                   historic messages from a previous
     ///                                   publisher session (root cause of
-    ///                                   #720 / PR #721).  Only fires for
-    ///                                   types with both `timestamp_ns` and
-    ///                                   `validate()` (covers every safety-
-    ///                                   critical IPC type today).  Tests
-    ///                                   that legitimately replay historic
+    ///                                   #720, originally patched per-site
+    ///                                   by Issue #721).  Tests that
+    ///                                   legitimately replay historic
     ///                                   messages should pass `false`.
+    ///
+    /// **Coverage caveat.**  The filter is implemented inside the
+    /// `has_validate<T>` branch of `on_sample`, so it only fires for types
+    /// with BOTH `validate()` AND `timestamp_ns`.  All currently-subscribed
+    /// safety-critical IPC types satisfy both (Pose, FCState,
+    /// DetectedObjectList, TrajectoryCmd, FCCommand, GCSCommand,
+    /// PayloadCommand, PayloadStatus, MissionStatus, SystemHealth,
+    /// SemanticVoxelBatch, RadarDetectionList).  A type with `timestamp_ns`
+    /// but no `validate()` (currently `ThreadHealth`, which is publisher-
+    /// side only — never subscribed via this wrapper) would pass through
+    /// unfiltered.  If you add a new subscribed type with `timestamp_ns`,
+    /// give it a `validate()` to opt it into the filter.
     explicit ZenohSubscriber(
         const std::string& key_expr, bool track_latency = true,
         std::shared_ptr<const ISerializer<T>> serializer = std::make_shared<RawSerializer<T>>(),
@@ -219,10 +229,17 @@ private:
             // downstream code can apply its own staleness logic.  The pre-birth
             // check only fires for messages with a real, positive timestamp
             // that predates us — i.e. unambiguous historical-cache replays.
+            //
+            // PR #750 review fix: the original comparison was
+            //     temp->timestamp_ns + kBirthSlackNs < subscriber_birth_ns_
+            // which wraps if `temp->timestamp_ns` is near UINT64_MAX (corrupt
+            // or adversarial payload).  Rewritten as an overflow-safe
+            // subtraction: subtract slack from birth, then a plain `<`
+            // compare.  No addition, no UB.
             if constexpr (has_timestamp_ns<T>::value) {
                 if (filter_pre_birth_messages_ && temp->timestamp_ns > 0 &&
-                    subscriber_birth_ns_ > 0 &&
-                    temp->timestamp_ns + kBirthSlackNs < subscriber_birth_ns_) {
+                    subscriber_birth_ns_ > kBirthSlackNs &&
+                    temp->timestamp_ns < (subscriber_birth_ns_ - kBirthSlackNs)) {
                     log_stale_once(temp->timestamp_ns);
                     return;
                 }

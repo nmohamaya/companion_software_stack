@@ -2927,3 +2927,19 @@ LogConfig::init("flight_replay", LogConfig::resolve_log_dir());
 ```
 
 **Found by:** PR #380 review — flagged as raw spdlog usage bypassing ILogger abstraction.
+
+---
+
+### Fix #56 — Zenoh Last-Value Cache Replays Historic Messages to New Subscribers (Issue #722)
+
+**Date:** 2026-05-13
+**Severity:** High (P1)
+**Files:** `common/ipc/include/ipc/zenoh_subscriber.h`, `process4_mission_planner/src/main.cpp` (per-site filter from Issue #721 reverted as subsumed)
+
+**Bug:** When a process subscribed to a Zenoh topic that another process had previously published to, Zenoh's last-value cache could deliver a historic message from the previous publisher session — even if that publisher had since died, restarted, or the wall-clock had moved on.  On a cold-start, the planner's pose subscriber received a stale pre-takeoff pose that was already past its acceptance radius, causing immediate LOITER / RTL on the wrong waypoint.
+
+**Root Cause:** Zenoh's last-value cache is session-scoped, not wall-clock scoped.  Newly-declared subscribers on a re-published key expression get the most recent retained sample regardless of how old it is.  The original per-site filter (Issue #721) protected only the `drone/slam/pose` topic in the planner — every other subscribed timestamped topic remained vulnerable to the same class of bug.
+
+**Fix:** Lifted the timestamp-vs-subscriber-birth comparison to the `ZenohSubscriber<T>::on_sample()` wrapper.  Every subscribed type with both `validate()` and `timestamp_ns` now drops messages whose publisher timestamp predates the subscriber's `drone::util::get_clock().now_ns()` birth by more than 100 ms (slack covers the rare case where the publisher booted slightly before the subscriber).  Log-once per subscriber via atomic compare-exchange.  Opt-out parameter (`filter_pre_birth_messages = false`) for tests that legitimately replay historic samples.
+
+**Found by:** Scenario sweeps on `feature/cold-start-hardening` integration branch reproduced the cold-start failure mode (#720 stale-pose symptom) repeatedly; root-cause generalised to the wrapper level in Issue #722.

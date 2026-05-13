@@ -3607,13 +3607,12 @@ Two-part fix (per #714):
 
 ---
 
-### Improvement #98 — Wrapper-Level Zenoh Stale-Message Filter (closes #722, PR #745)
+### Improvement #98 — Wrapper-Level Zenoh Stale-Message Filter (closes #722, PR #750)
 
 **Date:** 2026-05-13
 **Category:** Hardening — IPC defense-in-depth
 **Issue:** [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) (closed by this PR) / part of epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Wave 2
-**PR:** #745 (open against `feature/cold-start-hardening`)
-**Numbering note:** depends on PRs #743, #744 landing first; renumber if order changes.
+**PR:** #750 (open against `feature/cold-start-hardening`)
 
 **What:**
 
@@ -3652,4 +3651,4 @@ After this PR + PR-D land, every safety-critical IPC topic has automatic defense
 
 ---
 
-*Last updated after Improvement #98 (PR #745). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+*Last updated after Improvement #98 (PR #750). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
