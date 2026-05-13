@@ -19,12 +19,14 @@
 // Use to skip performance-budget tests that don't tolerate the sanitizer
 // instrumentation overhead. Correctness tests should NOT use this guard.
 //
-// Clang: __has_feature is reliable for all three.
-// GCC: __SANITIZE_ADDRESS__ / __SANITIZE_THREAD__ are reliable. GCC does
-// NOT define a portable macro for UBSan, so UBSan-only GCC builds fall
-// through to false here — but the project's CI uses Clang for sanitizer
-// builds (see deploy/build.sh --asan/--tsan/--ubsan flags), so the Clang
-// path covers the real cases.
+// Detection layers (first hit wins):
+//   1. Clang __has_feature(...) — reliable for ASan / TSan / UBSan
+//   2. GCC __SANITIZE_ADDRESS__ / __SANITIZE_THREAD__ — reliable for ASan / TSan
+//   3. DRONE_UBSAN_BUILD — project-defined macro injected by CMakeLists.txt
+//      when ENABLE_UBSAN=ON is passed. Covers GCC UBSan builds because GCC
+//      does NOT define a portable __SANITIZE_UNDEFINED__ macro of its own.
+//      Project CI uses Ubuntu-default GCC for the sanitizer matrix, so this
+//      layer is what catches the real CI case for UBSan.
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
     __has_feature(undefined_behavior_sanitizer)
@@ -32,7 +34,7 @@
 #endif
 #endif
 #if !defined(DRONE_TEST_SANITIZER_BUILD)
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || defined(DRONE_UBSAN_BUILD)
 #define DRONE_TEST_SANITIZER_BUILD 1
 #endif
 #endif

@@ -61,6 +61,13 @@ if(ENABLE_UBSAN)
     message(STATUS "  Sanitizer    : UndefinedBehaviorSanitizer (UBSan) ENABLED")
     add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=undefined)
+    # GCC does not define a portable __SANITIZE_UNDEFINED__ macro, so tests
+    # that need to detect UBSan builds (e.g. to skip latency-budget
+    # assertions that don't tolerate UBSan instrumentation overhead) cannot
+    # rely on compiler intrinsics under GCC. Pass a project-defined macro
+    # so tests/test_helpers.h::is_sanitizer_build() returns true on both
+    # GCC and Clang UBSan builds. See tests/test_helpers.h for the contract.
+    add_compile_definitions(DRONE_UBSAN_BUILD=1)
 endif()
 
 if(NOT ENABLE_ASAN AND NOT ENABLE_TSAN AND NOT ENABLE_UBSAN)
