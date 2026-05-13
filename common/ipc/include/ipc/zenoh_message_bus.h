@@ -56,21 +56,35 @@ public:
     ///                     soon as the subscriber is declared.  Data may
     ///                     arrive later when a publisher appears.
     /// @param retry_ms     Ignored.
+    /// @param filter_pre_birth  Issue #722 — when `true` (default), the
+    ///                          underlying ZenohSubscriber drops messages
+    ///                          whose `timestamp_ns` predates this
+    ///                          subscriber's birth (defense-in-depth
+    ///                          against Zenoh's last-value cache delivering
+    ///                          historic messages from a previous publisher
+    ///                          session).  Tests that use synthetic
+    ///                          timestamps (e.g. `timestamp_ns = 42` for
+    ///                          wire-format coverage) should pass `false`.
     template<typename T>
     [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe(const std::string&   topic,
                                                             [[maybe_unused]] int max_retries = 50,
-                                                            [[maybe_unused]] int retry_ms = 200) {
-        return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
+                                                            [[maybe_unused]] int retry_ms    = 200,
+                                                            bool filter_pre_birth = true) {
+        return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic), true, nullptr,
+                                                    filter_pre_birth);
     }
 
     /// Create a subscriber for the given topic (lazy variant).
     /// For Zenoh, this is equivalent to subscribe() — connections are
     /// always asynchronous, so there is no distinction between eager
     /// and lazy subscription.
-    /// @param topic  Zenoh key expression (e.g. "drone/slam/pose").
+    /// @param topic              Zenoh key expression (e.g. "drone/slam/pose").
+    /// @param filter_pre_birth   See `subscribe()` above (Issue #722).
     template<typename T>
-    [[nodiscard]] std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(const std::string& topic) {
-        return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
+    [[nodiscard]] std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(const std::string& topic,
+                                                                     bool filter_pre_birth = true) {
+        return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic), true, nullptr,
+                                                    filter_pre_birth);
     }
 
     /// Create a service client for the given service name.
