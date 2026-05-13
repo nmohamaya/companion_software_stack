@@ -168,7 +168,7 @@ TEST_F(MyFixture, DebounceFiresAfterWindow) {
 **Why:**
 
 - A debounce / timeout / window that can only be exercised by `sleep_for(window_s)` becomes either flaky-slow CI or simply un-tested.  `ScopedMockClock` makes the same logic deterministic in microseconds.
-- The fixture-ordering bug is the #1 trap — pinned during PR #743 review (see [Issue #740](https://github.com/nmohamaya/companion_software_stack/issues/740) Wave 1 follow-up commits and IMPROVEMENTS.md entries).
+- The fixture-ordering bug is the #1 trap — see Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) and `docs/tracking/IMPROVEMENTS.md` for historical context.
 
 **When reviewing tests for time-dependent code, flag as P2:**
 
@@ -180,7 +180,7 @@ TEST_F(MyFixture, DebounceFiresAfterWindow) {
 
 - `common/util/include/util/iclock.h` — `drone::util::get_clock()` contract and `IClock` interface.
 - `common/util/include/util/mock_clock.h` — `ScopedMockClock` RAII + `MockClock::advance_*()` API.
-- CLAUDE.md "Safety-Critical C++ Practices" + `docs/guides/CPP_PATTERNS_GUIDE.md` ([Issue #740](https://github.com/nmohamaya/companion_software_stack/issues/740) adds dedicated sections via PRs #743 + downstream rollup; until those land, treat the iclock/mock_clock headers as authoritative).
+- CLAUDE.md > Mockable time mandatory; `docs/guides/CPP_PATTERNS_GUIDE.md` — section names are stable references, but if the section doesn't appear by name in either doc on the branch under review, fall back to the `iclock.h` / `mock_clock.h` headers as authoritative.
 
 ### Testing Result<T,E>
 ```cpp
