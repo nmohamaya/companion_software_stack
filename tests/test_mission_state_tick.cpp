@@ -5,6 +5,7 @@
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
+#include "util/mock_clock.h"
 
 #include <chrono>
 #include <thread>
@@ -63,9 +64,21 @@ FCState make_fc(bool armed, float rel_alt) {
 
 }  // namespace
 
+// Issue #740 — existing tests in this fixture exercise ARM-retry semantics
+// orthogonal to the cold-start debounce gate.  The debounce is covered by
+// MissionStateTickDebounceTest below (which installs a ScopedMockClock to
+// drive the stability window deterministically).  Here we disable the
+// debounce so existing tests continue to see "ARM fires on first armable
+// tick" without needing per-test clock manipulation.
+inline StateTickConfig make_default_test_config() {
+    StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
+    c.preflight_armable_stable_s = 0.0f;
+    return c;
+}
+
 class MissionStateTickTest : public ::testing::Test {
 protected:
-    StateTickConfig               config{10.0f, 1.5f, 0.5f, 5};
+    StateTickConfig               config = make_default_test_config();
     MissionStateTick              state_tick{config};
     MockPublisher<TrajectoryCmd>  traj_pub;
     MockPublisher<PayloadCommand> payload_pub;
@@ -207,6 +220,181 @@ TEST_F(MissionStateTickTest, PreflightHandlesArmableFlicker) {
     do_tick(pose, fc_ok);
     EXPECT_LE(fc_calls.size(), 1u);
     EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issue #740 (epic #727 Layer 1) — ARM-gate stability debounce
+//
+// Cold-start failure on Gazebo: PX4's `health_all_ok` flickers true while
+// EKF2 attitude is still settling (gyro/accel bias estimates wandering).
+// Arming on a single-tick flicker produces asymmetric mixer commands and
+// the drone tips on the ground at takeoff.  Fix: require N consecutive
+// seconds of continuous `fc_state.armable=true` before sending ARM.
+//
+// These tests use ScopedMockClock to drive the stability window without
+// real-time sleeps.  The fixture sets `preflight_armable_stable_s = 3.0`
+// (the production default) so the tests exercise the exact production
+// behaviour.
+// ═══════════════════════════════════════════════════════════
+class MissionStateTickDebounceTest : public ::testing::Test {
+protected:
+    // ScopedMockClock must be initialised BEFORE state_tick — the planner's
+    // first construction-time clock query (any of) happens via
+    // drone::util::get_clock(), which ScopedMockClock overrides.
+    drone::util::ScopedMockClock mock_clock_guard;
+
+    StateTickConfig config = [] {
+        StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
+        c.preflight_armable_stable_s = 3.0f;  // production default
+        return c;
+    }();
+    MissionStateTick              state_tick{config};
+    MockPublisher<TrajectoryCmd>  traj_pub;
+    MockPublisher<PayloadCommand> payload_pub;
+    MissionFSM                    fsm;
+    StaticObstacleLayer           obstacle_layer;
+    std::vector<FCCallRecord>     fc_calls;
+
+    FCSendFn send_fc = [this](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+
+    void SetUp() override {
+        fsm.load_mission({{10, 0, 5, 0, 2, 3, true}, {20, 0, 5, 0, 2, 3, false}});
+        fsm.on_arm();  // → PREFLIGHT
+    }
+
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite").value();
+    std::unique_ptr<IObstacleAvoider> avoider_ =
+        create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
+
+    void do_tick(const Pose& pose, const FCState& fc_state) {
+        DetectedObjectList            objects{};
+        drone::util::FrameDiagnostics diag(0);
+
+        state_tick.tick(fsm, pose, fc_state, objects, *planner_, nullptr, *avoider_, obstacle_layer,
+                        traj_pub, payload_pub, send_fc, 0, diag);
+    }
+};
+
+// Tick 1: armable=true → start stability window, no ARM yet.
+// Tick 2: armable=false (the EKF2/health flicker) → reset window, no ARM.
+// Tick 3+: armable=true again → window restarts.  After full window
+// elapsed, ARM finally fires.  This is the actual production-equivalent
+// of a Gazebo cold-start where `health_all_ok` blips through true for
+// one MAVLink update before EKF2 actually converges.
+TEST_F(MissionStateTickDebounceTest, ArmableFlickerResetsStabilityWindow) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Tick 1: armable flickers true once.  Debounce starts, no ARM.
+    auto fc_ok = make_fc(false, 0);
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty())
+        << "ARM fired on first armable=true tick — debounce gate not engaged "
+           "(Issue #740 regression).  EKF2-flicker cold-start race re-opens.";
+
+    // Tick 2: armable drops back to false (the flicker).  Window should reset.
+    auto fc_lost    = make_fc(false, 0);
+    fc_lost.armable = false;
+    do_tick(pose, fc_lost);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Tick 3: armable recovers — fresh window starts at THIS observation.
+    // Advance the clock first so a buggy "resume from old first_seen"
+    // implementation would see the original window already satisfied.
+    mock_clock_guard.mock().advance_ms(1500);
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Tick 4: only 1.5s elapsed since the fresh window started.  Must NOT
+    // arm yet — proves the window restarted, not resumed.
+    mock_clock_guard.mock().advance_ms(1500);
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty())
+        << "ARM fired before the stability window restarted after flicker — "
+           "the debounce is resuming rather than resetting (Issue #740 logic bug).";
+
+    // Tick 5: another 1.7s (total 3.2s since the fresh window started in
+    // tick 3) — window satisfied, ARM fires exactly once.
+    mock_clock_guard.mock().advance_ms(1700);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+}
+
+// Continuous armable=true for the full stability window → ARM fires once.
+TEST_F(MissionStateTickDebounceTest, ArmableStableForWindowFiresArm) {
+    auto pose  = make_pose(0, 0, 0);
+    auto fc_ok = make_fc(false, 0);
+
+    // Tick 1: starts the stability window.
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Advance clock past the 3.0s window.
+    mock_clock_guard.mock().advance_ms(3100);
+
+    // Tick 2: window elapsed → ARM fires.
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+// Continuous armable=true but below the stability window → no ARM.
+// Verifies the gate does not fire prematurely under sub-window stable
+// conditions (e.g. PX4 momentarily ok but EKF2 still pre-converged).
+TEST_F(MissionStateTickDebounceTest, ArmableStableBelowWindowDoesNotArm) {
+    auto pose  = make_pose(0, 0, 0);
+    auto fc_ok = make_fc(false, 0);
+
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Advance clock by 2.5s — still under the 3.0s window.
+    mock_clock_guard.mock().advance_ms(2500);
+
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty()) << "ARM fired before the stability window elapsed (Issue #740 — "
+                                     "debounce window too short).";
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+// Sanity: with `preflight_armable_stable_s = 0.0`, the debounce is
+// effectively disabled and ARM fires on the first armable=true tick.
+// This proves the gate is *purely* configurable — operators can turn it
+// off (e.g. for headless dev) without code changes.
+TEST(MissionStateTickDebounceConfigTest, ZeroWindowDisablesDebounce) {
+    drone::util::ScopedMockClock mock_clock;
+
+    StateTickConfig cfg{10.0f, 1.5f, 0.5f, 5};
+    cfg.preflight_armable_stable_s = 0.0f;
+    MissionStateTick state_tick{cfg};
+
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2, 3, true}});
+    fsm.on_arm();
+
+    StaticObstacleLayer           obstacle_layer;
+    MockPublisher<TrajectoryCmd>  traj_pub;
+    MockPublisher<PayloadCommand> payload_pub;
+    std::vector<FCCallRecord>     fc_calls;
+    FCSendFn                      send_fc = [&](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+    auto planner = create_path_planner("dstar_lite").value();
+    auto avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
+
+    DetectedObjectList            objects{};
+    drone::util::FrameDiagnostics diag(0);
+    auto                          pose = make_pose(0, 0, 0);
+    auto                          fc   = make_fc(false, 0);  // armable=true
+
+    state_tick.tick(fsm, pose, fc, objects, *planner, nullptr, *avoider, obstacle_layer, traj_pub,
+                    payload_pub, send_fc, 0, diag);
+
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **100 C++ + 5 shell + 1 Python** | **2074 (no SDK, 8 Cosys-SDK tests skipped) / 2082 (+SDK) + 42 + 29 + 250+** | Active baseline as of `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/perception-v2-integration` since PR #704: PR #711 net −7 (deletes `test_voxel_obstacle_surface.cpp` + 12 avoider dead-weight tests after empirical Cosys scenario 33 validation, DR-043); PR #717 +2 (`PreflightWaitsWhenFCNotArmable`, `PreflightSendsARMWhenFCBecomesArmable`); PR #725 +1 net (`SearchFailureWithBlockedCachedPathHovers` added, `SearchFailureKeepsLastGoodPath` updated for Issue #698 cached-path validation). For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **100 C++ + 5 shell + 1 Python** | **2078 (no SDK, 8 Cosys-SDK tests skipped) / 2086 (+SDK) + 42 + 29 + 250+** | Active baseline updated for PR #740-A (cold-start ARM-gate debounce, +4 tests in `test_mission_state_tick.cpp`). Prior baseline `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/cold-start-hardening` integration branch: PR #740-A +4 (`ArmableFlickerResetsStabilityWindow`, `ArmableStableForWindowFiresArm`, `ArmableStableBelowWindowDoesNotArm`, `ZeroWindowDisablesDebounce`). Earlier `feature/perception-v2-integration` deltas since PR #704: PR #711 net −7; PR #717 +2; PR #725 +1 net. For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -697,16 +697,21 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 24 tests
+### test_mission_state_tick.cpp — 28 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
 states (PREFLIGHT, TAKEOFF, NAVIGATE, NAVIGATE_UNSTUCK, RTL, LAND) with
 tracking variables.  Issue #716 added ARM-gating on FC preflight readiness
-(`fc_state.armable`) and four PREFLIGHT-gate tests.
+(`fc_state.armable`) and four PREFLIGHT-gate tests.  Issue #740 (epic #727
+Layer 1) added the cold-start stability debounce on `armable` and four
+`MissionStateTickDebounceTest` / `MissionStateTickDebounceConfigTest`
+cases driven by `ScopedMockClock`.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `MissionStateTickTest` | 20 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, NAVIGATE_UNSTUCK disarm-abort (#503), RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π], **Issue #716 PREFLIGHT ARM gating**: waits when `fc_state.armable=false`, fires ARM on armable transition true, does not resend ARM within retry interval, handles armable true→false→true flicker without spurious re-arm |
+| `MissionStateTickDebounceTest` | 3 | **Issue #740 ARM-gate stability debounce**: flicker resets the stability window (no premature ARM after EKF2 blip), continuous armable for the full window fires ARM exactly once, continuous armable below the window does not fire ARM |
+| `MissionStateTickDebounceConfigTest` | 1 | Zero-window config disables the debounce (preserves legacy single-tick behaviour for headless dev / non-Gazebo tests) |
 | `MissionStateTickUnstuckTest` | 2 | NAVIGATE_UNSTUCK escalation behaviour (#503) |
 | `Issue624YawRefreshTest` | 2 | Post-avoider yaw-towards-velocity refresh (#624) |
 

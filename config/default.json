@@ -209,6 +209,8 @@
         "rtl_acceptance_radius_m": 1.5,
         "landed_altitude_m": 0.5,
         "rtl_min_dwell_seconds": 5,
+        "_preflight_armable_stable_s_comment": "Issue #740 (epic #727): require N consecutive seconds of fc_state.armable=true before sending ARM. Debounces PX4 health_all_ok flicker on Gazebo cold-start that produces asymmetric rotor spin-up.",
+        "preflight_armable_stable_s": 3.0,
         "path_planner": {
             "backend": "dstar_lite",
             "ramp_dist_m": 3.0,
