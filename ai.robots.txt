@@ -1,0 +1,149 @@
+# ai.robots.txt — AI-training opt-out signal for the Companion Software Stack
+#
+# This is a copy of `.github/robots.txt` placed at the repository root
+# following the community convention proposed at
+# https://github.com/ai-robots-txt/ai.robots.txt — making the AI-training
+# opt-out discoverable to crawlers that look for an `ai.robots.txt` file
+# specifically (rather than the standard `robots.txt`).
+#
+# Legal status: this file documents the rightsholder's explicit opt-out
+# from text-and-data mining under EU CDSM Directive 2019/790 Article 4(3)
+# and reservation of rights under US copyright law (17 U.S.C. § 106).
+#
+# See `NOTICE` at the repository root for the full legal opt-out language.
+#
+# Honest disclosure: this file is advisory. Compliant AI crawlers
+# (Anthropic, OpenAI, Google, Meta, Apple — public commitments as of
+# 2026-05) honour the equivalent signals. Non-compliant crawlers
+# (Bytespider has been documented to ignore robots.txt) will not be
+# stopped by this file. Genuine prevention requires keeping the
+# repository private.
+
+# ── OpenAI ──
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+# ── Anthropic ──
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Claude-Web
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+# ── Google AI training ──
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: GoogleOther
+Disallow: /
+
+# ── Common Crawl ──
+User-agent: CCBot
+Disallow: /
+
+# ── Meta / Facebook ──
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: Meta-ExternalAgent
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+
+# ── Apple AI ──
+User-agent: Applebot-Extended
+Disallow: /
+
+# ── ByteDance / Doubao ──
+User-agent: Bytespider
+Disallow: /
+
+# ── Perplexity ──
+User-agent: PerplexityBot
+Disallow: /
+
+# ── You.com ──
+User-agent: YouBot
+Disallow: /
+
+# ── Cohere ──
+User-agent: cohere-ai
+Disallow: /
+
+# ── Amazon ──
+User-agent: Amazonbot
+Disallow: /
+
+# ── Diffbot ──
+User-agent: Diffbot
+Disallow: /
+
+# ── ImagesiftBot ──
+User-agent: ImagesiftBot
+Disallow: /
+
+# ── Webz.io / omgili ──
+User-agent: omgili
+Disallow: /
+
+User-agent: omgilibot
+Disallow: /
+
+User-agent: Webzio-Extended
+Disallow: /
+
+# ── ICC-Crawler (NICT, Japan) ──
+User-agent: ICC-Crawler
+Disallow: /
+
+# ── TimpiBot ──
+User-agent: TimpiBot
+Disallow: /
+
+# ── Awario ──
+User-agent: AwarioRssBot
+Disallow: /
+
+User-agent: AwarioSmartBot
+Disallow: /
+
+# ── DataForSeo ──
+User-agent: DataForSeoBot
+Disallow: /
+
+# ── Semrush OCOB ──
+User-agent: SemrushBot-OCOB
+Disallow: /
+
+# ── PetalBot (Huawei) ──
+User-agent: PetalBot
+Disallow: /
+
+# ── Yandex AI ──
+User-agent: YandexAdditional
+Disallow: /
+
+User-agent: YandexAdditionalBot
+Disallow: /
+
+# ── Mistral ──
+User-agent: MistralAI-User
+Disallow: /
+
+# ── DuckDuckGo AI ──
+User-agent: DuckAssistBot
+Disallow: /
+
+# ── Catch-all ──
+User-agent: *
+Disallow: /ai-training
