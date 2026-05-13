@@ -125,11 +125,12 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
 
     auto hb = drone::util::ScopedHeartbeat("vio_pipeline", true);
 
-    uint64_t frame_count     = 0;
-    uint64_t error_count     = 0;
-    uint64_t no_frame_count  = 0;
-    uint64_t last_drop_count = 0;
-    uint64_t vio_loop_tick   = 0;
+    uint64_t frame_count         = 0;
+    uint64_t error_count         = 0;
+    uint64_t no_frame_count      = 0;
+    uint64_t last_drop_count     = 0;
+    uint64_t vio_loop_tick       = 0;
+    uint64_t init_skipped_frames = 0;  // Issue #740 Layer 2 — INITIALIZING-suppressed publishes.
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -178,23 +179,34 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
         if (result.is_ok()) {
             auto& output = result.value();
             // Issue #740 Layer 2 / #727 — skip publishing while the backend
-            // is still INITIALIZING.  Backends return a default-zero `Pose{}`
-            // in this state (see e.g. GazeboVIOBackend::process_frame at
-            // ivio_backend.h:385-405 — when `pose_valid_` is false, the
-            // method early-returns with `output.health = INITIALIZING` and
-            // `output.pose` left at default-zero).  In the current Gazebo
-            // path the default Pose has `timestamp = 0` which falls out
-            // downstream — but that's fragile: any future backend that
-            // stamps a fresh `timestamp_ns` in the INITIALIZING branch
-            // would slip past the wrapper-level stale-message filter
-            // (#722) and feed the planner a fresh-stamped zero-pose.
-            // Symptom: drone arrives at first waypoint with wildly wrong
-            // pose (#727 scenario 02 — drone visibly 25 m west of WP0).
+            // is still INITIALIZING.  The ground-truth backends
+            // (`GazeboVIOBackend`, `GazeboFullVIOBackend`, `CosysVIOBackend`)
+            // return a default-zero `Pose{}` in this state — when
+            // `pose_valid_` is false, the method early-returns with
+            // `output.health = INITIALIZING` and `output.pose` left at
+            // default-zero.  `SimulatedVIOBackend` is different: it
+            // generates a synthetic non-zero pose even during INITIALIZING
+            // (first `min_init_frames_` frames), because the pose is
+            // synthesised analytically.  Either way, downstream consumers
+            // MUST NOT treat any pose as a real measurement until health
+            // transitions to DEGRADED or NOMINAL.
+            //
+            // In the current Gazebo path the default-zero Pose has
+            // `timestamp = 0` which falls out downstream — but that's
+            // fragile: any future backend that stamps a fresh
+            // `timestamp_ns` in the INITIALIZING branch (or that
+            // generates a non-zero pose during init, like Simulated) would
+            // slip past the wrapper-level stale-message filter (#722) and
+            // feed the planner a fresh-stamped meaningless pose.  Symptom:
+            // drone arrives at first waypoint with wildly wrong pose (#727
+            // scenario 02 — drone visibly 25 m west of WP0).
             //
             // Pinning the contract here means: P3 publishes nothing until
             // the backend reports either DEGRADED or NOMINAL.  Downstream
             // subscribers see no-pose-this-tick (which they already handle)
-            // rather than a meaningless zero-pose-with-fresh-timestamp.
+            // rather than a meaningless pose-with-fresh-timestamp.  The
+            // interface-level contract is documented on
+            // `IVIOBackend::process_frame` (see `ivio_backend.h`).
             if (output.health == VIOHealth::INITIALIZING) {
                 static bool init_skip_logged = false;
                 if (!init_skip_logged) {
@@ -202,7 +214,12 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
                                    "publication until DEGRADED/NOMINAL (Issue #740 Layer 2)");
                     init_skip_logged = true;
                 }
-                diag.add_metric("VIO", "init_skipped_frames", 1.0);
+                // Count locally so the per-300-frame INFO log shows how many
+                // frames were suppressed during cold-start.  The previous
+                // `diag.add_metric(...)` call was silently dropped because
+                // `FrameDiagnostics` only emits on `has_warnings()`, which
+                // `add_metric(INFO)` doesn't set.
+                ++init_skipped_frames;
             } else {
                 pose_buffer.write(output.pose);
                 pose_buffer.mark_initialized();
@@ -218,11 +235,11 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
                 diag.log_summary("VIOPipeline");
             } else if (frame_count % 300 == 0) {
                 DRONE_LOG_INFO("[VIOPipeline] Frame {}: pos=({:.2f}, {:.2f}, {:.2f}) "
-                               "health={} feat={} matches={} imu={}",
+                               "health={} feat={} matches={} imu={} init_skipped={}",
                                frame_count, output.pose.position.x(), output.pose.position.y(),
                                output.pose.position.z(), vio_health_name(output.health),
                                output.num_features, output.num_stereo_matches,
-                               output.imu_samples_used);
+                               output.imu_samples_used, init_skipped_frames);
             }
         } else {
             ++error_count;

@@ -16,11 +16,11 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
-### 2026-05-13 (PR #751 implementation — proactive findings)
+### 2026-05-13 (PR #752 implementation — proactive findings)
 
 #### Refactor `vio_pipeline_thread` for unit testability
 
-- **P3** — `test-infra` — `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread` is currently a 100+ line free function that captures `pose_buffer`, calls `backend.process_frame()`, and writes to the buffer.  No unit test directly exercises this function — coverage is via scenario integration tests only.  PR #751 (this PR) added an `output.health == INITIALIZING` guard inside the function but couldn't add a focused unit test for the new branch because the function isn't structured for testability (depends on a thread-local `PoseDoubleBuffer` reference + `Diagnostics` + ambient running flag).
+- **P3** — `test-infra` — `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread` is currently a 100+ line free function that captures `pose_buffer`, calls `backend.process_frame()`, and writes to the buffer.  No unit test directly exercises this function — coverage is via scenario integration tests only.  PR #752 (this PR) added an `output.health == INITIALIZING` guard inside the function but couldn't add a focused unit test for the new branch because the function isn't structured for testability (depends on a thread-local `PoseDoubleBuffer` reference + `Diagnostics` + ambient running flag).
   - **Suggested fix:** extract the per-frame decision logic (the "should I publish this output?" call) into a free function `should_publish_vio_output(const VIOOutput&) -> bool` or a thin method on a struct.  The pipeline thread calls the helper and acts on the result.  Unit tests then cover the helper directly with synthetic `VIOOutput` instances spanning all health states (INITIALIZING, DEGRADED, NOMINAL, LOST).  The thread function becomes a thin glue layer that doesn't need its own unit test.
   - **When to do it:** opportunistic — when next touching `vio_pipeline_thread` for another reason, or when adding the next per-output gating rule (likely Layer 4 RTF-aware logic from #746 if it lands here).
   - **Affected:** test coverage gap for P3 publish-thread logic.  Today the contract "don't publish during INITIALIZING" is enforced inline but only exercised by scenario tests.  Cheap-to-add unit test would catch a regression at PR time instead of scenario-sweep time.

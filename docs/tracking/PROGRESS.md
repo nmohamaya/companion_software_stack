@@ -3607,12 +3607,12 @@ Two-part fix (per #714):
 
 ---
 
-### Improvement #99 — P3 INITIALIZING Pose-Publish Guard (Epic #740 Layer 2, PR #751)
+### Improvement #99 — P3 INITIALIZING Pose-Publish Guard (Epic #740 Layer 2, PR #752)
 
 **Date:** 2026-05-13
 **Category:** Hardening — IPC publisher-side staleness defense
 **Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Layer 2 / related to [#727](https://github.com/nmohamaya/companion_software_stack/issues/727)
-**PR:** #751 (open against `feature/cold-start-hardening`)
+**PR:** #752 (open against `feature/cold-start-hardening`)
 **Numbering note:** depends on PRs #743, #744, #745 landing first; renumber if order changes.
 
 **What:**
@@ -3646,4 +3646,4 @@ After this PR + PR #745 land, every safety-critical IPC topic has automatic defe
 
 ---
 
-*Last updated after Improvement #99 (PR #751). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+*Last updated after Improvement #99 (PR #752). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
