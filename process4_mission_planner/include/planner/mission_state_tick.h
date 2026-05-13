@@ -21,6 +21,7 @@
 #include "util/ilogger.h"
 #include "util/scoped_timer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -195,22 +196,23 @@ private:
     float                                 survey_start_yaw_ = 0.0f;
     uint64_t                              survey_log_tick_  = 0;
 
-    std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
-                                                           std::chrono::seconds(10);
-    // Issue #716 — wait-log throttle separate from `last_arm_time_` so the
-    // first ARM fires immediately when `fc_state.armable` transitions from
-    // false to true (without being gated by a stale arm-retry interval that
-    // was last touched by the wait-log path).
-    std::chrono::steady_clock::time_point last_wait_log_time_ = std::chrono::steady_clock::now() -
-                                                                std::chrono::seconds(10);
+    // Issue #716 + #740 — PREFLIGHT timing state.  All three throttles below
+    // share a single clock domain (`drone::util::get_clock().now_ns()`) so
+    // unit tests with `ScopedMockClock` can drive every PREFLIGHT timer
+    // deterministically.  Sentinel `0` means "never fired / not currently
+    // tracking" — interpreted as "infinitely far in the past" by the elapsed
+    // checks, so the first observation always passes the retry / wait-log
+    // thresholds.  Issue #740 PR-A review (PR #743) consolidated these from
+    // a mix of `std::chrono::steady_clock` and `drone::util::get_clock()` to
+    // close the test-mockability gap flagged by 4 of 9 review agents.
+    uint64_t last_arm_time_ns_      = 0;  // last time ARM command was emitted
+    uint64_t last_wait_log_time_ns_ = 0;  // last time the "waiting for FC" log fired
 
     // Issue #740 — first observation of `fc_state.armable == true` since the
     // last `armable == false` transition.  Used to debounce the ARM trigger
     // against momentary `health_all_ok` flickers on Gazebo cold-start.  Zero
     // means "not currently observing armable=true" (either we never have, or
-    // it dropped back to false and reset the timer).  Sourced from
-    // `drone::util::get_clock().now_ns()` so unit tests can drive it with
-    // `ScopedMockClock` without sleeping.
+    // it dropped back to false and reset the timer).
     uint64_t armable_first_seen_ns_ = 0;
 
     // Collision recovery state (Issue #226)
@@ -269,6 +271,16 @@ private:
     // `armable=true` before sending ARM.  Any drop back to false resets
     // `armable_first_seen_ns_` and restarts the stability window.
     //
+    // **Default:** `preflight_armable_stable_s = 3.0 s` (production tuning).
+    // **Disable:** setting `preflight_armable_stable_s = 0.0` collapses the
+    // gate to legacy single-tick behaviour (ARM fires on first `armable=true`
+    // tick) — used by headless dev configs and the existing unit-test fixture
+    // (`make_default_test_config()` in `tests/test_mission_state_tick.cpp`)
+    // so tests that exercise post-PREFLIGHT behaviour don't need to drive
+    // a mock clock.  Production configs MUST keep the gate enabled (≥1 s) —
+    // see CLAUDE.md §"FSM transitions emitting physical FC commands must be
+    // debounced".
+    //
     // **No timeout / no fault escalation** (review-fault-recovery P2):
     // if `armable` never becomes stably true (e.g. PX4 EKF stuck, MAVSDK
     // subscription silently lost, hardware sensor genuinely faulty), the
@@ -286,21 +298,31 @@ private:
             armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
             return;
         }
-        const auto now = std::chrono::steady_clock::now();
+        // PR #741 review (4 agents convergent): use a single clock domain
+        // (`drone::util::get_clock()`) for ALL PREFLIGHT timing so unit tests
+        // with `ScopedMockClock` can drive every throttle deterministically.
+        // One `now_ns` capture per tick — cheap (one atomic load + virtual
+        // call), and `tick_preflight()` exits PREFLIGHT after a few seconds
+        // so this isn't a sustained hot path.
+        const uint64_t now_ns = drone::util::get_clock().now_ns();
         if (!fc_state.armable) {
             // FC preflight not yet clear (EKF2 converging, sensors warming,
             // GPS lock acquiring, etc.).  Reset the stability tracker — any
             // future `armable=true` will start a fresh window.  Log on the
             // configurable wait-log throttle so operators can see we are
             // waiting on the FC and not stuck.  Uses a separate throttle
-            // from `last_arm_time_` so the first ARM fires promptly once
+            // from `last_arm_time_ns_` so the first ARM fires promptly once
             // `armable` transitions to true and stays true through the
             // stability window.
             armable_first_seen_ns_ = 0;
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_wait_log_time_)
-                    .count() >= config_.preflight_wait_log_s) {
+            const uint64_t wait_log_interval_ns =
+                static_cast<uint64_t>(std::max(0, config_.preflight_wait_log_s)) * 1'000'000'000ULL;
+            // Sentinel `0` means "never logged" → fire immediately.  Clock-
+            // backward guard via `now_ns >= last`.
+            if (last_wait_log_time_ns_ == 0 || now_ns < last_wait_log_time_ns_ ||
+                (now_ns - last_wait_log_time_ns_) >= wait_log_interval_ns) {
                 DRONE_LOG_INFO("[Planner] Waiting for FC preflight (armable=false)");
-                last_wait_log_time_ = now;
+                last_wait_log_time_ns_ = now_ns;
             }
             return;
         }
@@ -308,7 +330,6 @@ private:
         // armable == true — apply the #740 stability debounce.  First-time
         // observation starts the window; subsequent observations check
         // elapsed time against the configured threshold.
-        const uint64_t now_ns    = drone::util::get_clock().now_ns();
         const uint64_t window_ns = static_cast<uint64_t>(
             std::max(0.0, static_cast<double>(config_.preflight_armable_stable_s) * 1e9));
 
@@ -331,14 +352,18 @@ private:
             // Still within stability window — defer ARM.
             return;
         }
-        const uint64_t elapsed_ns = now_ns - armable_first_seen_ns_;
 
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_arm_time_).count() >=
-            config_.preflight_arm_retry_s) {
+        // Stability window satisfied — apply the existing ARM-retry throttle
+        // (Issue #716) so duplicate ARMs aren't issued within `preflight_arm_
+        // retry_s` of each other.  Sentinel `0` means "never armed" → fire.
+        const uint64_t retry_interval_ns =
+            static_cast<uint64_t>(std::max(0, config_.preflight_arm_retry_s)) * 1'000'000'000ULL;
+        if (last_arm_time_ns_ == 0 || now_ns < last_arm_time_ns_ ||
+            (now_ns - last_arm_time_ns_) >= retry_interval_ns) {
             DRONE_LOG_INFO("[Planner] FC armable stable for {:.1f}s — sending ARM command",
-                           static_cast<double>(elapsed_ns) * 1e-9);
+                           static_cast<double>(now_ns - armable_first_seen_ns_) * 1e-9);
             send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
-            last_arm_time_ = now;
+            last_arm_time_ns_ = now_ns;
         }
     }
 

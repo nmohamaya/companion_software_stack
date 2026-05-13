@@ -31,12 +31,20 @@ When working on any task, **always look for and suggest improvements** you notic
 
 Flag these as suggestions (don't silently implement them). Use your judgement on severity — mention critical issues immediately, batch minor suggestions at the end of your response.
 
-**Where deferred items are logged:** two destinations, never mixed:
+**Where deferred items are logged:** two destinations, never mixed. The distinction is *why* something is being deferred, not *who* surfaced it:
 
 - **Proactive findings I noticed myself** (not in response to a review comment) → `docs/tracking/IMPROVEMENTS.md`. Backlog of nice-to-haves for quiet windows. Entries are dated, prioritised (P1/P2/P3), categorised, and moved to a **Resolved** section with a PR/commit reference once addressed.
-- **Declining or disagreeing with a review comment** (from agents, Copilot, or humans) → `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. This is the audit trail proving the comment was evaluated and the call was intentional.
+- **Review-comment items "considered and chose otherwise"** (from agents, Copilot, or humans — we evaluated both paths and intentionally rejected the suggestion) → `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. The DR documents the question, arguments for both sides, our decision, and when to revisit. This is the audit trail proving the comment was evaluated and the call was intentional.
+- **Review-comment items "valid but deferred"** (we agree with the suggestion but choose not to do it in this PR) → `docs/tracking/IMPROVEMENTS.md` with **explicit cross-reference to the originating review** (`PR #N + agent name + severity`). The cross-reference preserves the audit trail without conflating "we'll do it later" with "we considered and declined".
 
-When writing "Review Fixes" tables on a PR and marking an item deferred, always include a DR-NNN reference. When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
+**The fork between DR-NNN and IMPROVEMENTS.md for review-comment declines:**
+
+- If your response is *"yes valid, will do later"* → IMPROVEMENTS.md with a "When to do it" trigger and a cross-ref to the review comment.
+- If your response is *"we considered both paths and chose this one because X"* → DR-NNN with both-sides analysis, decision rationale, and revisit conditions.
+
+The first case is a backlog item; the second is a design decision. Conflating them inflates DR-NNN with low-substance entries and devalues the format for genuine design decisions. (This distinction was clarified in PR #743 after the PR #741 review surfaced 4 deferred items, only 1 of which was a genuine design decision.)
+
+When writing "Review Fixes" tables on a PR and marking an item deferred, always include either a DR-NNN reference (for design declines) or an IMPROVEMENTS.md reference (for backlog deferrals). When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
 
 **Safety issues are critical** — any memory safety violations, undefined behaviour, race conditions, missing error handling on flight-critical paths, or other issues that could cause loss of vehicle must be reported to the user **immediately** when noticed, not batched.
 

@@ -1199,3 +1199,89 @@ Half the line count, eliminates the per-site comment drift.  But: the no-op path
 - A future profiler backend requires multiple constructor arguments (the helper-class refactor becomes more attractive when the per-site boilerplate is longer).
 
 **Date:** 2026-05-13 (#723 rollup Phase 3 Pass 1 P3 finding — DR-NNN audit trail)
+
+---
+
+## DR-047: Don't extract a shared `FirstObservationGate` helper for the two pre-existing first-observation timestamp patterns (DRY advisory from PR #741 review code-quality P2)
+
+**Question:** PR #741's review surfaced a DRY advisory (code-quality agent, P2): the new ARM-gate debounce in `process4_mission_planner/include/planner/mission_state_tick.h` (member `armable_first_seen_ns_`) and the pre-existing pose-staleness filter in `process4_mission_planner/src/main.cpp:93–95` (local `planner_birth_ns`) share a similar **shape** — `uint64_t` ns captured from `drone::util::get_clock().now_ns()` at a first-observation event, compared against a slack/window. Should we extract a shared helper into `common/util/` to eliminate the duplication?
+
+**The two patterns:**
+
+```cpp
+// Pattern A — process-lifetime stale-message filter (#720 / PR #721)
+//   process4_mission_planner/src/main.cpp:93
+const uint64_t     planner_birth_ns  = drone::util::get_clock().now_ns();
+constexpr uint64_t kPoseBirthSlackNs = 100'000'000ULL;  // 100 ms
+
+// Used at the pose-subscribe site:
+if (pose.timestamp_ns > 0 && pose.timestamp_ns + kPoseBirthSlackNs < planner_birth_ns) {
+    // drop as historical-cache stale
+}
+```
+
+```cpp
+// Pattern B — FSM-state stability debounce (#740 / PR #741)
+//   process4_mission_planner/include/planner/mission_state_tick.h:214
+uint64_t armable_first_seen_ns_ = 0;  // sentinel "not observing"
+
+// Used in tick_preflight:
+if (armable_first_seen_ns_ == 0 || now_ns < armable_first_seen_ns_) {
+    armable_first_seen_ns_ = now_ns;     // start window
+} else if ((now_ns - armable_first_seen_ns_) < window_ns) {
+    return;  // still within window
+}
+```
+
+**Considered alternative — extract `common/util/StabilityWindow.h`:**
+
+```cpp
+class StabilityWindow {
+public:
+    explicit StabilityWindow(uint64_t window_ns) : window_ns_(window_ns) {}
+    bool elapsed(uint64_t now_ns);  // returns true once the window has elapsed
+    void reset();                   // re-arm: next call to elapsed() starts a fresh window
+private:
+    uint64_t window_ns_;
+    uint64_t first_seen_ns_ = 0;
+};
+```
+
+Pattern B becomes a one-liner; Pattern A doesn't fit cleanly because its comparison shape is *different* (`pose.ts + slack < planner_birth_ns` rather than `now - first_seen >= window`). Pattern A is **really an age-guard**, not a stability-window — semantically distinct, just sharing the data type.
+
+**For extraction (rejected for now):**
+
+- Cleaner Pattern B usage site
+- Sets up #718 (PREFLIGHT-timeout escalation) to use the helper from day one
+- Eliminates the bug-fix-asymmetry risk: a future hardening of one site (e.g. tighter NaN handling) automatically applies to the other
+
+**For keeping the inline patterns (our decision):**
+
+1. **The two patterns are only superficially similar.** Pattern A is `birth_ns + slack` (process-lifetime age guard). Pattern B is `now - first_seen` (resettable elapsed-time window). Forcing them into one helper requires either two different methods (`age_exceeded()` vs `elapsed()`) or a template that parameterises both, and the resulting abstraction is harder to read than the two inline patterns.
+2. **YAGNI with 2 data points.** A helper designed for 2 callers tends to over-fit the current shape; a helper designed for 3 informed by a real third use case has a much better chance of being right.
+3. **The bug-fix-asymmetry risk is real but bounded** — both sites are in the same `process4_mission_planner` directory and review pipelines for either will see the other in the diff context for nearby PRs.
+
+**Decision:** Keep the two inline patterns. Track #742 as the follow-up that will extract `common/util/StabilityWindow.h` (or a similarly named abstraction) when **a third similar pattern lands** — most likely from #718.
+
+**Specific asymmetries the future extractor must handle:**
+
+- **Comparison direction** — Pattern A asks "is the publisher timestamp older than my birth?" (compares two unrelated timestamps). Pattern B asks "has enough time elapsed since I first observed X?" (compares one timestamp to a "now" delta). A shared helper must support both shapes — likely as two methods, not one.
+- **Underflow guard** — Pattern B has `if (now_ns < first_seen_ns_)` to handle mock-clock rewind. Pattern A doesn't need this (the timestamps it compares are independent). If extracted, the underflow guard must be on whichever method does `now - first_seen`.
+- **Reset semantics** — Pattern A never resets (`planner_birth_ns` is `const` for process lifetime). Pattern B resets on every `armable=false` tick. The helper must support both lifetimes (e.g. one-shot via `const` instance, resettable via a `reset()` method).
+- **Sentinel encoding** — Pattern B uses `first_seen_ns_ == 0` as "not yet observed". The helper should use the same sentinel, OR use `std::optional<uint64_t>` for clarity. Mixed sentinel conventions across the two existing patterns would be a stealth bug.
+
+**Action items:**
+
+1. **None immediately** — this is the audit trail for "considered, declined now".
+2. **Filed [#742](https://github.com/nmohamaya/companion_software_stack/issues/748)** as the follow-up — extraction work scheduled to happen alongside #718 (PREFLIGHT-timeout escalation), which will add the third pattern that informs the right abstraction.
+3. **In any future PR touching either of the two existing sites**, the reviewer MUST cross-reference the other site to check for asymmetric maintenance. Reference this DR-047 entry in the PR body if such a change lands.
+
+**Revisit when:**
+
+- #718 (PREFLIGHT-timeout escalation) lands, adding a third similar timing pattern in `tick_preflight()` — that's the natural trigger to extract.
+- Any other PR introduces a fourth "first-observation timestamp" pattern in `process[1-7]_*` — if we get to 4 without a helper, we've over-deferred.
+- A real bug is found that's caused by asymmetric maintenance between Patterns A and B — that would invalidate the "tolerable for now" claim and force immediate extraction.
+
+**Backend-independence note (#740 follow-up):** the duplication does NOT introduce a backend-specific failure mode. Both patterns are agnostic to the active HAL backend (Gazebo MAVSDK, Cosys SimpleFlight, Cosys + PX4 HIL, real hardware) because they consume IPC types (Pose, FCState) produced by the HAL layer. What varies per-backend is the *probability* of each pattern firing and the *appropriate tuning value* (slack, window), both of which are already config-driven via `drone::Config`. Deferring extraction doesn't expose us to sim-vs-hardware divergence — it exposes us to maintenance drift only.
+
+**Date:** 2026-05-13 (PR #741 review code-quality P2 advisory — DR-NNN audit trail)

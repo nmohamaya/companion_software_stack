@@ -3641,4 +3641,56 @@ Layer 1 of the cold-start hardening epic (#740). Composes with three more layers
 
 ---
 
-*Last updated after Improvement #95 (PR #741). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #96 — Cold-Start ARM-Gate Review-Fix Follow-Up (PR #741 review fixes + mixed-clock migration, PR #743)
+
+**Date:** 2026-05-13
+**Category:** Hardening — Review fixes + testability
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (cold-start hardening), follow-up to merged [#741](https://github.com/nmohamaya/companion_software_stack/pull/741)
+**PR:** #743 (open against `feature/cold-start-hardening`)
+
+**What:**
+
+PR #741 (Improvement #95) merged before the review pipeline ran.  This follow-up closes the audit loop with a post-merge 9-agent + Copilot review (recorded as a comment on #741 for the audit trail) and a focused follow-up PR that addresses every P2 finding inline plus the highest-leverage P3.
+
+Changes by category:
+
+**P2 #1 — Config validation** (3 convergent finders: memory-safety + security + Copilot).  Added `std::isfinite` + `std::clamp(0.0, 30.0)` clamp at the `cfg.get<float>(PREFLIGHT_ARMABLE_STABLE_S)` load site in `process4_mission_planner/src/main.cpp:443`.  Mirrors the existing `voxel_input_min_confidence` clamp-on-load pattern.  Without this, `+inf` / huge values produced float→uint64_t UB; NaN silently disabled the gate.
+
+**P2 #2 — Missing `#include <algorithm>`** (Copilot).  Added to `mission_state_tick.h` for the `std::max` use introduced by PR #741.
+
+**P3 high-leverage — Mixed clock sources** (4 convergent finders: fault-recovery + test-unit + test-quality + code-quality).  Migrated `last_arm_time_` and `last_wait_log_time_` from `std::chrono::steady_clock::time_point` to `uint64_t` ns sourced from `drone::util::get_clock().now_ns()`.  Both throttles now share a single clock domain with `armable_first_seen_ns_`, so `ScopedMockClock`-driven unit tests can exercise the full PREFLIGHT timing path deterministically (previously the retry path was only mockable for the debounce window, not for the retry interval).  Sentinel `0` means "never fired" — first observation always passes the threshold check.
+
+**P2 #3 + #4 — Test coverage gaps** (filled by the mixed-clock migration above).  New tests in `tests/test_mission_state_tick.cpp`:
+
+- `ArmableClockRewindRestartsWindow` — pins the underflow-guard at `mission_state_tick.h:319` (false-green protection: a buggy refactor dropping `now_ns < first_seen` would otherwise still pass all 4 existing debounce tests).
+- `DebounceAndRetryComposeAtProductionDefaults` — exercises the interaction between the #740 stability debounce and the #716 ARM-retry throttle at production `stable_s = 3.0`.
+- `ArmableStableAtExactWindowBoundaryFiresArm` (P3) — pins the `<` (strictly-less-than) comparison semantics at exact-equality (3.0s == window_ns counts as elapsed).
+- `ArmedTransitionResetsStabilityWindowForReentry` (P3) — pins the `armable_first_seen_ns_ = 0` reset on the `fc_state.armed=true` early return, exercising the re-PREFLIGHT path that the existing tests bypass via `make_default_test_config()`.
+
+**P2 #5 + #6 — Doc drift.**  TESTS.md P4 row 224 → 232 (was 224 in #741 due to missing summary-row update; #741 added 4, #743 adds 4 more = +8 total).  PROGRESS.md entry (this entry).
+
+**P3 various — Doc polish.**  Added "0.0 disables / 3.0s default" wording to the `tick_preflight()` doc block (api-contract finding).
+
+**Routing-rule clarification (responding to user feedback).**  CLAUDE.md `Where deferred items are logged` rule was over-applying DR-NNN to review-comment declines.  Clarified the fork: "considered and chose otherwise" → DR-NNN; "valid but deferred" → IMPROVEMENTS.md with cross-reference to the originating review.
+
+**Deferred to backlog (with explicit triggers):**
+
+- DR-047 — `StabilityWindow` / `BirthGuard` helper extraction (revisit when #718 lands a third similar pattern).  Filed [#742](https://github.com/nmohamaya/companion_software_stack/issues/742) as a follow-up with junior-engineer implementation guidance.
+- IMPROVEMENTS.md — sibling `cfg_key` constants for `arm_retry_s` / `wait_log_s`, `hardware*.json` propagation, repeated `StateTickConfig` positional ctor.  All P3, all backlog with revisit triggers.
+
+**Files modified:**
+
+- `process4_mission_planner/include/planner/mission_state_tick.h` — `#include <algorithm>`, migrate `last_arm_time_` + `last_wait_log_time_` to ns, doc-block update.
+- `process4_mission_planner/src/main.cpp` — config-load validation clamp.
+- `tests/test_mission_state_tick.cpp` — 4 new tests.
+- `tests/TESTS.md` — P4 row 224 → 232, total 2078 → 2082, suite description updated.
+- `docs/tracking/DESIGN_RATIONALE.md` — DR-047 (StabilityWindow extraction deferral).
+- `docs/tracking/IMPROVEMENTS.md` — 3 P3 backlog items.
+- `docs/tracking/PROGRESS.md` — this entry.
+- `CLAUDE.md` — clarify deferral-routing rule.
+
+**Test count:** +4 (`test_mission_state_tick.cpp` 28 → 32).  Full `ctest -N`: 2058 → 2062 on this branch.  All 32 tests in the file pass; format clean.
+
+---
+
+*Last updated after Improvement #96 (PR #743). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
