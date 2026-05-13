@@ -109,6 +109,19 @@ def parse_contacts(
         for raw_line in fh:
             line = raw_line.rstrip("\n")
 
+            # gz-topic text format separates protobuf messages with `---`.
+            # Reset state at message boundaries — defensive against a
+            # truncated `contact { ... }` block (e.g. when `gz topic` is
+            # SIGKILLed mid-write) that would otherwise carry stale
+            # collision names into the next message and produce phantom
+            # contact events.
+            if line.strip() == "---":
+                in_contact = False
+                current_collision_block = None
+                name1 = None
+                name2 = None
+                continue
+
             if _CONTACT_OPEN_RE.match(line):
                 in_contact = True
                 name1 = None
@@ -209,10 +222,18 @@ def main() -> int:
         help=(
             "Maximum unique drone-vs-obstacle pairs to print to stdout on "
             "FAIL (default: %(default)d).  Prevents the report flooding "
-            "when the drone is sustained-in-contact with one obstacle."
+            "when the drone is sustained-in-contact with one obstacle.  "
+            "Overridden by --verbose."
         ),
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print every detected drone-vs-obstacle pair (overrides --max-events).",
+    )
     args = parser.parse_args()
+    if args.verbose:
+        args.max_events = sys.maxsize
 
     if not args.log_path.exists():
         print(

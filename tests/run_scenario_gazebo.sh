@@ -132,22 +132,32 @@ done
 
 # JSON query helper (uses python3 since jq may not be installed)
 # Variables are passed via sys.argv to avoid shell injection into Python code.
+# Optional 3rd argument is the default value returned when the key is absent
+# (or any intermediate key in the dotted path is missing).  Without it, an
+# absent key returns the empty string — preserved for backwards compatibility
+# with existing call sites that test for `-n "$val"`.
 json_get() {
     local file="$1"
     local query="$2"
-    python3 - "$file" "$query" <<'PYEOF'
+    local default="${3-}"
+    python3 - "$file" "$query" "$default" <<'PYEOF'
 import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
 keys = sys.argv[2].split('.')
+default = sys.argv[3]
 val = data
+found = True
 for k in keys:
     if isinstance(val, dict) and k in val:
         val = val[k]
     else:
-        val = ''
+        found = False
         break
-print(val if not isinstance(val, (dict, list)) else json.dumps(val))
+if not found:
+    print(default)
+else:
+    print(val if not isinstance(val, (dict, list)) else json.dumps(val))
 PYEOF
 }
 
@@ -650,12 +660,27 @@ if [[ "$STARTUP_OK" == "true" ]]; then
     if [[ "$CONTACT_GATE_ENABLED" == "true" ]]; then
         # Extract world name from the SDF that Gazebo loaded.  `gz topic`
         # needs the world name (not the SDF path) to construct the topic.
-        WORLD_NAME=$(grep -oP '<world\s+name="\K[^"]+' "$GZ_WORLD" 2>/dev/null | head -1)
+        # Sanitize aggressively before interpolating into a shell argument:
+        # a malicious or malformed SDF attribute value could otherwise inject
+        # backticks / $() into the `gz topic -t /world/${WORLD_NAME}/contacts`
+        # invocation below.  World names in Gazebo are always
+        # `[A-Za-z0-9_-]+` in practice.
+        WORLD_NAME=$(grep -oP '<world\s+name="\K[^"]+' "$GZ_WORLD" 2>/dev/null \
+                     | head -1 | tr -cd 'A-Za-z0-9_-')
         if [[ -z "$WORLD_NAME" ]]; then
-            echo -e "  ${YELLOW}WARN: could not extract <world name=...> from ${GZ_WORLD};${NC}"
-            echo -e "  ${YELLOW}      contact-sensor gate disabled for this run.${NC}"
+            # FAIL the run instead of silently skipping — a broken SDF or
+            # an unusual `<world>` attribute format would otherwise let the
+            # scenario pass with no flight-quality coverage at all, which
+            # is the exact false-PASS class this gate exists to prevent.
+            echo -e "  ${RED}ERROR: could not extract <world name=...> from ${GZ_WORLD};${NC}"
+            echo -e "  ${RED}       contact-sensor gate cannot run.${NC}"
+            check "Contact-sensor: world-name extraction failed (gate could not start)" 1
         elif ! command -v gz >/dev/null 2>&1; then
-            echo -e "  ${YELLOW}WARN: 'gz' CLI not in PATH — contact-sensor gate disabled.${NC}"
+            # Same reasoning — the Gazebo runner shouldn't be invoked on a
+            # host without `gz`; treat its absence as an infrastructure
+            # failure rather than a silent skip.
+            echo -e "  ${RED}ERROR: 'gz' CLI not in PATH — contact-sensor gate cannot run.${NC}"
+            check "Contact-sensor: 'gz' CLI missing (gate could not start)" 1
         else
             CONTACT_CAPTURE_LOG="${SCENARIO_LOG_DIR}/gz_contacts.log"
             echo -e "  ${CYAN}Starting contact-sensor capture on /world/${WORLD_NAME}/contacts${NC}"
@@ -807,11 +832,24 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
     CONTACT_DRONE_PATTERN=$(json_get "$SCENARIO_FILE" \
         "flight_quality_gates.contact_drone_pattern" "x500_companion")
 
-    if python3 "${SCRIPT_DIR}/lib_check_contacts.py" "$CONTACT_CAPTURE_LOG" \
+    # Capture Python helper exit code separately so we can distinguish
+    # exit 1 (drone-vs-obstacle contact) from exit 2 (capture file missing
+    # / unreadable — an infrastructure failure, not a flight-quality
+    # failure).  Without this, both report the same misleading "contact
+    # detected" message.
+    CONTACT_HELPER_OUT="${SCENARIO_LOG_DIR}/contact_helper.out"
+    python3 "${SCRIPT_DIR}/lib_check_contacts.py" "$CONTACT_CAPTURE_LOG" \
             --drone-pattern "$CONTACT_DRONE_PATTERN" \
             --allowlist "$CONTACT_ALLOWLIST" \
-            | tee -a "$COMBINED_LOG"; then
+            > "$CONTACT_HELPER_OUT" 2>&1
+    CONTACT_HELPER_RC=$?
+    tee -a "$COMBINED_LOG" < "$CONTACT_HELPER_OUT"
+    if [[ $CONTACT_HELPER_RC -eq 0 ]]; then
         check "Contact-sensor: no drone-vs-obstacle contacts" 0
+    elif [[ $CONTACT_HELPER_RC -eq 2 ]]; then
+        check "Contact-sensor: capture file missing (infrastructure failure)" 1
+        echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC}   ${SCENARIO_LOG_DIR}/gz_contacts.stderr"
     else
         check "Contact-sensor: drone-vs-obstacle contact(s) detected" 1
         if [[ "$VERBOSE" == "true" ]]; then

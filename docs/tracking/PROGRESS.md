@@ -3617,7 +3617,7 @@ Two-part fix (per #714):
 
 **What:**
 
-Adds a runtime flight-quality gate to `tests/run_scenario_gazebo.sh` that captures Gazebo's `/world/<name>/contacts` topic during the scenario run and asserts no drone-vs-obstacle physical contact occurred.  Closes the **observability gap** surfaced by [#727 evidence](https://github.com/nmohamaya/companion_software_stack/issues/727#issuecomment-4432892812): scenarios 25, 26, and sometimes 18 were reporting PASS while the drone visibly collided with cylinders / objects in the Gazebo GUI.  Pass criteria today validate log content and FSM transitions, not physical flight quality — this gate is the canary that tells us whether Layer 1 (PR #741 ARM-gate debounce) and Layers 2/4 (forthcoming) actually fixed the cold-start failure mode.
+Adds a runtime flight-quality gate to `tests/run_scenario_gazebo.sh` that captures Gazebo's `/world/<name>/contacts` topic during the scenario run and asserts no drone-vs-obstacle physical contact occurred.  Closes the **observability gap** surfaced by [#727 evidence](https://github.com/nmohamaya/companion_software_stack/issues/727#issuecomment-4432892812): scenario 26 (Tier 2 / Gazebo) and sometimes 18 were reporting PASS while the drone visibly collided with cylinders / objects in the Gazebo GUI.  (Scenario 25 also exhibited false-PASS in #727 evidence, but it is Tier 1 / `requires_gazebo: false` and runs under `run_scenario.sh` — not this runner — so this gate does not cover it; a separate Tier-1 gate is a follow-up.)  Pass criteria today validate log content and FSM transitions, not physical flight quality — this gate is the canary that tells us whether Layer 1 (PR #741 ARM-gate debounce) and Layers 2/4 (forthcoming) actually fixed the cold-start failure mode.
 
 **How it works:**
 
@@ -3627,8 +3627,12 @@ Adds a runtime flight-quality gate to `tests/run_scenario_gazebo.sh` that captur
 
 **What this catches (per #727 evidence):**
 
-- Scenarios 25 / 26 false-PASS — drone hitting objects during NAVIGATE / RTL phases.
-- Future regressions where path-planning produces collisions the existing log-pattern checks miss.
+- Scenario 26 (and any other Tier-2 Gazebo scenario) false-PASS — drone hitting objects during NAVIGATE / RTL phases.
+- Future regressions where path-planning produces collisions the existing log-pattern checks miss, on any Gazebo-tier scenario.
+
+**What this does NOT catch (scope of this gate):**
+
+- Tier-1 / Cosys-AirSim scenarios (e.g. 25) — they run under `tests/run_scenario.sh`, not `tests/run_scenario_gazebo.sh`, so the gate's `gz topic -e` capture is never started.  An equivalent Tier-1 gate is a separate follow-up.
 
 **What this does NOT catch (out of scope for MVP):**
 
@@ -3659,7 +3663,7 @@ All three keys are optional; sensible defaults match the cold-start hardening ep
 
 Layer 3 of the cold-start hardening epic.  Without this gate, we can't tell whether Layer 1's debounce (PR #741) actually fixed the cold-start failures or just got lucky on physics seed — the existing pass criteria mask physical flight problems.  After Wave 1 (PRs #741, #743, #744) lands on the integration branch, a cold-start sweep with this gate enabled becomes the authoritative measurement of whether the fix worked.
 
-**Empirical validation pending:** cold-start sweep on integration branch.  Per #727 evidence, success criterion = <5% rotor-asymmetry rate AND zero drone-vs-obstacle contact events across 20 cold-starts of scenarios 02, 17, 18, 25, 26.
+**Empirical validation pending:** cold-start sweep on integration branch.  Per #727 evidence, success criterion = <5% rotor-asymmetry rate AND zero drone-vs-obstacle contact events across 20 cold-starts of Tier-2 Gazebo scenarios 02, 17, 18, 26.  (Scenario 25 is Tier 1 and runs separately — covered by the Tier-1 follow-up gate, not this PR.)
 
 ---
 

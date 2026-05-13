@@ -16,6 +16,17 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-13 (PR #744 review-fix follow-ups)
+
+#### `tests/lib_check_contacts.py` — no pytest coverage
+
+- **P2** — The Python state machine that parses `gz topic` text format and classifies drone-vs-obstacle pairs is currently only verified by its in-the-loop behaviour during a scenario run.  A regression in `parse_contacts()` (e.g. the `---` delimiter reset added in PR #744 review fixes, or the `is_allowlisted` substring rule) could silently produce phantom or missing events without any unit-test signal.
+  - **Why:** the helper is a small but load-bearing piece of cold-start observability — a quietly-broken parser would re-introduce the false-PASS class this gate exists to prevent.
+  - **Suggested fix:** add `tests/test_lib_check_contacts.py` with pytest cases for: (a) synthetic clean log → exit 0; (b) synthetic single-contact log → exit 1 with the expected pair; (c) allowlist suppression; (d) truncated `contact { ... }` block followed by `---` → no phantom event; (e) missing file → exit 2.  Wire into `tests/run_tests.sh` if pytest is on the CI path.
+  - **When to do it:** next time the parser is touched, or as part of the Tier-1 follow-up gate that will share the same state machine.
+
+---
+
 ### 2026-05-11 (#712 cleanup — residual concerns observed during scenario 18 testing)
 
 Items observed in the field during the #710 → #712 work but **outside the cleanup scope**.  Both pre-date commit 3 (they were observable across multiple commits today on the integration branch) and reproduce on a clean tree.
