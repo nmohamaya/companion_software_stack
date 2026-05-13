@@ -808,15 +808,44 @@ done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_must_not_contain")
 if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
     echo ""
     echo "Flight-quality gates:"
-    # Stop the capture so the file is fully flushed before we parse it.
-    # `gz topic -e` doesn't always exit on SIGTERM cleanly, so we use
-    # SIGKILL after a grace period.  The cleanup_scenario trap will
-    # also try to kill it; that's idempotent.
-    kill -SIGTERM "$CONTACT_CAPTURE_PID" 2>/dev/null || true
-    sleep 1
-    kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    # PR #744 Copilot review: detect early `gz topic` exit before signalling.
+    # `gz topic -e` is designed to run forever (streaming events).  If it
+    # exited before the scenario end, the capture log is unreliable — either
+    # subscription failed (bad world name, gz transport issue) or the
+    # process was killed by something other than our cleanup.  Distinguish
+    # this from "no contacts because the scenario was clean" — without the
+    # check, an empty log silently maps to PASS.
+    if kill -0 "$CONTACT_CAPTURE_PID" 2>/dev/null; then
+        CONTACT_CAPTURE_ALIVE=true
+        # Process was still running — normal stop via SIGTERM then SIGKILL.
+        # `gz topic -e` doesn't always exit on SIGTERM cleanly, so follow up
+        # with SIGKILL after a grace period.  The cleanup_scenario trap will
+        # also try to kill it; that's idempotent (the `kill -0` above in
+        # the trap protects against PID-reuse).
+        kill -SIGTERM "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    else
+        CONTACT_CAPTURE_ALIVE=false
+        echo -e "  ${YELLOW}WARN: contact-sensor capture exited early — gz_contacts.stderr:${NC}"
+        if [[ -s "${SCENARIO_LOG_DIR}/gz_contacts.stderr" ]]; then
+            sed 's/^/    /' "${SCENARIO_LOG_DIR}/gz_contacts.stderr" | head -10
+        else
+            echo -e "    ${YELLOW}(stderr empty — gz topic may have exited silently)${NC}"
+        fi
+    fi
     wait "$CONTACT_CAPTURE_PID" 2>/dev/null || true
     CONTACT_CAPTURE_PID=""
+
+    # If the capture process exited early AND the log is empty, the gate
+    # cannot make a flight-quality assessment — emit a distinct
+    # infrastructure-failure check rather than letting the helper's
+    # "empty log → PASS" path silently mask the failure.
+    if [[ "$CONTACT_CAPTURE_ALIVE" == "false" && ! -s "$CONTACT_CAPTURE_LOG" ]]; then
+        check "Contact-sensor: capture exited early with empty log (infrastructure failure)" 1
+        echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC}   ${SCENARIO_LOG_DIR}/gz_contacts.stderr"
+    else
 
     # Build the allowlist.  Default: `ground_plane` (covers Gazebo's
     # default ground at takeoff / landing).  Scenario can extend via
@@ -856,6 +885,7 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
             echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
         fi
     fi
+    fi  # end "CONTACT_CAPTURE_ALIVE && log non-empty" branch
 fi
 
 # Check processes alive

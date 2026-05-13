@@ -5,18 +5,21 @@
 """
 tests/lib_check_contacts.py — Scenario flight-quality gate: contact-sensor
 
-Issue #740 (epic #727 Layer 3) — observability layer that detects when a
-Gazebo scenario run produces drone-vs-obstacle physical contact, even when
-the runner's existing log-pattern checks would have reported PASS.
+Epic #740 Layer 3 (cold-start hardening); related root-cause investigation
+in #727.  Observability layer that detects when a Gazebo scenario run
+produces drone-vs-obstacle physical contact, even when the runner's
+existing log-pattern checks would have reported PASS.
 
 Background:
-    Scenarios 25, 26, and sometimes 18 in the existing `tests/run_scenario_
+    Scenario 26 (and sometimes 18) in the existing `tests/run_scenario_
     gazebo.sh` suite report PASS while the drone is visibly hitting objects
-    in the Gazebo GUI (see #727 reproduction matrix).  Pass criteria today
-    validate log content + FSM transitions, not physical flight quality.
-    This gate closes that observability gap by parsing live `gz topic -e
-    -t /world/<name>/contacts` capture and asserting no drone-vs-obstacle
-    contact occurred during the run.
+    in the Gazebo GUI (see #727 reproduction matrix; scenario 25 also
+    exhibits the symptom but is Tier-1 / AirSim and runs under
+    `tests/run_scenario.sh` — out of scope for this Gazebo-only gate).
+    Pass criteria today validate log content + FSM transitions, not
+    physical flight quality.  This gate closes that observability gap by
+    parsing live `gz topic -e -t /world/<name>/contacts` capture and
+    asserting no drone-vs-obstacle contact occurred during the run.
 
 What is detected:
     Any contact between the drone model (default: `x500_companion`) and a
