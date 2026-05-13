@@ -1756,6 +1756,136 @@ When writing or reviewing any C++ code change, answer these four questions:
 
 > **Design rationale:** These rules exist because silent memory corruption in a flight-control thread produces undefined behaviour with potentially catastrophic outcome. The safety overhead is near-zero — `unique_ptr` has the same runtime cost as a raw pointer; `Result<T,E>` is a small stack-allocated value type (backed by `std::variant<T,E>` — size depends on `T`/`E` but always stack-resident with no separate heap allocation). The benefit is a compiler-enforced ownership graph and exhaustive error-path coverage.
 
+### 5.4 FSM transitions emitting physical FC commands must be debounced
+
+Adopted post-Issue #740 (epic #727). Empirical evidence: on Gazebo cold-start,
+PX4's `health_all_ok` (surfaced as `fc_state.armable`) flickers true for one
+MAVLink update while EKF2 attitude is still settling. Arming on that one tick
+produced asymmetric mixer commands → asymmetric rotor spin-up → drone tipping
+on the ground in 3 of 6 live cold-starts observed today.
+
+**The rule:** any planner FSM transition that emits a physical FC command
+(`ARM`, `TAKEOFF`, `LAND`, `RTL`) MUST require multi-tick or multi-second
+confirmation of its gating `fc_state.*` field. Single-tick triggers are
+forbidden.
+
+**The pattern:**
+
+```cpp
+// In StateTickConfig:
+float preflight_armable_stable_s{3.0f};  // configurable via drone::Config
+
+// Member state:
+uint64_t armable_first_seen_ns_ = 0;
+
+// In tick_preflight:
+const uint64_t now_ns    = drone::util::get_clock().now_ns();  // mockable!
+const uint64_t window_ns = static_cast<uint64_t>(
+    std::max(0.0, static_cast<double>(config_.preflight_armable_stable_s) * 1e9));
+
+if (!fc_state.armable) {
+    armable_first_seen_ns_ = 0;  // reset on any drop to false
+    return;
+}
+if (armable_first_seen_ns_ == 0 || now_ns < armable_first_seen_ns_) {
+    armable_first_seen_ns_ = now_ns;  // start the window
+    if (window_ns > 0) return;        // wait for it to elapse
+    // window == 0 → fall through (legacy single-tick behaviour)
+} else if ((now_ns - armable_first_seen_ns_) < window_ns) {
+    return;  // still within window
+}
+// armable has been stable for the full window — safe to ARM
+send_fc(FCCommandType::ARM, 0.0f);
+```
+
+**Required properties:**
+
+1. **Reset on drop** — any `fc_state.<field> == false` tick must zero the tracker so a brief flicker can't "resume" from where it left off.
+2. **Configurable** — expose the window via `drone::Config` so it can be tuned per scenario (`0.0` disables the gate for headless dev / unit tests).
+3. **Underflow-guarded** — clock-backward (mock clock reset, host clock skew) must NOT wrap the unsigned subtraction. Treat as fresh first-observation.
+4. **Mockable** — use `drone::util::get_clock()`, not `std::chrono::steady_clock::now()`. Unit tests use `ScopedMockClock` to drive the window in microseconds.
+5. **Tested at production default** — at least one test must exercise the gate at the same window value the production config uses (e.g. 3.0 s). Tests that disable the gate are fine for orthogonal coverage, but cannot be the only coverage.
+
+See `process4_mission_planner/include/planner/mission_state_tick.h::tick_preflight` for the reference implementation and `tests/test_mission_state_tick.cpp::MissionStateTickDebounceTest` for the test pattern.
+
+### 5.5 Cold-start data hygiene — first observations are suspect
+
+Adopted post-Issue #740 (epic #727). Three distinct mechanisms produce the
+same class of bug, and the same rule covers all three:
+
+1. **Zenoh last-value cache** (#720/#722) — a subscriber re-connecting to a topic receives the last-published message from a *previous* publisher session before fresh data arrives. The historic message has a real timestamp and looks valid.
+2. **EKF2 cold-start flicker** (#727/#740) — PX4 reports `health_all_ok=true` for one tick while estimates are still wandering. The boolean is a true momentary observation but a misleading basis for action.
+3. **VIO `INITIALIZING` health** (#727 Layer 2) — backends return a default-zero `Pose{}` with `health=INITIALIZING` and a fresh `timestamp_ns`. The data is fresh-timestamped but positionally meaningless.
+
+**The rule:** any data received from external systems (FC state, VIO pose, sensor messages, IPC subscribers) within the first few seconds of process start MUST be treated as suspect. Choose one of:
+
+1. **Multi-observation confirmation** — require N consecutive observations agreeing before acting (the §5.4 debounce pattern).
+2. **Age guard** — require the message timestamp to be greater than `process_birth_ns + slack` (the #721 per-site fix; #722 wrapper pattern).
+3. **Health-state gate** — only act on messages whose accompanying health field is in a known-good state (e.g. `VIOHealth::NOMINAL`, not `INITIALIZING`).
+
+The choice depends on the upstream signal:
+
+| Upstream signal | Preferred guard |
+|-----------------|-----------------|
+| Boolean / discrete field that can flicker (`armable`, `connected`) | Multi-observation debounce (§5.4) |
+| Continuous data with a publisher timestamp (`Pose`, `DetectedObjectList`) | Age guard at the subscriber wrapper level (#722) |
+| Data accompanied by a health enum (`VIOOutput.health`, `DetectedObject.confidence`) | Health-state gate at publish time (#727 Layer 2) |
+
+**For unit tests:** new code in this category must be exercised with `ScopedMockClock` and an explicit pre-birth message scenario. The wrapper itself enforces this for any IPC type that has a `timestamp_ns` field.
+
+### 5.6 Asymmetric pre-conditions for asymmetric-cost actions
+
+**The rule:** irreversible or destructive actions (ARM motors, TAKEOFF, LAND, geofence-breach RTL, fault-induced LOITER promotion to RTL) MUST have stricter pre-conditions than reversible ones (hover-in-place, replan, log warning).
+
+**Cost-of-error table:**
+
+| Action | Cost of premature trigger | Cost of delayed trigger |
+|--------|---------------------------|--------------------------|
+| ARM motors | Ground damage / lost vehicle | Slow mission start |
+| TAKEOFF | Crash / collision | Slow mission start |
+| LAND | Off-target landing / impact | Mission abort |
+| RTL | Geofence breach during recovery | Mission abort |
+| LOITER | A pause that recovers when gate clears | Brief continued exposure |
+| Replan | Slightly worse path | Slightly stale path |
+
+**Practical guidance:** when in doubt, escalate to LOITER instead of acting. A LOITER that turns out to be unnecessary is much cheaper than an ARM/TAKEOFF that turns out to be premature. If a fault condition is ambiguous (`X possibly true OR sensor flaky`), the correct response is LOITER + log, not RTL + LAND.
+
+### 5.7 Mockable time in unit-testable code
+
+**The rule:** all time queries in `process[1-7]_*` code that is reachable from unit tests SHOULD go through `drone::util::get_clock().now_ns()`, not `std::chrono::steady_clock::now()` directly. Existing direct-`steady_clock` usage is grandfathered but should migrate to `get_clock()` when the surrounding code is touched.
+
+**Why:** untestable time = untestable safety logic. A debounce window, fault-staleness check, replan interval, or arm-retry timer that can only be exercised by `std::this_thread::sleep_for(window_s)` in tests becomes either flaky-slow CI or simply un-tested. `ScopedMockClock` (in `common/util/include/util/mock_clock.h`) makes the same logic deterministic in microseconds.
+
+**Migration pattern:**
+
+```cpp
+// Before (untestable):
+auto now = std::chrono::steady_clock::now();
+if (std::chrono::duration_cast<std::chrono::seconds>(now - last_event_).count() >= window) {
+    // act
+}
+
+// After (testable):
+const uint64_t now_ns    = drone::util::get_clock().now_ns();
+const uint64_t window_ns = static_cast<uint64_t>(window) * 1'000'000'000ULL;
+if (now_ns >= last_event_ns_ && (now_ns - last_event_ns_) >= window_ns) {
+    // act — and the test can drive the window with mock_clock.advance_s(window)
+}
+```
+
+**Fixture pattern** (critical — see Improvement #5):
+
+```cpp
+class MyFixture : public ::testing::Test {
+protected:
+    // ScopedMockClock MUST be declared BEFORE the unit-under-test, because
+    // the UUT's constructor may query drone::util::get_clock() and capture
+    // the production clock if the override isn't installed yet.
+    drone::util::ScopedMockClock mock_clock_guard;
+    MyClassUnderTest             uut{config};  // installs after mock_clock_guard
+};
+```
+
 ---
 
 ## 6. Concept Map — Where Patterns Intersect

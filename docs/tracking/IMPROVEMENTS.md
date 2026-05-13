@@ -44,6 +44,59 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ---
 
+### 2026-05-13 (PR #741 review-fix follow-ups — backlog items deferred from the review)
+
+These are valid suggestions surfaced by the [9-agent + Copilot review of PR #741](https://github.com/nmohamaya/companion_software_stack/pull/741#issuecomment-4440678222) that we chose to defer to backlog rather than fix in the immediate follow-up PR #743.  Each has a defined "when to do it" trigger so it doesn't get forgotten.
+
+**Audit trail note:** these are review-comment-derived but routed to IMPROVEMENTS.md rather than DESIGN_RATIONALE.md because each is a **valid-but-deferred backlog item** ("yes will do later") rather than a **considered-and-declined design decision** ("we evaluated both paths and chose this one").  See CLAUDE.md §"Where deferred items are logged" (clarified in PR #743 to distinguish these two flavours).
+
+#### Sibling `cfg_key` constants for `preflight_arm_retry_s` / `preflight_wait_log_s` absent
+
+- **P3** — `architecture` — PR #741's review (api-contract agent) noted that `process4_mission_planner/include/planner/mission_state_tick.h::StateTickConfig` exposes three preflight tunables (`preflight_arm_retry_s`, `preflight_wait_log_s`, `preflight_armable_stable_s`) but only the third has a corresponding `cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S` constant (added by PR #741).  The other two are read via hardcoded string literals or implicit defaults.  This is pre-existing asymmetry from PR #717 — not introduced by #741 — but is now visible.
+  - **Suggested fix:** add `PREFLIGHT_ARM_RETRY_S` and `PREFLIGHT_WAIT_LOG_S` constants to `common/util/include/util/config_keys.h` under `namespace mission_planner`, and wire them into `main.cpp` where the values are read.
+  - **When to do it:** bundle with #734's "tracking-doc cleanup + IMPROVEMENTS↔DR-NNN re-homing" or any other config-hygiene pass.  Not worth a standalone PR.
+  - **Affected:** documentation consistency only — production behaviour is unchanged because `cfg.get<>` already handles missing keys via fallback.
+
+#### `preflight_armable_stable_s` not propagated to `config/hardware*.json`
+
+- **P3** — `docs / config` — PR #741's review (security agent) noted that the new `preflight_armable_stable_s = 3.0` JSON entry exists only in `config/default.json`, not in `config/hardware.json`, `config/hardware_orin.json`, or `config/hardware_edge.json`.  Operators inspecting a hardware-specific config can't see the key or tune it without knowing to look in `default.json`.
+  - **Suggested fix:** add the key to all three hardware configs.  But: real-hardware tuning values (Orin vs edge vs Jetson Nano) may differ from Gazebo's 3.0s and **aren't empirically known yet**.  Propagating now risks locking in wrong values.
+  - **When to do it:** when real-hardware testing produces empirical evidence about EKF2 settling time on each platform.  Until then, the `cfg.get<float>(..., 3.0f)` fallback is safe.
+  - **Affected:** operator visibility only — no functional impact.
+
+#### Repeated positional `StateTickConfig` constructor in test fixtures
+
+- **P3** — `test-infra` — PR #741's review (code-quality agent) noted that `StateTickConfig c{10.0f, 1.5f, 0.5f, 5}` (positional brace-init for the first 4 fields) is repeated in 3 sites in `tests/test_mission_state_tick.cpp`: `make_default_test_config()`, the lambda init for `MissionStateTickDebounceTest`, and the free `ZeroWindowDisablesDebounce` test.  Minor DRY violation — if the `StateTickConfig` field ordering ever changes, all three sites need updating but only the first is obvious.
+  - **Suggested fix:** extract a single `make_state_tick_config(float armable_stable_s)` helper that all three sites use.  Or, more ambitiously, a broader test-helper extraction across the planner test suite (other test files repeat similar fixture patterns).
+  - **When to do it:** bundle with any other test-infra cleanup pass, or when a 4th similar construction site appears.
+  - **Affected:** test maintainability only.
+
+---
+
+### 2026-05-13 (PR #741 — proactive safety / test-discipline findings during #740-A implementation)
+
+Two items noticed while implementing the ARM-gate debounce (PR #741, epic #740 / #727 Layer 1). Both are test-discipline / drift-hygiene, not flight-safety, so they're logged here rather than escalated. Adding them surfaces patterns worth catching during future review.
+
+#### Test-fixture ordering with `ScopedMockClock`
+
+- **P3** — `test-infra` — `ScopedMockClock` MUST be declared as a fixture member BEFORE the unit-under-test, because the UUT's constructor may query `drone::util::get_clock()` at construction time and capture the production clock if the override isn't installed yet. Member-init order is declaration order; violating this silently breaks mock-driven tests in a way that's hard to debug (mock advances do nothing, tests look like they should pass but the UUT sees real wall-clock time).
+  - **Suggested fix:** document the pattern in `docs/guides/CPP_PATTERNS_GUIDE.md` §5.7 (done in this PR), and check during review whenever a new `ScopedMockClock`-using test class is added.
+  - **Affected:** every test fixture that injects `ScopedMockClock`. Currently rare but will become common as we migrate more time-dependent code to `drone::util::get_clock()` (see next item).
+
+#### `std::chrono::steady_clock::now()` direct usage in process[1-7]_* code
+
+- **P3** — `architecture` — 35+ direct uses of `std::chrono::steady_clock::now()` remain in `process4_mission_planner/` alone (other processes likely similar). These are grandfathered under the new §5.7 rule but each one blocks unit-test mockability of the surrounding logic.
+  - **Suggested next step:** opportunistic migration when touching the surrounding code (the rule already says this). One-shot bulk migration as a separate refactor PR is also viable but would touch many files; review-pass-1 fault-recovery would likely raise concerns about subtle behaviour change so the touched-when-edited approach is safer.
+  - **Affected:** `mission_state_tick.h` (~10 sites), `fault_manager.cpp` (~8), `geofence.cpp`, `gcs_command_handler.h`, etc.
+
+#### `tests/TESTS.md` total drift
+
+- **P3** — `docs` — `tests/TESTS.md` top table claims 2074 base tests on `feature/perception-v2-integration` HEAD. My `ctest -N` on `feature/cold-start-hardening` HEAD (= main = `629bdcc`) shows 2058 base. That's a 16-test gap between docs and reality, pre-existing the PR-A changes. Either tests aren't being compiled in a standard build, or TESTS.md is stale.
+  - **Suggested next step:** reconciliation pass in a separate PR — run `ctest -N` against a fresh `main` build, walk the per-suite counts, and update TESTS.md to match. Bonus: add a CI gate that diffs TESTS.md against `ctest -N` output.
+  - **Affected:** documentation accuracy only, no functional impact.
+
+---
+
 ### 2026-05-11 (#712 cleanup — residual concerns observed during scenario 18 testing)
 
 Items observed in the field during the #710 → #712 work but **outside the cleanup scope**.  Both pre-date commit 3 (they were observable across multiple commits today on the integration branch) and reproduce on a clean tree.
