@@ -62,6 +62,9 @@ add_drone_test(test_fault_manager   test_fault_manager.cpp)
 # ── Geofence tests ──────────────────────────────────────────
 add_drone_test(test_geofence        test_geofence.cpp)
 
+# ── Per-class config utility tests (Epic #519) ─────────────
+add_drone_test(test_per_class_config test_per_class_config.cpp)
+
 # ── 3D Obstacle Avoider tests ───────────────────────────────
 add_drone_test(test_obstacle_avoider_3d test_obstacle_avoider_3d.cpp)
 
@@ -99,6 +102,34 @@ add_drone_test(test_result          test_result.cpp)
 # ── LatencyTracker tests ─────────────────────────────────────
 add_drone_test(test_latency_tracker test_latency_tracker.cpp)
 
+# ── LatencyProfiler tests (Issue #571 — Epic #523) ──────────
+# Per-stage latency profiler used by the benchmark harness. Header-only,
+# so no additional sources; lives in common/util alongside latency_tracker.
+add_drone_test(test_latency_profiler test_latency_profiler.cpp)
+
+# ── LatencyProfiler wiring smoke test (Issue #571 wiring PR) ─────
+# Simulates the P2/P4 profiler-wiring pattern end-to-end: concurrent
+# workers record via ScopedLatency, dump to JSON on disk, parse back.
+# Guards the wiring contract without needing a full scenario run.
+add_drone_test(test_latency_profiler_dump test_latency_profiler_dump.cpp)
+
+# ── GT emitter tests (Issue #594 — Epic #523, PR 1 Cosys backend) ─
+# Shared-layer tests only (GtClassMap + to_json_line). The Cosys backend
+# itself needs a live AirSim server and is covered by scenario tests #29/#30.
+# When built with HAVE_COSYS_AIRSIM, the Cosys .cpp is linked in and the
+# factory resolves at link time; otherwise the backend .cpp is empty.
+add_drone_test(test_gt_emitter
+    test_gt_emitter.cpp
+    benchmark/gt_emitter.cpp
+    benchmark/cosys_gt_emitter.cpp
+)
+target_include_directories(test_gt_emitter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_gt_emitter PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
 
@@ -119,6 +150,42 @@ add_drone_test(test_hal             test_hal.cpp)
 
 # ── HAL Camera Lifetime tests (Issue #452) ───────────────────
 add_drone_test(test_hal_camera_lifetime test_hal_camera_lifetime.cpp)
+
+# ── HAL Perception v2 interface tests (Epic #515) ────────────
+add_drone_test(test_inference_backend  test_inference_backend.cpp)
+add_drone_test(test_volumetric_map     test_volumetric_map.cpp)
+add_drone_test(test_event_camera       test_event_camera.cpp)
+add_drone_test(test_semantic_projector test_semantic_projector.cpp)
+
+# ── E5 SAM + Detector Integration tests (Epic #520) ─────────
+add_drone_test(test_sam_backend          test_sam_backend.cpp)
+add_drone_test(test_mask_class_assigner  test_mask_class_assigner.cpp)
+# PR #633 P1 review: FastSAM ONNX backend tests — exercise actual
+# config wiring + clamping + path safety + use_cuda intent flag.
+add_drone_test(test_fastsam_backend      test_fastsam_backend.cpp)
+# PR #651 P1 review: comms-heartbeat decision-rule regression tests.
+# Pins the heartbeat timing + staleness contract so the SimpleFlight
+# 60 ms api_goal_timeout fix can't regress silently.
+add_drone_test(test_comms_heartbeat      test_comms_heartbeat.cpp)
+if(ENABLE_PROCESS_PERCEPTION)
+add_drone_test(test_yolo_seg_backend     test_yolo_seg_backend.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/yolo_seg_inference_backend.cpp
+)
+endif()
+add_drone_test(test_detector_switcher    test_detector_switcher.cpp)
+add_drone_test(test_mask_depth_projector test_mask_depth_projector.cpp)
+# Issue #638 Phase 1 — voxel clustering
+add_drone_test(test_voxel_clusterer      test_voxel_clusterer.cpp)
+# Issue #638 Phase 2 — cross-frame voxel instance tracker
+add_drone_test(test_voxel_instance_tracker test_voxel_instance_tracker.cpp)
+# Issue #638 Phase 3 — OccupancyGrid3D instance-promotion gate
+add_drone_test(test_grid_instance_promotion test_grid_instance_promotion.cpp)
+# Issue #698 Fix #1 — RadarFovGate cross-veto helper (Phase 1)
+add_drone_test(test_radar_fov_gate         test_radar_fov_gate.cpp)
+# Issue #698 Fix #1 — pure decide_promotion() function (Phase 2)
+add_drone_test(test_cross_veto_decision    test_cross_veto_decision.cpp)
+# Issue #698 Fix #1 — OccupancyGrid3D + cross-veto integration (Phase 2)
+add_drone_test(test_occupancy_grid_cross_veto test_occupancy_grid_cross_veto.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
@@ -285,6 +352,9 @@ add_drone_test(test_static_obstacle_layer test_static_obstacle_layer.cpp)
 # ── IPC Validation tests (Issues #179, #181, #185) ─────────
 add_drone_test(test_ipc_validation test_ipc_validation.cpp)
 
+# ── Semantic Voxels IPC tests (Epic #520, Issue #608 PR 1) ─
+add_drone_test(test_semantic_voxels test_semantic_voxels.cpp)
+
 # ── GCS Command Handler tests (Issue #154) ─────────────────
 add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
 
@@ -301,6 +371,9 @@ endif()
 
 # ── D* Lite Path Planner tests (Issue #158) ────────────────
 add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
+
+# ── PATH A Diagnostic Trace tests (Issue #612, PR #614) ──────
+add_drone_test(test_path_a_trace test_path_a_trace.cpp)
 
 # ── Dynamic Obstacle Prediction tests (Issue #256) ───────
 add_drone_test(test_obstacle_prediction test_obstacle_prediction.cpp)
@@ -410,4 +483,62 @@ add_drone_test(test_perception_drain test_perception_drain.cpp)
 add_drone_test(test_model_presets    test_model_presets.cpp)
 target_compile_definitions(test_model_presets PRIVATE
     PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
+# ── Perception metrics framework tests (Issue #570 — Epic #523) ─
+# Pure C++, no ML deps. Measures TP/FP/FN, per-class AP, MOTA/MOTP,
+# confusion matrix. Used by the benchmark harness for regression gating.
+add_drone_test(test_perception_metrics
+    test_perception_metrics.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_perception_metrics PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# ── Baseline capture tests (Issue #573 — Epic #523) ─────────────
+# Validates BaselineCapture metric accumulation, per-class breakdown,
+# JSON round-trip, and latency passthrough. Links perception_metrics
+# for TP/FP/FN computation (same lib the capture class delegates to).
+add_drone_test(test_baseline_capture
+    test_baseline_capture.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_baseline_capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_baseline_capture PRIVATE
+    nlohmann_json::nlohmann_json
+)
+
+# ── Baseline comparator tests (Issue #572 — Epic #523) ──────────
+# Validates regression detection against configurable thresholds:
+# recall, precision, mAP, MOTA, latency p95.
+add_drone_test(test_baseline_comparator
+    test_baseline_comparator.cpp
+    benchmark/baseline_comparator.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_baseline_comparator PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_baseline_comparator PRIVATE
+    nlohmann_json::nlohmann_json
+)
+
+# ── Baseline comparison CLI tool (Issue #572) ────────────────────
+# Standalone executable: compare current run against stored baseline.
+add_executable(compare_to_baseline
+    benchmark/compare_to_baseline_main.cpp
+    benchmark/baseline_comparator.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(compare_to_baseline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(compare_to_baseline PRIVATE
+    nlohmann_json::nlohmann_json
 )

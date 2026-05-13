@@ -1,5 +1,14 @@
 {
     "_comment": "Scenario 29: Cosys-AirSim Perception — Tier 3 photorealistic simulation with YOLO + Depth Anything V2 + native radar emulation.",
+    "gt_class_map": {
+        "_comment": "Ground-truth class map for #573 baseline capture. Mirrors scenario 30 for now — #29 currently runs against the default Blocks world without a populated scene; expand when this scenario grows its own scene file. See docs/guides/CONFIG_GUIDE.md → 'gt_class_map' and issue #594.",
+        "person_*":  { "class_id": 0,   "class_name": "person" },
+        "chair_*":   { "class_id": 56,  "class_name": "chair" },
+        "couch_*":   { "class_id": 57,  "class_name": "couch" },
+        "bush_*":    { "class_id": 58,  "class_name": "potted plant" },
+        "pillar_*":  { "class_id": 100, "class_name": "obstacle" },
+        "wall_*":    { "class_id": 100, "class_name": "obstacle" }
+    },
     "scenario": {
         "name": "cosys_perception",
         "description": "Full perception stack on Tier 3 photorealistic simulator. Flies a 5-waypoint mission with YOLO object detection (YOLOv8s dev / YOLOv8m cloud), Depth Anything V2 depth estimation, LiDAR-emulated radar fusion, and UKF tracking. Validates end-to-end ML perception pipeline with Cosys-AirSim camera, radar, IMU, and depth backends. No HD-map static obstacles — perception-driven avoidance only.",

@@ -48,16 +48,31 @@ import json, sys
 baseline_path = '$BASELINE'
 output_path = '$OUTPUT'
 
+LOWER_IS_BETTER = {'id_switches', 'fragmentations', 'total_fp', 'total_fn'}
+
 with open(baseline_path) as f:
     bl = json.load(f)
 
+# BaselineCapture format: { scenarios: { name: { detection: {...}, tracking: {...} } } }
+# Flatten into metrics dict for the PR comment renderer.
+flat = {}
+for scenario, data in bl.get('scenarios', {}).items():
+    for section in ('detection', 'tracking'):
+        for metric, value in data.get(section, {}).items():
+            key = f'{scenario}.{section}.{metric}'
+            flat[key] = {
+                'value': value,
+                'threshold': 0.05,
+                'direction': 'lower_is_better' if metric in LOWER_IS_BETTER else 'higher_is_better',
+            }
+
 results = {'metrics': {}, 'cost': 0, 'duration_min': 0, 'dry_run': True}
-for key, val in bl['metrics'].items():
+for key, val in flat.items():
     results['metrics'][key] = {
         'baseline': val['value'],
         'current': val['value'],
         'threshold': val['threshold'],
-        'passed': True
+        'passed': True,
     }
 
 with open(output_path, 'w') as f:
@@ -142,8 +157,22 @@ echo "--- Step 5: Comparing against baseline ---"
 python3 << COMPARE_EOF
 import json
 
+LOWER_IS_BETTER = {'id_switches', 'fragmentations', 'total_fp', 'total_fn'}
+
 with open('$BASELINE') as f:
     bl = json.load(f)
+
+# Flatten BaselineCapture scenarios into a flat metrics dict.
+flat = {}
+for scenario, data in bl.get('scenarios', {}).items():
+    for section in ('detection', 'tracking'):
+        for metric, value in data.get(section, {}).items():
+            key = f'{scenario}.{section}.{metric}'
+            flat[key] = {
+                'value': value,
+                'threshold': 0.05,
+                'direction': 'lower_is_better' if metric in LOWER_IS_BETTER else 'higher_is_better',
+            }
 
 # Load raw metrics (may be empty if scenarios failed)
 try:
@@ -161,12 +190,11 @@ except (FileNotFoundError, json.JSONDecodeError):
     pass
 
 results = {'metrics': {}, 'cost': 0.25, 'duration_min': 30}
-for key, val in bl['metrics'].items():
+for key, val in flat.items():
     baseline_val = val['value']
     threshold = val['threshold']
 
     if key not in raw:
-        # Missing metric = fail (don't silently fall back to baseline)
         results['metrics'][key] = {
             'baseline': baseline_val,
             'current': None,
@@ -178,11 +206,9 @@ for key, val in bl['metrics'].items():
 
     current = raw[key]
 
-    if val.get('direction') == 'lower_is_better':
-        # Current should not exceed baseline + threshold
+    if val['direction'] == 'lower_is_better':
         passed = current <= baseline_val + threshold
     else:
-        # Current should not fall below baseline - threshold
         passed = current >= baseline_val - threshold
 
     results['metrics'][key] = {

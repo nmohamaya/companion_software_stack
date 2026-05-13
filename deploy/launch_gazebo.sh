@@ -136,7 +136,17 @@ cleanup() {
     for pid in "${COMPANION_PIDS[@]}"; do
         kill -SIGINT "$pid" 2>/dev/null || true
     done
-    sleep 2
+    # Issue #708 — grace period for clean Zenoh peer-mode shutdown.
+    # Companion processes (comms, perception, slam_vio_nav) hold Zenoh
+    # peer sessions; cleanly closing them involves liveliness
+    # deregistration + peer notifications + SHM segment release, which
+    # under load can take 3-5 s.  A shorter grace SIGKILLs them mid-
+    # shutdown and leaves UDP sockets in TIME_WAIT, dangling
+    # /dev/shm/zenoh_shm_* segments, and (most visibly for us) a
+    # bound-to-:14540 comms socket that breaks the next run.  5 s is
+    # a comfortable upper bound for current load; the Cosys SIM-only
+    # passthrough mode also cleans up well within this window.
+    sleep 5
     for pid in "${COMPANION_PIDS[@]}"; do
         kill -SIGKILL "$pid" 2>/dev/null || true
     done

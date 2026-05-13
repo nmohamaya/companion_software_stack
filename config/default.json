@@ -67,6 +67,12 @@
                 "num_classes": 5
             }
         },
+        "detector_switcher": {
+            "_comment": "Altitude-based COCO/VisDrone dataset switching (Epic #520 E5.5)",
+            "altitude_threshold_m": 30.0,
+            "coco_model_path": "models/yolov8n-seg.onnx",
+            "visdrone_model_path": "models/yolov8n-visdrone-seg.onnx"
+        },
         "tracker": {
             "backend": "bytetrack",
             "max_age": 10,
@@ -74,7 +80,10 @@
             "max_association_cost": 100.0,
             "high_conf_threshold": 0.5,
             "low_conf_threshold": 0.1,
-            "max_iou_cost": 0.7
+            "max_iou_cost": 0.7,
+            "per_class": {
+                "motion_model": { "default": "constant_velocity" }
+            }
         },
         "depth_estimator": {
             "backend": "simulated",
@@ -103,6 +112,32 @@
             "false_alarm_rate": 0.02,
             "num_targets": 3
         },
+        "inference_backend": {
+            "backend": "simulated",
+            "model_path": "",
+            "input_size": 640
+        },
+        "volumetric_map": {
+            "backend": "simulated",
+            "resolution_m": 0.2
+        },
+        "event_camera": {
+            "backend": "simulated"
+        },
+        "semantic_projector": {
+            "backend": "cpu"
+        },
+        "path_a": {
+            "_comment": "PATH A — SAM + detector fusion (Epic #520). Disabled by default.",
+            "enabled": false,
+            "sam": {
+                "backend": "sam_simulated",
+                "model_path": "",
+                "input_size": 1024,
+                "num_masks": 3
+            },
+            "mask_class_iou_threshold": 0.5
+        },
         "fusion": {
             "rate_hz": 30,
             "camera_weight": 1.0,
@@ -115,7 +150,8 @@
                 "drone": 0.3,
                 "animal": 0.8,
                 "building": 10.0,
-                "tree": 6.0
+                "tree": 6.0,
+                "geometric_obstacle": 2.0
             },
             "bbox_height_noise_px": 2.5,
             "depth": {
@@ -191,7 +227,13 @@
             "max_static_cells": 0,
             "require_radar_for_promotion": false,
             "prediction_enabled": true,
-            "prediction_dt_s": 2.0
+            "prediction_dt_s": 2.0,
+            "voxel_input": {
+                "_comment": "PATH A voxel subscriber (Epic #520 / Issue #608). Disabled by default; scenario 33 enables it.",
+                "enabled": false,
+                "position_clamp_m": 1000.0,
+                "min_confidence": 0.3
+            }
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"
@@ -203,7 +245,15 @@
             "max_correction_mps": 3.0,
             "min_confidence": 0.3,
             "prediction_dt_s": 0.5,
-            "max_age_ms": 500
+            "max_age_ms": 500,
+            "per_class": {
+                "_comment": "Per-class overrides (Epic #519). Unspecified classes use 'default'.",
+                "influence_radius_m": { "default": 5.0, "person": 3.0, "vehicle_truck": 8.0, "building": 2.0, "tree": 2.0, "geometric_obstacle": 4.0 },
+                "repulsive_gain": { "default": 2.0, "vehicle_truck": 3.0 },
+                "min_distance_m": { "default": 2.0, "person": 3.0, "vehicle_truck": 4.0, "geometric_obstacle": 3.0 },
+                "prediction_dt_s": { "default": 0.5, "building": 0.0, "tree": 0.0, "drone": 1.0 },
+                "min_confidence": { "default": 0.3 }
+            }
         },
         "geofence": {
             "polygon": [
@@ -270,6 +320,14 @@
         "fc_link_lost_timeout_ms": 3000,
         "fc_link_rtl_timeout_ms": 15000,
         "loiter_escalation_timeout_s": 30
+    },
+
+    "benchmark": {
+        "_comment": "Benchmark harness (Epic #523 — perception-rewrite baseline). Profiler is opt-in; default off to keep production overhead at zero.",
+        "profiler": {
+            "enabled": false,
+            "output_dir": "drone_logs/benchmark"
+        }
     },
 
     "cosys_airsim": {

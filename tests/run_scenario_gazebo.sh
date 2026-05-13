@@ -409,6 +409,48 @@ if [[ -z "$EFFECTIVE_IPC" ]]; then
     EFFECTIVE_IPC=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('ipc_backend','shm'))" "$MERGED_CONFIG" 2>/dev/null || echo "shm")
 fi
 
+# ── Preflight: every model_path in the merged config must exist (Issue #625) ──
+# Implementation lives in lib_scenario_logging.sh — shared with the cosys runner.
+# See preflight_model_paths() for the path-traversal + json-parse hardening
+# (PR #628 review-security P3, review-code-quality P2).
+# Three exit-code branches (mirroring run_scenario_cosys.sh — previously this
+# runner only checked stdout-empty, so a parse error with rc=2 was silently
+# treated as success.  Aligned with cosys runner via #729 Copilot review):
+#   0 — clean: no missing files, no path-traversal
+#   1 — missing files OR path-traversal entries (stdout lists them)
+#   2 — JSON parse error (stderr already printed by preflight_model_paths)
+MISSING_MODELS=$(preflight_model_paths "$MERGED_CONFIG" "$PROJECT_DIR")
+PREFLIGHT_RC=$?
+if [[ $PREFLIGHT_RC -eq 2 ]]; then
+    echo -e "  ${RED}✗ Preflight failed: scenario config could not be parsed${NC}" >&2
+    SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    exit 1
+fi
+if [[ $PREFLIGHT_RC -ne 0 ]]; then
+    echo -e "  ${RED}✗ Preflight failed: missing model file(s) or path-traversal entry referenced by scenario config${NC}" >&2
+    echo "" >&2
+    echo "$MISSING_MODELS" | while IFS=$'\t' read -r key path; do
+        echo "    config key:  $key" >&2
+        echo "    expected at: $path" >&2
+        case "$path" in
+            *escapes\ project\ root*)
+                echo "    → SECURITY: model path resolves outside project tree — refusing" >&2 ;;
+            *yolov8n*)             echo "    → run: bash models/download_yolov8n.sh"          >&2 ;;
+            *yolov8s*)             echo "    → run: bash models/download_yolov8n.sh # use 'n' variant" >&2 ;;
+            *yolov8*visdrone*)     echo "    → run: bash models/download_yolov8n_visdrone.sh"  >&2 ;;
+            *fastsam*)             echo "    → run: bash models/download_fastsam.sh"           >&2 ;;
+            *depth_anything_v2*)   echo "    → run: bash models/download_depth_anything_v2.sh" >&2 ;;
+            *)                     echo "    → no known download script; check models/ for the matching .sh" >&2 ;;
+        esac
+        echo "" >&2
+    done
+    echo -e "  ${YELLOW}Tip:${NC} models/ is gitignored — every fresh checkout needs the download scripts run." >&2
+    echo "" >&2
+    SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    exit 1
+fi
+echo -e "  ${GREEN}✓${NC} Preflight: all referenced model files present"
+
 # ── Dry run ───────────────────────────────────────────────────
 if [[ "$DRY_RUN" == "true" ]]; then
     echo ""
@@ -467,6 +509,23 @@ pkill -9 -f "gz sim" 2>/dev/null || true
 pkill -9 -f "ruby.*gz" 2>/dev/null || true
 # Only kill PX4 process if it's our SITL instance (not system services)
 pkill -9 -f "px4.*sitl" 2>/dev/null || true
+# Issue #719 — PX4 leaves `/tmp/px4-sock-N` UNIX domain sockets when SIGKILLed
+# (no destructor runs).  The next PX4 boot detects the socket as a running
+# instance and exits with return code 2.  Remove pre-flight; wildcard covers
+# all multi-vehicle SITL instance IDs.
+rm -f /tmp/px4-sock-* 2>/dev/null || true
+# Issue #708 — also kill any leftover companion binaries from prior runs.
+# Without this loop, a stale `comms` process holding UDP 14540 (or any
+# other Zenoh-publishing companion left behind by a crashed/aborted run)
+# silently corrupts the new run with `BindError` or stale-publisher races.
+# The post-run cleanup_scenario() trap below covers normal exit paths, but
+# this pre-cleanup is the catch-all for orphaned processes from sessions
+# that died without firing their trap (e.g. terminal closed, parent shell
+# SIGKILLed, OOM kill).
+for _bin in video_capture perception slam_vio_nav mission_planner \
+            comms payload_manager system_monitor; do
+    pkill -9 -f "build/bin/$_bin" 2>/dev/null || true
+done
 sleep 1
 
 cleanup_scenario() {
@@ -519,6 +578,10 @@ cleanup_scenario() {
           /dev/shm/fc_state /dev/shm/gcs_commands /dev/shm/payload_status \
           /dev/shm/system_health /dev/shm/fc_commands /dev/shm/mission_upload \
           /dev/shm/fault_overrides 2>/dev/null || true
+    # Issue #719 — PX4 leaves /tmp/px4-sock-N when SIGKILLed (no destructor
+    # runs).  Without this cleanup, the next PX4 boot detects the socket as
+    # a running instance and exits with return code 2.
+    rm -f /tmp/px4-sock-* 2>/dev/null || true
 }
 trap cleanup_scenario EXIT INT TERM
 

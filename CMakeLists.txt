@@ -243,6 +243,7 @@ add_subdirectory(tools/fault_injector)
 add_subdirectory(tools/flight_replay)
 if(COSYS_AIRSIM_FOUND)
     add_subdirectory(tools/cosys_populate_scene)
+    add_subdirectory(tools/cosys_telemetry_poller)
 endif()
 
 # ── Tests ────────────────────────────────────────────────────

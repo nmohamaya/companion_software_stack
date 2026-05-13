@@ -73,9 +73,12 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration + **covariance-derived quality** (`trace(P_position)` from IMU pre-integrator, configurable thresholds) |
-| Integration testing | **20 Tier 1 + 5 Tier 2 scenarios** on Zenoh; sideband fault injector CLI |
-| Test scenarios | 25 parameterized JSON configs with fault sequences + pass criteria |
-| Bug fixes | **48** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Integration testing | **24 Tier 1 + 6 Tier 2 scenarios** on Zenoh; sideband fault injector CLI; Cosys-AirSim Tier 3 added for non-COCO obstacles (scenario 33) |
+| Test scenarios | **30** parameterized JSON configs with fault sequences + pass criteria (Gazebo SITL + Cosys-AirSim) |
+| Bug fixes | **50+** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Preflight readiness | **PR #717** — ARM gated on FC `health_all_ok` (MAVSDK `subscribe_health_all_ok`); eliminates 3–5 `Arming denied` log entries per cold-start; closes #716 |
+| Stale-pose filter | **PR #721** — P4 drops pose readings older than `planner_birth_ns`; protects against Zenoh last-value-cache delivering stale frames from a previous P3 session; closes #720 |
+| Cosys-AirSim Tier 3 perception | **Phase 1 baseline locked** — sim-perfect ground-truth depth + segmentation + Echo radar (sensor type 7) end-to-end. Scenario 33 PASS, all 26 checks green, zero cube collisions ([PR #704](https://github.com/nmohamaya/companion_software_stack/pull/704)) |
 
 ---
 
@@ -401,6 +404,74 @@
 
 ---
 
+### Phase 14 — Sensor Architecture Pivot (Stereo-First Autonomy + Multi-Sensor Fusion)
+
+> **Status:** Planned. Architectural decision recorded 2026-04-30 after Issue #645 scenario-33 work.
+>
+> **Goal:** Replace mono camera + ML-estimated depth (DA V2) with geometric stereo as the primary autonomy depth source.  Build toward omnidirectional vision + radar coverage matching production autonomous platforms (Skydio X10, DJI Matrice 30T, Anduril Ghost-X).
+
+#### Why this phase exists
+
+Issue #645 burned 14 PRs fighting symptoms of one root cause: **monocular ML depth (DA V2) produces unbounded per-pixel error**.  At end of session, scenario 33 was at 22 % voxel-on-target with most off-target voxels being systematic depth-scale errors that no filter fully cleans up.  The architectural fix is to replace ML-estimated depth with **geometric stereo** — closed-form, calibration-stable, error model bounded by `depth² / (focal × baseline)`.
+
+This is also the **production industry pattern**.  No serious autonomous drone (Skydio, DJI, Parrot, Autel, Anduril, Shield AI) uses monocular depth for safety-critical obstacle avoidance.  Every one of them runs forward stereo (or omni vision) plus radar.
+
+#### Phase 14a — Stereo-First Autonomy (forward only)
+
+| Task | Priority | Description |
+| ---- | -------- | ----------- |
+| `StereoDepthBackend` (OpenCV SGBM initial) | P0 | New `IDepthEstimator` backend reading stereo pair, producing `DepthMap`.  Drop-in replacement for DA V2 ONNX backend.  Keep DA V2 as fallback for mono-only sensors. |
+| Cosys-AirSim stereo wiring | P0 | Configure stereo pair with 15-25 cm baseline.  Cosys already supports it; existing `/drone_stereo_cam` topic infrastructure intact. |
+| Move detection (YOLO + SAM) onto stereo-left feed | P0 | Single coordinate frame for autonomy: detection bboxes, masks, and depth all in stereo-left pixel space.  No transforms between frames. |
+| Decouple mono mission cam from autonomy | P1 | Mission cam becomes payload-only: streamed to GCS, gimbaled, operator-controlled.  Decouples autonomy failure domain from payload failure domain. |
+| Stereo-left feed → GCS as operator FPV view | P1 | Standard pattern (DJI Matrice 30T, Skydio X10): operator flies with the forward fixed view; mission cam serves the mission task.  Both feeds streamed; operator picks per mode. |
+| Better stereo backend (RAFT-Stereo / FoundationStereo / hardware) | P2 | If SGBM voxel-on-target needs improvement: upgrade to learned stereo or hardware (Intel RealSense D455/D456 on-chip, Stereolabs ZED SDK on GPU). |
+
+**Exit criteria:** scenario 33 reaches WP5 reliably; voxel_on_target ≥ 60 % (vs. 22 % with DA V2); zero obstacle collisions sustained; mono mission cam no longer in autonomy data path.
+
+#### Phase 14b — Multi-Sensor Fusion (radar + 360° vision)
+
+| Task | Priority | Description |
+| ---- | -------- | ----------- |
+| Forward radar — production-grade integration | P0 | Long-range obstacle detection (30-100 m) where vision degrades (haze, low light, distance).  Already prototyped in SITL via Cosys radar; harden for real hardware (TI AWR series mmWave or Ainstein K-77/K-79). |
+| Rear radar | P1 | RTL backward-flight obstacle detection + dynamic-obstacle detection (catch-up from behind).  Same module as forward — symmetric. |
+| Lateral / corner radar (4-panel array) | P3 | Optional — only if mission profile includes flying sideways or in cluttered indoor environments.  Most waypoint missions don't need this. |
+| Omnidirectional vision (6+ wide-FOV cameras) | P2 | Match Skydio X10 / DJI Matrice 30T pattern: forward stereo + lateral + rear cameras for full sphere obstacle awareness.  Enables indoor flight and dynamic-obstacle detection in all directions.  Each camera plugs into the existing `IDepthEstimator` HAL via the same StereoDepthBackend interface (using local stereo pairs across adjacent cameras). |
+| Radar + vision fusion at occupancy-grid level | P1 | Already partially in place: radar tracks promote into the static layer (PR #661).  Extend to sensor-confidence-weighted fusion: radar dominates at long range / bad weather; vision dominates at close range / cluttered. |
+| LiDAR — optional, cost-dependent | P3 | Livox Mid-360 / RoboSense E1 / Velodyne Puck Lite for scenarios needing precision mapping or surveying.  NOT required for obstacle avoidance (radar + vision sufficient).  Decision deferred to specific mission profile + cost budget. |
+
+**Exit criteria:** drone navigates dense obstacle fields (multiple cubes/pillars/walls) end-to-end without operator intervention, in clear weather and degraded conditions (light fog, low light).
+
+#### Sensor architecture summary (target end-state)
+
+```text
+Stereo autonomy module (forward, fixed):
+  ├─ LEFT image  → YOLO + SAM (detection + segmentation)
+  ├─ LEFT image  → P3 SLAM/VIO (already)
+  ├─ LEFT image  → GCS stream (operator FPV view)
+  └─ LEFT + RIGHT → block matching → DepthMap
+
+Forward + Rear mmWave radar:
+  └─ Long-range + bad-weather obstacle detection.  Promotes into static layer.
+
+Mono mission cam (gimbaled, payload-only):
+  └─ High-res mission imagery, GCS payload feed, operator-controlled.
+
+(Future) Omnidirectional vision array:
+  └─ 6+ wide-FOV cameras for full-sphere obstacle awareness.
+  └─ Pairs with lateral radar panels for redundancy.
+
+(Optional) LiDAR:
+  └─ Cost-dependent; only for missions requiring precision 3D mapping.
+```
+
+**Camera count target (Phase 14a):** 3 sensors / 2 modules — stereo pair + gimbaled mono.
+**Camera count target (Phase 14b mature):** 7+ sensors — stereo + 4-6 omni nav cameras + gimbaled mono.
+
+**Industry comparison:** matches Skydio X10 (6 nav + 1 gimbal), DJI Matrice 30T (6 + FPV + gimbal), Anduril Ghost-X (forward stereo + gimbaled EO/IR).
+
+---
+
 ### Phase 11 — Autonomous Navigation (Real VIO/SLAM)
 
 > **Goal:** GPS-denied navigation using onboard vision.
@@ -448,11 +519,12 @@
 >
 > **Goal:** Replace the current single-path YOLO+UKF+single-layer-grid perception with a 3-path (SAM/detector + monocular depth + radar-Doppler), class-conditional IMM tracker, and dual-layer grid. Fixes known bugs (#506 haunted cells, YOLO blindness to non-COCO objects) and adds primary drone-detection capability via radar-Doppler.
 >
-> **Design docs (gitignored):** `docs/design/perception_architecture.md` (spec), `docs/design/perception_rewrite_log.md` (living build log), [ADR-012](../adr/ADR-012-detector-licensing-yolo-vs-rtdetr.md) (detector licensing).
+> **Design docs (gitignored):** `docs/design/perception_architecture.md` (spec), `docs/design/perception_rewrite_log.md` (living build log), [ADR-012](../adr/ADR-012-detector-licensing-yolo-vs-rtdetr.md) (detector licensing), [ADR-013](../adr/ADR-013-stereo-radar-redundancy-vs-fusion.md) (stereo + radar — redundancy vs. unified UKF fusion).
 >
 > **Universal acceptance criteria on every sub-issue:**
 > 1. Update `docs/design/perception_rewrite_log.md` with a beginner-friendly component section + code links.
 > 2. Update `LICENSE` and/or ADR-012 if the work introduces new license obligations (new third-party deps, model weights, datasets).
+> 3. Stereo + radar paths must remain architecturally independent into the occupancy grid per ADR-013; do not fold PATH A clusters into the UKF.
 
 #### Foundations (Phase 13a — no-training, pure-algo)
 
@@ -663,6 +735,17 @@
 | ~~[#191](https://github.com/nmohamaya/companion_software_stack/issues/191)~~ | ~~Gazebo Full VIO backend~~ | C: VIO | **Closed** (PR #275) |
 | ~~[#254](https://github.com/nmohamaya/companion_software_stack/issues/254)~~ | ~~Covariance-derived VIO quality~~ | C: VIO | **Closed** (PR #276) |
 | ~~[#255](https://github.com/nmohamaya/companion_software_stack/issues/255)~~ | ~~Remove legacy IVisualFrontend~~ | C: VIO | **Closed** (PR #277) |
+
+---
+
+### Cosys-AirSim Tier 3 Phase 1 Perception (PR #704) — pending merge
+
+| # | Title | State |
+|---|-------|-------|
+| [#698](https://github.com/nmohamaya/companion_software_stack/issues/698) | PATH A voxels cement walls without radar agreement; DA V2 max-clamp ghosts feed the grid | **Closes on PR #704 merge** (sidestepped by ground-truth perception baseline; real-algo follow-ups tracked in Epics #514/#520) |
+| [#702](https://github.com/nmohamaya/companion_software_stack/issues/702) | Cosys-AirSim radar (lidar-emulated) misses 5/7 spawned obstacles | **Closes on PR #704 merge** (replaced by `CosysEchoBackend`) |
+| [#705](https://github.com/nmohamaya/companion_software_stack/issues/705) | Adopt Cosys Echo as physical radar simulator; deprecate lidar-emulated radar | **Closes on PR #704 merge** |
+| [#703](https://github.com/nmohamaya/companion_software_stack/issues/703) | Planner: graceful handling of waypoints inside obstacles | **Open** (deferred — filed during this work) |
 
 ---
 

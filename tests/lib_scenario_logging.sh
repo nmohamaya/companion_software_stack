@@ -10,6 +10,7 @@
 #   write_run_metadata()    — Machine-readable run_metadata.json
 #   generate_run_report()   — Human-readable run_report.txt with observations
 #   append_to_index()       — Append to runs.jsonl history
+#   preflight_model_paths() — Issue #625: assert every model_path exists, in-tree
 #
 # Usage: source "${SCRIPT_DIR}/lib_scenario_logging.sh"
 # ═══════════════════════════════════════════════════════════════
@@ -247,6 +248,19 @@ generate_run_report() {
 
         # ── Overall Assessment ──
         _report_overall_assessment "$mp_log" "$perc_log" "$result" "$pass_count" "$total_count"
+
+        # ── Diagnostic Overlays ──
+        echo ""
+        echo "Diagnostic Overlays"
+        local any_overlay=false
+        for png in scene_overlay.png planner_grid_overlay.png; do
+            if [[ -f "${run_dir}/${png}" ]]; then
+                echo "  ${png}"
+                any_overlay=true
+            fi
+        done
+        $any_overlay || echo "  (none — generator skipped or failed; check *.log siblings)"
+        echo ""
 
         echo "══════════════════════════════════════════════════════════"
     } > "$report"
@@ -544,11 +558,12 @@ _report_grid_peaks() {
     local peaks
     # Parse grid data from two possible log formats:
     #   New: [Grid] ... N dynamic, N static (promoted=N, hd_map=N, ...)
+    #                  ... cross_veto=N single_modality=N  (issue #698 Phase 3)
     #   Old: [DIAG] ... occ=N static=N promoted=N
     peaks=$(grep -aE "\[Grid\]|\[DIAG\].*occ=" "$log" 2>/dev/null | awk '
-    BEGIN { max_occ=0; max_static=0; max_promoted=0 }
+    BEGIN { max_occ=0; max_static=0; max_promoted=0; max_veto=0; max_smod=0 }
     {
-        dyn=0; sta=0; pro=0; occ=0
+        dyn=0; sta=0; pro=0; occ=0; veto=0; smod=0
         for(i=1;i<=NF;i++) {
             # New [Grid] format: "N dynamic, N static (promoted=N, ...)"
             if($(i+1)=="dynamic,") dyn=$i+0
@@ -557,9 +572,11 @@ _report_grid_peaks() {
             gsub(/[(),]/,"",$i)
             n=split($i,kv,"=")
             if(n==2) {
-                if(kv[1]=="promoted") pro=kv[2]+0
-                if(kv[1]=="occ")      occ=kv[2]+0
-                if(kv[1]=="static")   sta=kv[2]+0
+                if(kv[1]=="promoted")        pro=kv[2]+0
+                if(kv[1]=="occ")             occ=kv[2]+0
+                if(kv[1]=="static")          sta=kv[2]+0
+                if(kv[1]=="cross_veto")      veto=kv[2]+0
+                if(kv[1]=="single_modality") smod=kv[2]+0
             }
         }
         # New format: occupied = dynamic + static; Old format: occ= already set
@@ -567,16 +584,22 @@ _report_grid_peaks() {
         if(occ>max_occ) max_occ=occ
         if(sta>max_static) max_static=sta
         if(pro>max_promoted) max_promoted=pro
+        # Cross-veto / single-modality counters are cumulative (monotonic) so
+        # the "max" is the final value — track it the same way for safety.
+        if(veto>max_veto) max_veto=veto
+        if(smod>max_smod) max_smod=smod
     }
-    END { printf "%d|%d|%d\n", max_occ, max_static, max_promoted }
-    ' 2>/dev/null || echo "0|0|0")
+    END { printf "%d|%d|%d|%d|%d\n", max_occ, max_static, max_promoted, max_veto, max_smod }
+    ' 2>/dev/null || echo "0|0|0|0|0")
 
-    local max_occ max_static max_promoted
-    IFS='|' read -r max_occ max_static max_promoted <<< "$peaks"
+    local max_occ max_static max_promoted max_veto max_smod
+    IFS='|' read -r max_occ max_static max_promoted max_veto max_smod <<< "$peaks"
 
-    echo "  Max occupied  : ${max_occ}"
-    echo "  Max static    : ${max_static}"
-    echo "  Max promoted  : ${max_promoted}"
+    echo "  Max occupied   : ${max_occ}"
+    echo "  Max static     : ${max_static}"
+    echo "  Max promoted   : ${max_promoted}"
+    echo "  Cross-veto     : ${max_veto}   (issue #698 Fix #1 — long-range PATH A promotions vetoed)"
+    echo "  Single-modality: ${max_smod}   (issue #698 Fix #1 — promoted via FOV-residency / age-cap escape hatch)"
     echo ""
     echo "  Observations:"
 
@@ -931,7 +954,7 @@ _report_verification_checks() {
     # log_contains
     while read -r pattern; do
         [[ -z "$pattern" ]] && continue
-        if grep -qai "$pattern" "$combined_log" 2>/dev/null; then
+        if grep -qaiF "$pattern" "$combined_log" 2>/dev/null; then
             echo "  [PASS] Log contains: ${pattern}"
         else
             echo "  [FAIL] Log contains: ${pattern}"
@@ -941,7 +964,7 @@ _report_verification_checks() {
     # log_must_not_contain
     while read -r pattern; do
         [[ -z "$pattern" ]] && continue
-        if grep -qai "$pattern" "$combined_log" 2>/dev/null; then
+        if grep -qaiF "$pattern" "$combined_log" 2>/dev/null; then
             echo "  [FAIL] Log must NOT contain: ${pattern}"
         else
             echo "  [PASS] Log does NOT contain: ${pattern}"
@@ -997,4 +1020,76 @@ _report_overall_assessment() {
         echo "  Radar-primary architecture active: ${radar_only_count} independent radar tracks created."
     fi
     echo ""
+}
+
+# ── Preflight: model_path existence + project-root confinement ───
+# Issue #625 + PR #628 review-security P3.
+# Walks the merged config JSON, asserts that every "model_path" string
+# resolves to an existing file inside $project_root.  Any failure prints
+# tab-separated `key\tpath` to stdout so the caller can iterate via
+# `IFS=$'\t' read -r key path`.  Returns 0 if all paths OK, non-zero on
+# parse error or missing/escaping paths (caller checks `$?` and stdout).
+#
+# Hardened against:
+#   - path traversal: `.resolve().relative_to(project_root.resolve())`
+#     rejects `models/../../etc/passwd` and absolute paths outside the
+#     tree (e.g. `/etc/ssh/...`).
+#   - malformed config: JSON parse failure prints a diagnostic to stdout
+#     and exits 1 instead of fail-open propagating up to caller.
+#
+# Args:
+#   $1 — path to merged-config JSON
+#   $2 — project root (PROJECT_DIR)
+preflight_model_paths() {
+    local cfg_path="$1"
+    local project_root="$2"
+    python3 - "$cfg_path" "$project_root" <<'PYEOF'
+import json, sys, pathlib
+cfg_path     = sys.argv[1]
+project_root = pathlib.Path(sys.argv[2]).resolve()
+try:
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+except (OSError, json.JSONDecodeError) as e:
+    # stderr — caller prints stdout for missing-paths; parse errors must
+    # not be misclassified as a missing file.  Distinct exit code so the
+    # bash side can branch.
+    print(f"PARSE_ERROR could not read {cfg_path}: {e}", file=sys.stderr)
+    sys.exit(2)
+
+missing = []
+def walk(obj, path=""):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            child = f"{path}.{k}" if path else k
+            if k == "model_path" and isinstance(v, str) and v:
+                p = pathlib.Path(v)
+                if not p.is_absolute():
+                    p = project_root / p
+                # Confine to project root: rejects path traversal
+                # ("models/../../etc/passwd") and absolute paths outside
+                # the tree.  .resolve() collapses .. and follows symlinks.
+                try:
+                    p.resolve().relative_to(project_root)
+                except ValueError:
+                    missing.append((child, f"{p}\t[escapes project root]"))
+                    walk(v, child)
+                    continue
+                if not p.exists():
+                    missing.append((child, str(p)))
+            walk(v, child)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            walk(item, f"{path}[{i}]")
+walk(cfg)
+for key, path in missing:
+    print(f"{key}\t{path}")
+# Exit 0 only when nothing is missing AND no path-traversal entries were
+# flagged.  Caller checks both the non-zero exit AND parses stdout for
+# each offending key/path.  Previous behaviour (`sys.exit(0 if not
+# missing else 0)`) was a no-op tautology — path-traversal entries hit
+# the `[escapes project root]` branch and silently passed (PR #704
+# security review + test-scenario review independently flagged this).
+sys.exit(1 if missing else 0)
+PYEOF
 }

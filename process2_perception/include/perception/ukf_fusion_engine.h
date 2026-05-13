@@ -9,6 +9,7 @@
 #include "perception/ifusion_engine.h"
 #include "perception/types.h"
 
+#include <atomic>
 #include <unordered_map>
 #include <vector>
 
@@ -210,6 +211,19 @@ public:
         return dormant_obstacles_;
     }
 
+    /// Issue #645 — count of radar-only association attempts where the full-S
+    /// path failed (LLT + epsilon + eigenvalue-clamp all rejected) and we
+    /// fell back to R-only Mahalanobis gating.  Exposed for tests +
+    /// run-report diagnostics.
+    /// PR #649 P2 review: backed by `std::atomic<uint64_t>` since this
+    /// accessor is `const noexcept` and could be called from any thread
+    /// (run-report poll, P7 health check) while `try_associate_radar`
+    /// increments the counter on the fusion thread.  Pure observability
+    /// counter — relaxed ordering (no synchronization implied).
+    [[nodiscard]] uint64_t s_matrix_fallback_count() const noexcept {
+        return s_matrix_fallback_count_.load(std::memory_order_relaxed);
+    }
+
 private:
     CalibrationData                         calib_;
     RadarNoiseConfig                        radar_cfg_;
@@ -242,6 +256,18 @@ private:
 
     // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
     uint32_t next_radar_track_id_{0x80000000u};
+
+    // Issue #645 — diagnostic counter for radar-only S-matrix fallback path.
+    // Increments every time `try_associate_radar` exhausts (a) direct LLT,
+    // (b) diagonal-epsilon regularization, and (c) eigenvalue-clamp recovery,
+    // and falls back to R-only Mahalanobis gating instead of dropping the
+    // measurement.  Persistent non-zero indicates the UT weights are
+    // chronically producing degenerate S — consider re-tuning kAlpha (Issue
+    // #645 fix C, deferred).
+    // PR #649 P2 review: atomic since the accessor is `const noexcept` and
+    // can be called off-thread (run-report / P7).  Relaxed ordering —
+    // pure observability counter, no synchronization implied.
+    std::atomic<uint64_t> s_matrix_fallback_count_{0};
 
     struct DepthEstimate {
         float depth      = 8.0f;

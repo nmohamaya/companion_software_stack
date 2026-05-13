@@ -2,6 +2,15 @@
     "_comment": "Scenario 30: Cosys-AirSim static proving ground — Tier 3 flight through populated Blocks env with stationary obstacles only (pillars, walls, chairs, couches, bushes, mannequins). Exercises depth → occupancy grid → D*Lite → potential-field avoider. Dynamic-obstacle counterpart is scenario 31.",
     "_epic": "#480 Phase A",
     "_issue": "#479",
+    "gt_class_map": {
+        "_comment": "Ground-truth class map for #573 baseline capture. Keys match spawned-object names in config/scenes/cosys_static.json — trailing `*` is a prefix wildcard. class_id values use COCO indices where a COCO class exists; non-COCO obstacles (pillars, walls) use custom id 100. See docs/guides/CONFIG_GUIDE.md → 'gt_class_map' and issue #594.",
+        "person_*":  { "class_id": 0,   "class_name": "person" },
+        "chair_*":   { "class_id": 56,  "class_name": "chair" },
+        "couch_*":   { "class_id": 57,  "class_name": "couch" },
+        "bush_*":    { "class_id": 58,  "class_name": "potted plant" },
+        "pillar_*":  { "class_id": 100, "class_name": "obstacle" },
+        "wall_*":    { "class_id": 100, "class_name": "obstacle" }
+    },
     "scenario": {
         "name": "cosys_static",
         "description": "Flight through a populated Blocks environment with 9 static obstacles spawned via RPC. Validates every perception stage (radar, YOLO, depth) actually produces non-zero output, occupancy grid fills with known obstacles, and the avoider at least touches the plan.",

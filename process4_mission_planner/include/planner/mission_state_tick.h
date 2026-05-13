@@ -49,6 +49,15 @@ struct StateTickConfig {
     // avoider actually uses.  Populated by main.cpp at startup from
     // mission_planner.obstacle_avoidance.influence_radius_m.
     float avoider_influence_radius_m = 5.0f;
+
+    // Issue #716 — PREFLIGHT ARM gating timings.  Both are exposed via
+    // `drone::Config` (mission_planner.preflight.*).  Defaults match the
+    // values empirically validated on scenario 18:
+    //   - 3 s ARM retry: short enough to recover within a few ticks if PX4
+    //     drops an ARM message; long enough not to flood MAVLink.
+    //   - 1 s wait log: visible to operators without spamming the log.
+    int preflight_arm_retry_s{3};
+    int preflight_wait_log_s{1};
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -73,10 +82,35 @@ public:
         // Pause promotion during RTL/LAND — the drone is descending to a
         // known-safe location and ground-feature detections would pollute the
         // static layer, blocking the landing approach (Issue #340).
+        //
+        // Issue #638 P1-B from PR #641 review: also clear per-instance
+        // observation counters on the *transition* into RTL/LAND.  After
+        // P2 restarts the perception context, fresh instance_id values
+        // would otherwise collide with stale `instances_[N]` counters
+        // that already crossed the promotion threshold — defeating the
+        // gate's confirmation guarantee.  Clearing on the entering edge
+        // (was_landing_=false → landing=true) is one-shot and matches
+        // the same FSM-transition trigger as `set_promotion_paused`.
         if (grid_planner != nullptr) {
             const bool landing = (fsm.state() == MissionState::RTL ||
                                   fsm.state() == MissionState::LAND);
-            grid_planner->set_promotion_paused(landing);
+            // Issue #645 review fix (#661 P1, SAFETY-CRITICAL): use the
+            // dedicated landing-pause channel instead of `promotion_paused`.
+            // The previous call to `set_promotion_paused(landing)` would
+            // overwrite the voxel_input scenario's startup setting (which
+            // calls `set_promotion_paused(true)` once at boot for "PATH A
+            // is sole source" semantics) — leaving the grid permanently
+            // un-paused after the first RTL completes.  More importantly,
+            // it didn't unconditionally block promotion: with #661's radar
+            // bypass enabled, radar returns could promote during landing,
+            // voiding the Issue #340 landing-approach protection.
+            // `set_landing_pause` blocks ALL promotion (including radar)
+            // and is independent of the voxel_input pause.
+            grid_planner->set_landing_pause(landing);
+            if (landing && !was_landing_) {
+                grid_planner->clear_instance_state();
+            }
+            was_landing_ = landing;
         }
 
         // Clear stuck-detector mission-scoped state when back in IDLE
@@ -149,6 +183,12 @@ private:
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
                                                            std::chrono::seconds(10);
+    // Issue #716 — wait-log throttle separate from `last_arm_time_` so the
+    // first ARM fires immediately when `fc_state.armable` transitions from
+    // false to true (without being gated by a stale arm-retry interval that
+    // was last touched by the wait-log path).
+    std::chrono::steady_clock::time_point last_wait_log_time_ = std::chrono::steady_clock::now() -
+                                                                std::chrono::seconds(10);
 
     // Collision recovery state (Issue #226)
     enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
@@ -169,6 +209,11 @@ private:
     // waypoint advance or mission restart (IDLE re-entry).
     uint32_t stuck_transition_count_ = 0;
 
+    // Issue #638 P1-B (PR #641 review): tracks the previous-tick value
+    // of `landing` so we can call `clear_instance_state()` exactly once
+    // on the entering edge into RTL/LAND, not every tick.
+    bool was_landing_ = false;
+
     // Extract yaw (rad) from pose quaternion [w, x, y, z].  Used in three
     // places that previously had identical inline atan2 blocks.  Keeps the
     // sign convention in one location so future frame changes only touch here.
@@ -179,20 +224,55 @@ private:
             std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
     }
 
-    // ── PREFLIGHT: retry ARM until FC confirms ────────────────
+    // ── PREFLIGHT: wait for FC readiness, then ARM (retry on configurable
+    //               interval as a safety net for dropped MAVLink messages) ──
+    //
+    // Issue #716 — gate ARM on `fc_state.armable` to avoid the cold-start
+    // `Arming denied: Resolve system health failures first` race on Gazebo
+    // SITL boots.  PX4's `Telemetry::health_all_ok` reports true once EKF2
+    // has converged, sensors are initialized, and GPS lock is acquired;
+    // sending ARM before that just generates log spam and (in degraded
+    // boot timing) can produce sloppy / crashing takeoffs once health
+    // later flickers through OK.  The `preflight_arm_retry_s` retry stays
+    // as a safety net for the rare case PX4 drops the ARM message after
+    // armable went high.
+    //
+    // **No timeout / no fault escalation** (review-fault-recovery P2):
+    // if `armable` never becomes true (e.g. PX4 EKF stuck, MAVSDK
+    // subscription silently lost, hardware sensor genuinely faulty), the
+    // FSM remains in PREFLIGHT indefinitely with only the 1 Hz "Waiting
+    // for FC preflight" INFO log.  FaultManager evaluates `fc_connected`
+    // and pose-stale timestamps but does not yet have an armable-stuck
+    // fault.  Adding a configurable max-PREFLIGHT-wait + escalation to
+    // FAULT_FC_PREFLIGHT_TIMEOUT is tracked as #718.
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
                         const FCSendFn& send_fc) {
-        auto now_arm = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now_arm - last_arm_time_).count() >=
-            3) {
-            DRONE_LOG_INFO("[Planner] Sending ARM command");
-            send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
-            last_arm_time_ = now_arm;
-        }
         if (fc_state.armed) {
             DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
             fsm.on_takeoff();
             takeoff_sent_ = false;
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!fc_state.armable) {
+            // FC preflight not yet clear (EKF2 converging, sensors warming,
+            // GPS lock acquiring, etc.).  Log on the configurable wait-log
+            // throttle so operators can see we are waiting on the FC and
+            // not stuck.  Uses a separate throttle from `last_arm_time_`
+            // so the first ARM fires immediately once `armable` transitions
+            // to true.
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_wait_log_time_)
+                    .count() >= config_.preflight_wait_log_s) {
+                DRONE_LOG_INFO("[Planner] Waiting for FC preflight (armable=false)");
+                last_wait_log_time_ = now;
+            }
+            return;
+        }
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_arm_time_).count() >=
+            config_.preflight_arm_retry_s) {
+            DRONE_LOG_INFO("[Planner] FC armable — sending ARM command");
+            send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
+            last_arm_time_ = now;
         }
     }
 
@@ -379,13 +459,52 @@ private:
                 return planner.plan(pose, *wp);
             }();
             if (grid_planner && grid_planner->using_direct_fallback()) {
+                // Despite the legacy `using_direct_fallback()` name, the planner
+                // hovers when search fails with no cached path — it does NOT
+                // fly a direct line through obstacles.  Surface the accurate
+                // behaviour and the cumulative hover-fallback count so an
+                // operator (or replay) can tell when the grid has become
+                // over-occupied for the current waypoint (Plan A — Issue #645
+                // follow-up; see `GridPlannerBase::plan()` for the hover
+                // branch).
                 diag.add_warning("PathPlan",
-                                 "Planner fallback: no obstacle-free path — using direct line");
+                                 "Planner: no obstacle-free path — hovering in place (no "
+                                 "cached path to follow); cumulative hover-fallback count=" +
+                                     std::to_string(grid_planner->hover_fallback_count()));
             }
             auto traj = [&]() {
                 drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");
                 return avoider.avoid(planned, pose, objects);
             }();
+
+            // ── Issue #624 — post-avoider yaw-towards-velocity refresh ────
+            // #337 wired yaw-towards-velocity inside the planner using the
+            // planner's smoothed velocity (pre-avoidance).  When the avoider
+            // deflects sideways to route around an obstacle, target_yaw is
+            // left pointing at the planner's straight-line heading — camera
+            // and forward-facing sensors lose the obstacle to the drone's
+            // blind spot, so the drone drifts back into it from an angle
+            // it never had voxels for.  Refresh target_yaw from the
+            // avoider's post-deflection velocity so the camera tracks the
+            // actual flight direction.
+            //
+            // No-op when the planner's `yaw_towards_velocity` flag is off
+            // (every scenario that doesn't opt in).  Reuses the planner's
+            // own threshold so the two yaw paths agree on "too slow to
+            // yaw safely" — prevents oscillation during hover.
+            //
+            // Measured on scenario 33 pre-fix: drone body yaw of +9° while
+            // actual motion heading -91° (= 100° misalignment) during the
+            // cube-approach sidestep; drone collided head-on.
+            if (grid_planner && grid_planner->yaw_towards_velocity_enabled()) {
+                const float vx      = traj.velocity_x;
+                const float vy      = traj.velocity_y;
+                const float v_xy_sq = vx * vx + vy * vy;
+                const float thr     = grid_planner->yaw_velocity_threshold_mps();
+                if (v_xy_sq > thr * thr) {
+                    traj.target_yaw = std::atan2(vy, vx);
+                }
+            }
 
             // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level.
             if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&

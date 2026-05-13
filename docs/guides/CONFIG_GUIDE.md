@@ -437,6 +437,30 @@ Scenario configs in `config/scenarios/` follow this structure:
 - **`pass_criteria`** — automated verification checks (log patterns, process liveness)
 - **`tier`** — 1 = simulated (no Gazebo), 2 = Gazebo SITL required
 
+### `gt_class_map` (optional, benchmark-harness only)
+
+Scenarios that will be used for baseline capture (Epic #523 → issue #573) must declare a `gt_class_map` that translates the simulator's object names into the COCO-style class IDs the perception metrics framework consumes. The mapping is per-scenario rather than global so each scenario file is self-contained and auditable. Supports glob-style wildcards on the simulator-name side.
+
+```jsonc
+{
+    "scenario": { ... },
+    "gt_class_map": {
+        "SK_Mannequin*":    { "class_id": 0,  "class_name": "person" },
+        "SM_Car*":          { "class_id": 2,  "class_name": "car" },
+        "SM_TrafficCone*":  { "class_id": 10, "class_name": "obstacle" },
+        "SM_Chair*":        { "class_id": 56, "class_name": "chair" }
+    },
+    "config_overrides": { ... }
+}
+```
+
+- **Key** — object-name pattern matched against the simulator's object list. `*` is a trailing wildcard (e.g. `SK_Mannequin*` matches `SK_Mannequin_01`, `SK_Mannequin_02`, …).
+- **`class_id`** — integer class index; should match the COCO taxonomy if comparing against a COCO-trained detector.
+- **`class_name`** — human-readable name for the JSONL ground-truth output.
+- Objects whose simulator name matches no entry are dropped from GT (treated as "not a class the detector is expected to find").
+
+`gt_class_map` is consumed by the ground-truth emitter (issue #594). If absent, the scenario runs normally but produces no ground truth — baseline capture silently skips detection metrics for that scenario.
+
 ### Available Scenarios
 
 | # | Name | Tier | What it tests |

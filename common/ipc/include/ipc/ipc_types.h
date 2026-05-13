@@ -4,6 +4,7 @@
 #pragma once
 #include <atomic>
 #include <cmath>
+#include <cstddef>  // offsetof (wire-format ABI static_asserts)
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -51,14 +52,15 @@ struct StereoFrame {
 static constexpr int MAX_DETECTED_OBJECTS = 64;
 
 enum class ObjectClass : uint8_t {
-    UNKNOWN       = 0,
-    PERSON        = 1,
-    VEHICLE_CAR   = 2,
-    VEHICLE_TRUCK = 3,
-    DRONE         = 4,
-    ANIMAL        = 5,
-    BUILDING      = 6,
-    TREE          = 7,
+    UNKNOWN            = 0,
+    PERSON             = 1,
+    VEHICLE_CAR        = 2,
+    VEHICLE_TRUCK      = 3,
+    DRONE              = 4,
+    ANIMAL             = 5,
+    BUILDING           = 6,
+    TREE               = 7,
+    GEOMETRIC_OBSTACLE = 8,
 };
 
 struct DetectedObject {
@@ -102,6 +104,120 @@ struct DetectedObjectList {
         return true;
     }
 };
+
+// ═══════════════════════════════════════════════════════════
+// Semantic Voxels (Process 2 → Process 4) — PATH A pipeline
+// Mask-aware back-projection output from the SAM + detector
+// fusion pipeline. Each voxel is already world-frame and
+// confidence-scored — no further promotion-hit filter needed.
+// See Epic #520 / Issue #608.
+//
+// In-process vs. on-wire: `hal::VoxelUpdate` (Eigen-based) is the
+// in-process type used by `ISemanticProjector` / `MaskDepthProjector`;
+// `SemanticVoxel` is its POD wire-format twin, used only for Zenoh
+// IPC. Producers convert `hal::VoxelUpdate → SemanticVoxel` at the
+// publish boundary; subscribers convert the other way when feeding
+// into the planner's in-process types.
+// ═══════════════════════════════════════════════════════════
+
+// Per-batch voxel cap. One batch == one video frame.
+// If `MaskDepthProjector` produces more than this, the PR-2 publisher
+// must either truncate by descending confidence or emit multiple batches
+// per frame. 1024 × 40 B + 24 B header ≈ 40 KB → one Zenoh SHM packet.
+// (Voxel size grew from 32 → 40 B in PR #639 / Issue #638 Phase 1 when
+// `instance_id` + 4 B trailing pad were added; SHM pool sizing must
+// match this updated number.)
+// Sized for typical scenarios (5–15 SAM masks × sparse 4×4 depth
+// sampling); revisit after the first live PR-2 measurement.
+static constexpr uint32_t MAX_VOXELS_PER_BATCH = 1024;
+
+struct SemanticVoxel {
+    float       position_x{0.0f};  // world frame (m)
+    float       position_y{0.0f};
+    float       position_z{0.0f};
+    float       occupancy{0.0f};                       // [0, 1]
+    float       confidence{0.0f};                      // [0, 1]
+    ObjectClass semantic_label{ObjectClass::UNKNOWN};  // class label from MaskClassAssigner
+    uint8_t     _pad_label[3]{0, 0, 0};                // keep 8-byte alignment before timestamp_ns
+    uint64_t    timestamp_ns{0};                       // source-frame capture time
+    // Issue #638 Phase 1 — per-frame cluster ID assigned by P2's
+    // voxel_clusterer before publishing.  0 = unclustered noise (a voxel
+    // that didn't reach min_pts in its connected component); ≥1 = member
+    // of a distinct 3D cluster.  Cluster IDs are *frame-local* — Phase 2
+    // (cross-frame instance tracker) will replace these with stable
+    // tracked-instance IDs.  Until Phase 3 wires the consumer side,
+    // OccupancyGrid3D ignores this field and behaviour is unchanged.
+    uint32_t instance_id{0};
+    uint32_t _pad_instance{0};  // keep 8-byte struct alignment
+
+    [[nodiscard]] bool validate() const {
+        // Enum-range check — senders write a raw byte over Zenoh, so guard
+        // against values outside the defined ObjectClass enumerators.
+        if (static_cast<uint8_t>(semantic_label) >
+            static_cast<uint8_t>(ObjectClass::GEOMETRIC_OBSTACLE)) {
+            return false;
+        }
+        return std::isfinite(position_x) && std::isfinite(position_y) &&
+               std::isfinite(position_z) && std::isfinite(occupancy) && occupancy >= 0.0f &&
+               occupancy <= 1.0f && std::isfinite(confidence) && confidence >= 0.0f &&
+               confidence <= 1.0f;
+    }
+};
+
+// 64-byte alignment matches `Pose` / `FaultOverrides` precedent — puts the
+// header fields (`timestamp_ns`, `frame_sequence`, `num_voxels`) on their
+// own cache line so a subscriber reading the header doesn't pull in part
+// of the voxel array's first cache line.
+struct alignas(64) SemanticVoxelBatch {
+    uint64_t      timestamp_ns{0};    // batch emission time
+    uint64_t      frame_sequence{0};  // source video-frame sequence number
+    uint32_t      num_voxels{0};      // count of valid entries in voxels[]
+    uint32_t      _pad_hdr{0};        // tail-pad the 24-byte header to an 8-byte boundary
+    SemanticVoxel voxels[MAX_VOXELS_PER_BATCH]{};
+
+    [[nodiscard]] bool validate() const {
+        if (num_voxels > MAX_VOXELS_PER_BATCH) return false;
+        for (uint32_t i = 0; i < num_voxels; ++i) {
+            if (!voxels[i].validate()) return false;
+        }
+        return true;
+    }
+};
+
+static_assert(std::is_trivially_copyable_v<SemanticVoxel>,
+              "SemanticVoxel must be trivially copyable for Zenoh wire serialisation");
+static_assert(std::is_trivially_copyable_v<SemanticVoxelBatch>,
+              "SemanticVoxelBatch must be trivially copyable for Zenoh wire serialisation");
+static_assert(std::is_standard_layout_v<SemanticVoxel>, "SemanticVoxel must be standard layout");
+static_assert(std::is_standard_layout_v<SemanticVoxelBatch>,
+              "SemanticVoxelBatch must be standard layout");
+
+// Wire-format ABI guards — catch silent field reorder / resize on future edits.
+// Issue #638 Phase 1 grew the struct from 32 → 40 B by adding instance_id +
+// 4-byte trailing pad.  Wire format is in lock-step between P2 and P4 (both
+// rebuild from this header), so the size bump is safe within one deployment.
+static_assert(sizeof(SemanticVoxel) == 40,
+              "SemanticVoxel wire size must be 40 B; update wire consumers if this changes");
+static_assert(offsetof(SemanticVoxel, position_x) == 0, "position_x must start at offset 0");
+static_assert(offsetof(SemanticVoxel, occupancy) == 12, "occupancy must follow position_{x,y,z}");
+static_assert(offsetof(SemanticVoxel, semantic_label) == 20,
+              "semantic_label must follow occupancy+confidence");
+static_assert(offsetof(SemanticVoxel, timestamp_ns) == 24,
+              "timestamp_ns must be 8-byte aligned at offset 24");
+static_assert(offsetof(SemanticVoxel, instance_id) == 32,
+              "instance_id must be 4-byte aligned at offset 32 (Issue #638 Phase 1)");
+static_assert(offsetof(SemanticVoxelBatch, num_voxels) == 16,
+              "num_voxels must follow timestamp_ns + frame_sequence");
+static_assert(offsetof(SemanticVoxelBatch, voxels) == 24,
+              "voxels[] must follow the 24-byte header with no interior padding");
+// Total sizeof depends on alignas(64): unpadded 24 + 1024*40 = 40984 rounds
+// up to 41024 (~40 KB).  The static_assert below derives the value from
+// sizeof(SemanticVoxel) so the formula is self-updating, but operators
+// reading this comment for SHM pool sizing should plan for ~40 KB per
+// batch (was ~32 KB pre-#639).
+static_assert(sizeof(SemanticVoxelBatch) ==
+                  ((24 + MAX_VOXELS_PER_BATCH * sizeof(SemanticVoxel) + 63u) & ~63u),
+              "SemanticVoxelBatch size must equal alignas(64)-rounded(header + voxel array)");
 
 // ═══════════════════════════════════════════════════════════
 // SLAM Pose (Process 3 → Process 4, Process 5, Process 6)
@@ -340,18 +456,34 @@ struct FCCommand {
 // FC State (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
 struct FCState {
-    uint64_t timestamp_ns;
-    float    gps_lat, gps_lon, gps_alt;
-    float    rel_alt;
-    float    roll, pitch, yaw;
-    float    vx, vy, vz;
-    float    battery_voltage;
-    float    battery_remaining;
-    uint8_t  flight_mode;
-    bool     armed;
-    bool     connected;
-    uint8_t  gps_fix_type;
-    uint8_t  satellites_visible;
+    uint64_t timestamp_ns{0};
+    float    gps_lat{0.0f}, gps_lon{0.0f}, gps_alt{0.0f};
+    float    rel_alt{0.0f};
+    float    roll{0.0f}, pitch{0.0f}, yaw{0.0f};
+    float    vx{0.0f}, vy{0.0f}, vz{0.0f};
+    float    battery_voltage{0.0f};
+    float    battery_remaining{0.0f};
+    uint8_t  flight_mode{0};
+    // Issue #716 review — default-initialise the boolean fields so flight-
+    // recorder replay logs from before this field existed deserialise to a
+    // safe default (`armable=false`, `armed=false`, `connected=false`)
+    // rather than uninitialised memory.  The PREFLIGHT gate at
+    // `tick_preflight` (mission_state_tick.h) treats `armable=false` as
+    // "wait" (correct conservative behaviour); old logs will sit in
+    // PREFLIGHT until a fresh FCState is published, which is preferable to
+    // a garbage bool that could spuriously trip the gate.
+    bool armed{false};
+    bool connected{false};
+    // Issue #716 — true once FC preflight checks pass (PX4 EKF2 converged,
+    // sensors ready, GPS lock acquired).  P4 mission_planner gates the ARM
+    // command on this flag.  Per-backend semantics:
+    //   - MavlinkFCLink: MAVSDK `Telemetry::subscribe_health_all_ok`
+    //   - CosysFCLink: true once the AirSim RPC poll loop is alive
+    //     (SimpleFlight has no real preflight check)
+    //   - SimulatedFCLink: mirrors `connected_` (no real preflight check)
+    bool    armable{false};
+    uint8_t gps_fix_type{0};
+    uint8_t satellites_visible{0};
 
     [[nodiscard]] bool validate() const {
         return std::isfinite(battery_voltage) && battery_voltage >= 0.0f &&
@@ -361,6 +493,16 @@ struct FCState {
                std::isfinite(vy) && std::isfinite(vz);
     }
 };
+// Issue #716 review — wire-format ABI guards, collocated with the struct
+// definition (matches the pattern used by SemanticVoxel / SemanticVoxelBatch /
+// IpcWaypoint / FaultOverrides etc).  A future field addition that changes
+// `sizeof(FCState)` MUST update the expected size here and bump kWireVersion
+// (see `topics::FC_STATE`).  Until #718 lands cross-version FCState
+// deserialisation, treat `sizeof(FCState)` as part of the public IPC ABI.
+static_assert(std::is_trivially_copyable_v<FCState>,
+              "FCState must be trivially copyable for Zenoh raw wire format");
+static_assert(std::is_standard_layout_v<FCState>,
+              "FCState must be standard-layout for cross-compiler offset stability");
 
 // ═══════════════════════════════════════════════════════════
 // GCS Commands (Process 5 → Process 4)
@@ -564,7 +706,17 @@ struct RadarDetection {
     }
 };
 
-static constexpr uint32_t MAX_RADAR_DETECTIONS = 128;
+// Issue #698 Fix #1 — bumped 128 → 1024 because Cosys-AirSim's lidar-emulated
+// radar produces ~1400 in-FOV points per scan that cluster into ~150-300
+// distinct (range, az, el) bins.  At cap=128 the HAL silently truncated the
+// excess clusters, dropping legitimate small-obstacle returns and producing
+// the "radar invisible to scenario 33 cubes" failure mode (run
+// 2026-05-03_124450_FAIL: 9% near-hits to spawned obstacles).  At cap=1024
+// the truncation only triggers in genuinely-pathological scenes.  Wire-format
+// cost: each RadarDetection is 56 bytes → list size grows from 7.2 KB to
+// 57 KB; well within Zenoh SHM budget.  Kept as constexpr to make the
+// compile-time array sizing visible.
+static constexpr uint32_t MAX_RADAR_DETECTIONS = 1024;
 
 struct RadarDetectionList {
     uint64_t       timestamp_ns{0};
@@ -592,6 +744,7 @@ namespace topics {
 constexpr const char* VIDEO_MISSION_CAM = "/drone_mission_cam";
 constexpr const char* VIDEO_STEREO_CAM  = "/drone_stereo_cam";
 constexpr const char* DETECTED_OBJECTS  = "/detected_objects";
+constexpr const char* SEMANTIC_VOXELS   = "/semantic_voxels";
 constexpr const char* SLAM_POSE         = "/slam_pose";
 constexpr const char* MISSION_STATUS    = "/mission_status";
 constexpr const char* TRAJECTORY_CMD    = "/trajectory_cmd";

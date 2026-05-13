@@ -3302,4 +3302,309 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-_Last updated after Improvement #84 (Epic #519). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #85 — HAL Interface Layer for Perception v2 (Epic #515)
+
+**Date:** 2026-04-21
+**Category:** Feature — Infrastructure / HAL
+**Epic:** [#515 — HAL Interface Layer for Perception v2](https://github.com/nmohamaya/companion_software_stack/issues/515) (sub-issues: #528, #529, #530, #531)
+
+**What:**
+
+- **`pixel_format.h`** — `PixelFormat` enum (GRAY8, RGB8, BGR8, RGBA8, NV12, YUYV, BAYER_RGGB8, THERMAL_8/16, EVENT_CD) + `pixel_format_channels()` helper. Reusable by ICamera, IEventCamera, IInferenceBackend.
+- **`iinference_backend.h`** — `IInferenceBackend` interface with HAL-local types (`BoundingBox2D`, `InferenceDetection`, `InferenceOutput`). Includes optional per-detection mask. `SimulatedInferenceBackend` returns N deterministic synthetic detections.
+- **`ivolumetric_map.h`** — `IVolumetricMap` interface with `VoxelKey`, `VoxelData`, `VoxelUpdate` structs. `SimulatedVolumetricMap` uses `std::unordered_map<VoxelKey, VoxelData, VoxelKeyHash>` with position discretization via `floor(pos / resolution)`.
+- **`ievent_camera.h`** — `IEventCamera` interface with `EventCD` and `EventBatch` structs. `SimulatedEventCamera` generates deterministic synthetic events.
+- **`isemantic_projector.h`** — `ISemanticProjector` interface with `CameraIntrinsics` struct. `CpuSemanticProjector` implements real pinhole back-projection: samples depth at bbox centre (or sparse 4×4 grid within mask), transforms to world frame via `camera_pose`.
+- **Factory** — `create_inference_backend()`, `create_volumetric_map()`, `create_event_camera()`, `create_semantic_projector()` added to `hal_factory.h`.
+- **Config** — `config_keys.h` extended with 4 new perception namespaces. `default.json` extended with 4 new sections.
+
+**Files added:** `pixel_format.h`, `iinference_backend.h`, `simulated_inference_backend.h`, `ivolumetric_map.h`, `simulated_volumetric_map.h`, `ievent_camera.h`, `simulated_event_camera.h`, `isemantic_projector.h`, `cpu_semantic_projector.h`, `test_inference_backend.cpp`, `test_volumetric_map.cpp`, `test_event_camera.cpp`, `test_semantic_projector.cpp`
+**Files modified:** `hal_factory.h`, `config_keys.h`, `config/default.json`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Perception v2 components (grid, IMM tracker, SAM, radar fusion) all depend on these HAL abstractions. Defining them first as a foundational epic unblocks E2–E7. HAL-local types avoid circular dependency (perception → HAL → util, never backward).
+
+**Test count:** +39 new tests (7 inference, 9 volumetric map, 9 event camera, 14 semantic projector). 1585 → 1624 total.
+
+---
+
+### Improvement #86 — PATH A IPC wire type: `SemanticVoxelBatch` + `/semantic_voxels` channel (Issue #608 PR 1)
+
+**Date:** 2026-04-22
+**Category:** Feature — IPC / Perception v2
+**Epic:** [#520 — PATH A (SAM + Detector Integration)](https://github.com/nmohamaya/companion_software_stack/issues/520) via integration sub-issue [#608](https://github.com/nmohamaya/companion_software_stack/issues/608)
+
+**What:**
+
+- New IPC wire types `SemanticVoxel` (32 B, world-frame voxel with occupancy, confidence, `ObjectClass` label, source-frame timestamp) and `SemanticVoxelBatch` (header + fixed 1024-slot array, 32 832 B after `alignas(64)` tail pad) in `common/ipc/ipc_types.h`.
+- New topic constant `topics::SEMANTIC_VOXELS = "/semantic_voxels"` with Zenoh-key mapping to `drone/perception/voxels` in `ZenohMessageBus::to_key_expr()`.
+- `static_assert`ed trivially copyable + standard layout + per-field `offsetof` + computed `sizeof` — any future field reorder / resize fails the build.
+- `alignas(64)` on `SemanticVoxelBatch` (matches `Pose` / `FaultOverrides` precedent) keeps the 24 B header cache-line-isolated from the voxel array.
+- `validate()` enforces NaN / Inf rejection on positions, `[0, 1]` bounds on occupancy / confidence, and `ObjectClass` enum-range on `semantic_label` — Zenoh delivers raw bytes so the enum check stops an out-of-range byte from reaching a downstream `switch` statement.
+- All fields have default member initialisers — zero-init on construction, no uninitialised reads possible.
+- Per-batch cap comment explains the `MAX_VOXELS_PER_BATCH = 1024` rationale (one Zenoh SHM packet; publisher must truncate by confidence or split if exceeded; sized for 5–15 SAM masks × sparse depth sampling; revisit after first live PR 2 measurement).
+- In-process (`hal::VoxelUpdate`) vs. on-wire (`SemanticVoxel`) duality documented inline.
+- 20 unit tests (`test_semantic_voxels.cpp`) — default construction, `validate()` boundary cases (NaN / Inf position, `[0, 1]` exact-boundary accepts for occupancy / confidence, out-of-range rejections, `ObjectClass` byte ≥ 9 reject, `num_voxels > MAX` reject, full-batch `num_voxels = MAX` accept, bad-voxel-in-batch reject, bad-voxel-at-last-slot reject, empty-batch-with-garbage-tail accept, voxels-past-count ignored), topic mapping, byte round-trip via `std::copy` on byte iterators (CLAUDE.md: prefer `std::copy` over `memcpy`).
+
+**Files added:** `tests/test_semantic_voxels.cpp`
+**Files modified:** `common/ipc/include/ipc/ipc_types.h`, `common/ipc/include/ipc/zenoh_message_bus.h`, `tests/CMakeLists.txt`, `tests/TESTS.md`, `docs/design/API.md`
+
+**Why:** Epic #520 delivered PATH A component classes (SAM backend, MaskClassAssigner, MaskDepthProjector) via PRs #603 and #604 but did not include end-to-end runtime wiring — no IPC channel for the voxel stream, no P2 publisher, no P4 consumer. Scenario 33 consequently runs the same pipeline as scenario 30 (`color_contour` → depth → standard projection), the grid saturates with ghost cells within 30 s, and the drone collides with real obstacles in live UE5 runs. #608 fills the wiring gap across three PRs; this PR lands the channel and wire type first so the publisher (PR 2) and subscriber (PR 3) have something concrete to target. No publishers or subscribers yet → no runtime behaviour change on the integration branch.
+
+**Test count:** +16 new tests. Full suite: 1829 → 1845 on integration branch.
+
+---
+
+### Improvement #87 — Phase 1 Sim-Perfect Cosys Perception: scenario 33 PASS end-to-end (Issues #698, #702, #705, PR #704)
+
+**Date:** 2026-05-05
+**Category:** Feature — Perception / HAL / Test Infrastructure
+**Issues:** [#698](https://github.com/nmohamaya/companion_software_stack/issues/698) (PATH A voxel ghosts), [#702](https://github.com/nmohamaya/companion_software_stack/issues/702) (lidar-emulated radar), [#705](https://github.com/nmohamaya/companion_software_stack/issues/705) (Echo backend); follow-up [#703](https://github.com/nmohamaya/companion_software_stack/issues/703) filed
+**PR:** [#704](https://github.com/nmohamaya/companion_software_stack/pull/704) (against `feature/perception-v2-integration`)
+
+**What:**
+
+Establishes the "Phase 1" ground-truth perception baseline for the Cosys-AirSim Tier 3 stack. With every backend now driven by simulator ground truth, scenario 33 (`33_non_coco_obstacles.json`) passes deterministically with zero cube collisions, mission complete, RTL → LAND, all 26 pass-criteria checks green. This becomes the reference run that future "Phase 3" real-algorithm backends will be measured against, one swap at a time.
+
+- **`CosysSegmentationBackend`** (`common/hal/include/hal/cosys_segmentation_backend.h`) — `IInferenceBackend` over `simGetImages(Segmentation)` + `simGetSegmentationColorMap`. Allowlist (`include_substrings`) takes precedence over blocklist (`exclude_substrings`); blocklist mode returns `false` for unknown colours so unmapped pixels are preserved.
+- **`CosysGroundTruthRadarBackend`** (`common/hal/include/hal/cosys_groundtruth_radar.h`) — `IRadar` over `simListInstanceSegmentationPoses(only_visible=true)` + `simGetGroundTruthKinematics`. Transforms world poses into drone FRD body frame, FOV-gated. Now used as a validation oracle alongside Echo.
+- **`CosysEchoBackend`** (`common/hal/include/hal/cosys_echo_backend.h`) — `IRadar` over Cosys-Lab Echo (sensor type 7), the FMCW physical radar simulator (ray-cast beam pattern + multipath + per-distance/per-reflection attenuation). Decodes the 5-floats-per-point return format, applies `[1, -1, -1]` axis flip for NED, FOV gates ±60° az × ±15° el, range-gates, name-based allowlist/exclude via parallel groundtruth vector, and bins detections into range/az/el clusters. Replaces the lidar-emulated `CosysRadarBackend` (root cause of #702 — lidar treated as radar produced 350 ground-clutter clusters/scan).
+- **Factory wiring** (`common/hal/include/hal/hal_factory.h`) — three new branches: `cosys_segmentation_backend`, `cosys_airsim_groundtruth`, `cosys_echo`, all `HAVE_COSYS_AIRSIM`-guarded.
+- **Echo sensor declaration** (`config/cosys_settings.json`) — Echo sensor with tuned parameters (5000 traces, 0.1 dB/m attenuation, 1.0 dB/reflection, 50 m range, ±60° × ±15° FOV, 20 Hz update). Must be redeployed to `~/Documents/AirSim/settings.json` and UE5 restarted.
+- **Scenario 33 re-scoped** (`config/scenarios/33_non_coco_obstacles.json`) — from "PATH A perception stress" to "planner + HD-map + ground-truth perception". Depth backend → `cosys_airsim`, SAM backend → `cosys_airsim`, radar backend → `cosys_echo`. Static obstacles populated from a fresh inventory dump (4 cube cylinders + 2 BP_PIPCamera clusters), cylinder radius 5.25 → 7.5 m to circumscribe rather than inscribe the 10×10 m square cubes (the geometric error was masked by the previous radar's centre-point detections + UKF inflation; Echo's surface returns exposed it). Waypoints redesigned so WP3 is no longer inside a stacked-cube body, and `timeout_s` 180 → 240 to accommodate the east detour.
+- **Diagnostic overlays auto-invoked** (`tests/run_scenario_cosys.sh`, `tests/lib_scenario_logging.sh`) — `tools/diag/scene_overlay.py` and `tools/diag/planner_grid_overlay.py` produce post-run PNGs, with view-clip to mission area and trimmed labels. Robust matplotlib path falls back through system + user-site so runner-spawned Python finds the package.
+- **Live scene inventory** (`tools/diag/blocks_default_inventory.json`) — authoritative dump of 165 scene objects from live UE5 via `simListInstanceSegmentationObjects` + `simListInstanceSegmentationPoses`. Replaces the wrong `DEFAULT_CUBES` table mined from collision logs.
+- **Voxel-on-target script** (`tools/check_voxel_on_target.py`) — exit 0 with SKIP message when scene has no spawned objects (HD-map-only scenarios) instead of failing the run.
+
+**Runner Phase 6 ordering & log handling:**
+
+- Process-liveness checks now run **before** graceful shutdown (the previous fix that moved combined-log assembly behind shutdown accidentally killed processes before alive-checks ran).
+- `combined.log` is assembled with `cat *.log` only after each process has been signalled and given time to flush — fixes the cat-vs-flush race where mission completion lines were truncated.
+- `pass_criteria` `log_contains` / `log_must_not_contain` now use `grep -qaiF` (fixed strings) — the previous regex mode misread `[FSM]` as a character class and silently failed valid checks.
+
+**Bugs resolved:**
+
+- **Fix #504** — scenario 33 multi-layer perception failure (DA V2 1000× depth noise, SAM mega-mask collapse, lidar-emulation ground clutter, camera-can't-see-through-walls, WP3 inside solid block, runner regex misinterpreting `[FSM]`, voxel-on-target SCRIPT errors on HD-map-only scenarios). Documented in [BUG_FIXES.md](BUG_FIXES.md).
+- **Fix #505** — HD-map cylinders inscribed (r=5.25) instead of circumscribed (r=7.5) the 10×10 m square cubes; runner cat-vs-flush race truncated final mission lines; runner alive-check ordered after own kill; scenario timeout too tight for east-detour route.
+
+**Files added:**
+- `common/hal/include/hal/cosys_segmentation_backend.h`
+- `common/hal/include/hal/cosys_groundtruth_radar.h`
+- `common/hal/include/hal/cosys_echo_backend.h`
+- `tools/diag/scene_overlay.py`, `tools/diag/planner_grid_overlay.py`, `tools/diag/blocks_default_inventory.json`
+
+**Files modified:**
+- `common/hal/include/hal/hal_factory.h`
+- `config/cosys_settings.json`, `config/scenarios/33_non_coco_obstacles.json`
+- `tests/run_scenario_cosys.sh`, `tests/lib_scenario_logging.sh`
+- `tools/check_voxel_on_target.py`
+- `docs/tracking/BUG_FIXES.md` (Fix #504, Fix #505)
+
+**Why:**
+
+Phase 1 of the perception-replacement roadmap calls for a known-good baseline driven by simulator ground truth across every channel — depth, segmentation, radar — so the planner + HD-map + UKF dormant-pool + occupancy-grid pipeline can be validated independently of any algorithm uncertainty. Once Phase 1 is locked, each real-world algorithm (DA V2, SAM, CFAR + micro-Doppler) can be swapped in one at a time and benchmarked against this reference. Bringing Cosys Echo in (instead of keeping the lidar-emulated radar) closes the last "fake physics" hole — Echo provides actual ray-cast beam pattern + multipath returns, so the same backend will exercise the same UKF code paths in real-world deployments.
+
+**Test:** Live UE5 5.4 + Cosys-AirSim Blocks scene. `./tests/run_scenario_cosys.sh 33_non_coco_obstacles.json --gui` produces a `_PASS` run directory: 26/26 pass criteria, mission complete → RTL → LAND in mission_planner.log, zero `collision #2+` for cubes (Ground startup touch only), drone takes east detour (E ≥ 27) confirming the circumscribed cylinders block the west corridor, and Echo emits 67–168 raw / 5–7 emitted clusters per scan when looking at obstacles.
+
+**Deployment note:** `config/cosys_settings.json` must be copied to `~/Documents/AirSim/settings.json` and UE5 restarted before the Echo sensor declaration takes effect. Real-hardware path is **not** validated by this PR — sim-test only.
+
+---
+
+### Improvement #88 — Gate Scenario-33 Avoider Safety Nets Behind Config Flags (Phase 1) (Issue #706, PR #707)
+
+**Date:** 2026-05-08
+**Category:** Infrastructure — Config / Mission planner / Perception
+**Issue:** [#706](https://github.com/nmohamaya/companion_software_stack/issues/706)
+**PR:** [#707](https://github.com/nmohamaya/companion_software_stack/pull/707) (commit `1e9872d`)
+
+**What:**
+
+Three runtime config flags (default ON to preserve existing behaviour) wrap the avoider/perception safety-net PRs added for Cosys scenario 33, so Gazebo scenarios 02/17/18/26 can override OFF to run with legacy main-branch parity. Provides a reversible mechanism for clean A/B comparison and an empirical sweep of which flags are load-bearing in Cosys context.
+
+| Config key | Source PRs | Effect when OFF |
+|------------|------------|-----------------|
+| `mission_planner.obstacle_avoidance.close_regime_final_clamp` | #646 | Skip post-correction toward-obstacle hard clamp; correction stops at planned-velocity cancellation |
+| `mission_planner.obstacle_avoidance.aabb_aware_distance` | #657 + #685 + #692 | AABB extents collapse to centroid (`hx=hy=hz=0`); reduces to legacy point-to-point distance |
+| `perception.path_a.avoider_surface.enabled` | #647 | Pass nullptr to fusion_thread; existing nullptr-skip path takes over |
+
+- Each gate logs its state at startup so runs are self-documenting.
+- Gazebo scenarios 02/17/18/26 add explicit overrides to OFF; Cosys scenarios inherit defaults (all ON).
+- Includes `BISECT_REPORT_710_AABB_AWARE_REGRESSION.md` documenting the bisect that motivated this triage approach.
+
+**Files modified:** `common/util/include/util/config_keys.h`, `config/default.json`, `config/scenarios/02_obstacle_avoidance.json`, `config/scenarios/17_radar_gazebo.json`, `config/scenarios/18_perception_avoidance.json`, `config/scenarios/26_gazebo_full_vio.json`, `process2_perception/src/main.cpp`, `process4_mission_planner/include/planner/obstacle_avoider_3d.h`
+**Files added:** `docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md`
+
+**Why:** Scenarios 02/17/26 passed on `main` (without these PRs) but on integration tip showed friction (scenario 02 hit 3 stuck-recover events, drone visibly grazed cylinders). An earlier surgical-disable experiment was invalidated. Phase 1 plumbs the flags; phases 3–5 (smoke validation, Cosys empirical sweep, cleanup) follow as separate work. 47/47 `ObstacleAvoider3DTest` pass with gating in place; defaults ON match prior behaviour exactly.
+
+**Test count:** No new tests (defaults preserve behaviour; existing tests validate both states).
+
+---
+
+### Improvement #89 — Close Two Cleanup Gaps in Gazebo Scenario Runner (Issue #708, PR #709)
+
+**Date:** 2026-05-07
+**Category:** Bug Fix — Test infrastructure / Gazebo SITL
+**Issue:** [#708](https://github.com/nmohamaya/companion_software_stack/issues/708)
+**PR:** [#709](https://github.com/nmohamaya/companion_software_stack/pull/709) (commit `f42aee6`)
+
+**What:**
+
+Two minimum-impact fixes for stale companion processes (most commonly `comms` holding UDP 14540) surviving cleanup between Gazebo scenario runs.
+
+- **Pre-cleanup loop for companion binaries** (`tests/run_scenario_gazebo.sh`) — existing cleanup handled only `gz sim`, `ruby.*gz`, `px4.*sitl`. New loop pkills any leftover `build/bin/<companion>` before the new run starts. Catches the orphaned-process case where a previous session died without firing its `trap cleanup` handler (terminal closed, parent SIGKILLed, OOM kill).
+- **SIGINT→SIGKILL grace period 2 s → 5 s** (`deploy/launch_gazebo.sh`) — companion processes (`comms`, `perception`, `slam_vio_nav`) hold Zenoh peer-mode sessions; clean shutdown (liveliness deregistration, peer notifications, `/dev/shm/zenoh_shm_*` release) can take 3–5 s under load. 2 s SIGKILLed them mid-shutdown, leaving UDP sockets in TIME_WAIT (next run hits `BindError` on :14540) and dangling shm segments.
+
+**Files modified:** `tests/run_scenario_gazebo.sh`, `deploy/launch_gazebo.sh`
+
+**Why:** Exact symptom hit during #706 testing — `comms` half-alive long enough for the runner to return successfully but the actual process kept holding 14540, blocking the next run. Process-group kill via `setsid` and post-cleanup verification are deferred to future PRs.
+
+**Test count:** No new tests (shell-only changes; verified via `bash -n` syntax check and back-to-back scenario runs).
+
+---
+
+### Improvement #90 — Flip `aabb_aware_distance` Default to false (Gazebo Regression Resolution) (Issue #710, PR #711)
+
+**Date:** 2026-05-11
+**Category:** Bug Fix — Mission planner / obstacle avoidance
+**Issue:** [#710](https://github.com/nmohamaya/companion_software_stack/issues/710)
+**PR:** [#711](https://github.com/nmohamaya/companion_software_stack/pull/711) (commit `ee7478f`)
+
+**What:**
+
+Fixes the Gazebo SITL regression introduced by PR #657 (`ObstacleAvoider3D AABB-aware distance + repulsion direction`) for sensor-driven scenarios on the integration branch. Six-iteration `git bisect` over `c7d64fb..eff1718` identified PR #657 as the first-bad-commit. The fix is a 5-line config flip (no code change beyond the gate landed in #707):
+
+```diff
+config/default.json:
+-  "aabb_aware_distance": true,
++  "aabb_aware_distance": false,
+
+config/scenarios/33_non_coco_obstacles.json:
++  "aabb_aware_distance": true   ← explicit opt-in for Cosys scenario 33
+```
+
+PR scope is much larger than the title suggests: alongside the default flip it also removes the per-scenario flag overrides added in #707 (now redundant since the default is false), deletes the now-unused `voxel_obstacle_snapshot.h` + 214-line test file + 462 lines of obstacle-avoider tests, and adds 68 lines of `DESIGN_RATIONALE.md` plus 46 lines of `mission_planner_design.md` documenting the decision.
+
+**Why:** Cosys scenario 33 uses ground-truth segmentation → tight, accurate AABBs → AABB-aware avoider works correctly → keep flag on. All other scenarios use camera+radar UKF fusion → multi-detection envelopes inflate AABB extents 1–2 m beyond physical surface → AABB-aware avoider over-engages, oscillates, prevents RTL/LAND.
+
+**Empirical validation (scenario 18, sensor-driven, no HD-map):**
+
+| Run | Result | UNSTUCK events | RTL→LAND→IDLE |
+|-----|--------|----------------|----------------|
+| Pre-fix (integration tip `1e9872d`) | 0 WPs reached, disarmed mid-flight | n/a | no |
+| Post-fix run 1 | PASS 19/19 — all 5 WPs | 3 | yes |
+| Post-fix run 2 | PASS 19/19 — smooth | 0 | yes |
+| Reference: `main` (`389089a`) | PASS 19/19 | 0 | yes |
+
+**Files added:** `docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md`, `docs/tracking/DESIGN_RATIONALE.md` entries
+**Files modified:** `config/default.json`, `config/scenarios/02_obstacle_avoidance.json`, `config/scenarios/17_radar_gazebo.json`, `config/scenarios/18_perception_avoidance.json`, `config/scenarios/26_gazebo_full_vio.json`, `config/scenarios/33_non_coco_obstacles.json`, `common/util/include/util/config_keys.h`, `process2_perception/src/main.cpp`, `process4_mission_planner/include/planner/obstacle_avoider_3d.h`, `docs/design/mission_planner_design.md`, `docs/tracking/IMPROVEMENTS.md`, `tests/CMakeLists.txt`, `tests/TESTS.md`, `tests/test_obstacle_avoider_3d.cpp`
+**Files removed:** `process2_perception/include/perception/voxel_obstacle_snapshot.h`, `tests/test_voxel_obstacle_surface.cpp`
+
+**Test count:** Net −7 (test pruning offsets the new bisect coverage). Two milder symptoms remain exposed (rotor-spin-up delay, perception fusion over-publishing) — tracked as follow-up.
+
+---
+
+### Improvement #91 — Gate ARM on FC Preflight Readiness (`health_all_ok`) (Issue #716, PR #717)
+
+**Date:** 2026-05-11
+**Category:** Bug Fix — Mission planner / FC communication
+**Issue:** [#716](https://github.com/nmohamaya/companion_software_stack/issues/716); retracts [#713](https://github.com/nmohamaya/companion_software_stack/issues/713)
+**PR:** [#717](https://github.com/nmohamaya/companion_software_stack/pull/717) (commit `ab885fe`)
+
+**What:**
+
+`mission_planner` (P4) previously sent ARM commands at fixed 3-second intervals during PREFLIGHT regardless of whether the FC was ready to accept them. On cold-start Gazebo SITL runs this raced PX4's EKF2 initialization (~2–15 s of clean IMU/MAG/baro to converge), producing 3–5 `Arming denied: Resolve system health failures first` log entries and sloppy/crashing takeoffs when health flickered through OK during the wait.
+
+- **`drone::hal::FCState` + `drone::ipc::FCState`** — new `armable` field propagated by P5 comms `fc_rx_thread`.
+- **`MavlinkFCLink`** — subscribes to MAVSDK `Telemetry::subscribe_health_all_ok` (true once PX4 reports EKF2 converged, sensors initialized, GPS lock acquired).
+- **`CosysFCLink`** — sets `armable=true` inside the poll loop (SimpleFlight has no preflight).
+- **`SimulatedFCLink`** — mirrors `armable=connected` so unit tests don't stall in PREFLIGHT.
+- **`MissionStateTick::tick_preflight`** — gates ARM on `fc_state.armable` with separate `last_wait_log_time_` so the first ARM fires immediately once `armable` transitions to true.
+
+**Files modified:** `common/hal/include/hal/cosys_fc_link.h`, `ifc_link.h`, `mavlink_fc_link.h`, `simulated_fc_link.h`, `common/ipc/include/ipc/ipc_types.h`, `process4_mission_planner/include/planner/mission_state_tick.h`, `process5_comms/src/main.cpp`, `docs/design/API.md`, `tests/TESTS.md`, `tests/test_mission_state_tick.cpp`
+
+**Why:** Originally surfaced and misdiagnosed as a code-regression bisect in #713 (retracted on that issue). Actual cause was run-to-run boot-timing variance dominated by Gazebo daemon startup, PX4 SITL EKF2 init, and absence of any handshake between companion PREFLIGHT and PX4's preflight gate.
+
+**Cross-run validation:** Cold-start scenario 18 — first run with **0 arming-denied messages** (vs 3–5 historically across 4 prior runs on different commits), single ARM accepted on first try, full mission PASS 19/19, clean RTL → LAND → IDLE.
+
+**Test count:** +4 (`PreflightWaitsWhenFCNotArmable`, `PreflightSendsARMWhenFCBecomesArmable`, `PreflightDoesNotResendArmWithinRetryInterval`, `PreflightHandlesArmableFlicker`). `MissionStateTickTest` 16 → 20.
+
+---
+
+### Improvement #92 — Drop Stale Poses from Previous P3 Session + Clean px4-sock (Issues #720 + #719, PR #721)
+
+**Date:** 2026-05-12
+**Category:** Bug Fix — Mission planner / Test infrastructure
+**Issues:** [#720](https://github.com/nmohamaya/companion_software_stack/issues/720), [#719](https://github.com/nmohamaya/companion_software_stack/issues/719)
+**PR:** [#721](https://github.com/nmohamaya/companion_software_stack/pull/721) (commit `ccfa905`)
+
+**What:**
+
+Two pre-existing latent IPC-state bugs surfaced during multi-run-per-session testing. Neither is a regression on integration — both exist on `main` — but together they made multi-run Gazebo SITL testing unreliable.
+
+- **#720 — Stale pose from previous P3 session triggers `FAULT_POSE_STALE`.** When P4 subscribes to `drone/slam/pose` after a previous P3 session has died, Zenoh's last-value cache can deliver the historic pose as P4's first `pose_sub->receive()` return. FaultManager computes `now_ns - pose.timestamp_ns` against a 25-minute-old pose, raises `FAULT_POSE_STALE`, and the FSM escalates TAKEOFF → LOITER. The existing `pose.timestamp_ns > 0` guard only filters the uninitialised case (`Pose{}` value-init), not the historic-from-dead-publisher case. **Fix:** record `planner_birth_ns` from `steady_clock::now()` at startup before any subscriber is declared; after `pose_sub->receive(pose)` succeeds, drop the pose if `pose.timestamp_ns + kPoseBirthSlackNs < planner_birth_ns` (100 ms slack for the rare case where P3 booted slightly before P4).
+- **#719 — Stale `/tmp/px4-sock-N` causes next PX4 SITL boot to fail.** `tests/run_scenario_gazebo.sh` killed `px4.*sitl` processes but didn't remove `/tmp/px4-sock-N`. When PX4 is SIGKILLed (cleanup fallback), the destructor doesn't run, so the UNIX domain socket leaks. Next PX4 boot detects the socket as "another instance running" and exits return code 2 — launcher hangs on `Waiting for PX4 MAVLink heartbeat...`. **Fix:** add `rm -f /tmp/px4-sock-* 2>/dev/null || true` to both the pre-run cleanup block and the `cleanup_scenario` trap.
+
+**Files modified:** `process4_mission_planner/src/main.cpp`, `tests/run_scenario_gazebo.sh`
+
+**Why:** Provably correct because every P3 backend (Gazebo / Simulated / Cosys) sets `p.timestamp` via `steady_clock`. Reproduced 2026-05-12 15:15:50 with a 25-minute-old pose from a previous run aborting takeoff. Also explains the "scenario 18 works on main but not integration" observation from the #713 bisect — both branches have the bug; the cross-machine comparison wasn't apples-to-apples.
+
+**Test count:** No new tests (full `ctest` 2052/2053 — 1 pre-existing #714 failure unrelated).
+
+---
+
+### Improvement #93 — Add Integration-to-Main Rollup Review Process to DEVELOPMENT_WORKFLOW.md (Issue #723, PR #724)
+
+**Date:** 2026-05-12
+**Category:** Documentation — Development workflow
+**Issue:** [#723](https://github.com/nmohamaya/companion_software_stack/issues/723)
+**PR:** [#724](https://github.com/nmohamaya/companion_software_stack/pull/724) (commit `24869de`)
+
+**What:**
+
+Adds an 8-phase checklist to `docs/guides/DEVELOPMENT_WORKFLOW.md` for reviewing integration branches before merging them into `main`. When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks), the standard single-PR review process is insufficient — combined diff is much larger than any individual PR, and per-PR review misses cross-cutting interactions, doc drift across PROGRESS/ROADMAP/API/TESTS, test-baseline drift, latent per-site-vs-wrapper-level gaps (see #720/#722 example), and compounding performance regression.
+
+| Phase | What it covers |
+|-------|----------------|
+| 1 — Pre-review cleanup | Tests green, docs refreshed |
+| 2 — Scenario sweep on integration HEAD | All Gazebo + Cosys scenarios, capture PASS/FAIL + key metrics |
+| 3 — Themed multi-agent reviews | Split diff into 5–7 chunks, run `/review-pr` on each |
+| 4 — Fix findings | P1 inline, P2 file-or-fix, P3 to IMPROVEMENTS.md |
+| 5 — Open integration→main PR | Title format, required body sections |
+| 6 — Final pre-merge validation | Re-run scenario sweep, ctest, CI |
+| 7 — Merge decision | Default = merge commit (preserves audit trail), not squash |
+| 8 — Post-merge cleanup | Delete branch, remove worktrees, close tracking issue |
+
+Cost estimate: **6–12 hours over 2–3 sessions**, with Phase 2 (scenario sweep) typically the slowest. References #723 as the first worked example (87-commit integration rollup in progress).
+
+**Files modified:** `docs/guides/DEVELOPMENT_WORKFLOW.md`
+
+**Why:** Codifies the lessons from the #723 rollup so future integration→main merges follow a repeatable process with structured agent review chunking and explicit doc-drift checks.
+
+**Test count:** No new tests (docs-only).
+
+---
+
+### Improvement #94 — Update FallbackBehaviourTest for Issue #698 Cached-Path Validation (Issue #714, PR #725)
+
+**Date:** 2026-05-12
+**Category:** Bug Fix — Test correctness
+**Issue:** [#714](https://github.com/nmohamaya/companion_software_stack/issues/714)
+**PR:** [#725](https://github.com/nmohamaya/companion_software_stack/pull/725) (commit `9d9c6e3`)
+
+**What:**
+
+PR #704 (commit `eff1718`, Improvement #87) added Issue #698 cached-path validation in `grid_planner_base.h:382-433`: when D*Lite search fails, the planner walks the remaining cached path and drops it if any cell is now occupied (rather than blindly following an unsafe stale path into newly-promoted obstacles). The existing test `FallbackBehaviourTest.SearchFailureKeepsLastGoodPath` placed an impassable wall **directly on** cached-path cells `(1,0,0)` and `(2,0,0)` and expected the planner to keep following the cached path. Under the post-#704 (safer) behaviour this is correctly no longer true — the planner drops the cache and hovers. The test fails for the right reason, but the test itself is stale.
+
+Two-part fix (per #714):
+
+1. **Move the wall to `y=2..4`** (off the cached path which runs along `y=0`). The cached path remains valid under the new validation, so the test continues to demonstrate the Issue #237 "keep last good path" contract.
+2. **Add `SearchFailureWithBlockedCachedPathHovers`** — new test exercising the Issue #698 safety contract: wall covers the cached path → planner drops cache → emits near-zero XY velocity (hover). Closes the coverage gap (no existing unit test covered the new safety behaviour).
+
+**Files modified:** `tests/test_dstar_lite_planner.cpp`
+
+**Why:** Part of the #723 rollup itself — Phase 1 pre-cleanup. The pre-existing `FallbackBehaviourTest.SearchFailureKeepsLastGoodPath` failure had been flagged in multiple recent PR validations (#707, #717, #721) as "unrelated, not a regression"; this PR clears it before opening the integration→main rollup PR so CI is fully green at merge time.
+
+**Test count:** +1 net (1 modified, 1 added). `ctest -R FallbackBehaviour` 6/6 pass (was 5/6). Full `ctest` 2074/2074 pass (was 2073/2074 with the original failure).
+
+---
+
+*Last updated after Improvement #94 (PR #725). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

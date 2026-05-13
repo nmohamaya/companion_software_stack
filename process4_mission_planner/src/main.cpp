@@ -19,6 +19,8 @@
 #include "util/config_keys.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
+#include "util/latency_profiler.h"
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -29,6 +31,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <optional>
 #include <thread>
 
 using namespace drone::planner;
@@ -64,6 +68,31 @@ int main(int argc, char* argv[]) {
                                                 drone::util::mission_planner_schema());
     if (!ctx_result.is_ok()) return ctx_result.error();
     auto& ctx = ctx_result.value();
+
+    // Issue #720 — subscriber-side stale-message filter for Pose.
+    //
+    // Zenoh's IPC layer can deliver the last-published pose from a previous
+    // P3 session before the fresh publisher emits its first new message
+    // (e.g. on session-restart with a gap > a few seconds).  Treating that
+    // historic pose as fresh causes FaultManager to compute a multi-minute
+    // staleness and raise FAULT_POSE_STALE → LOITER before the drone has
+    // even ascended.  Drop any pose whose publisher timestamp predates this
+    // planner process.
+    //
+    // Provably correct because P3 sets `p.timestamp` via the project
+    // mockable clock (see ivio_backend.h::on_odom + simulated backend +
+    // Cosys backend — all read steady_clock under the hood).  A pose with
+    // `timestamp_ns < planner_birth_ns` cannot have been published by the
+    // current P3 process.  Allow a 100 ms backwards slack for the rare case
+    // where P3 booted slightly before P4 and published its first pose
+    // during P4's MessageBus init.
+    //
+    // Uses `drone::util::get_clock().now_ns()` per the project convention
+    // documented in util/iclock.h:24-37 — keeps the clock domain mockable
+    // for tests and consistent with FaultManager's `now_ns` reads.
+    const uint64_t     planner_birth_ns  = drone::util::get_clock().now_ns();
+    constexpr uint64_t kPoseBirthSlackNs = 100'000'000ULL;  // 100 ms
+    bool               stale_pose_logged = false;
 
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
@@ -205,6 +234,56 @@ int main(int argc, char* argv[]) {
     planner_cfg.require_radar_for_promotion = ctx.cfg.get<bool>(
         drone::cfg_key::mission_planner::occupancy_grid::REQUIRE_RADAR_FOR_PROMOTION,
         planner_cfg.require_radar_for_promotion);
+    // Issue #635 — how many observations a PATH A voxel needs before it
+    // cements as a permanent static cell.  Pre-fix voxels cemented after
+    // ONE observation, creating a permanent wake that walled off return
+    // paths.  New default 3 mirrors the detector-observation promotion
+    // magnitude.
+    planner_cfg.voxel_promotion_hits =
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::VOXEL_PROMOTION_HITS,
+                         planner_cfg.voxel_promotion_hits);
+    // Issue #635 — static-cell TTL (0 = legacy permanent promotion).
+    planner_cfg.static_cell_ttl_s =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::STATIC_CELL_TTL_S,
+                           planner_cfg.static_cell_ttl_s);
+    if (planner_cfg.static_cell_ttl_s > 0.0f) {
+        DRONE_LOG_INFO("[OccGrid] Promoted-cell decay enabled: TTL={:.1f}s "
+                       "(HD-map cells exempt)",
+                       planner_cfg.static_cell_ttl_s);
+    }
+    // Issue #638 Phase 3 — instance-aware voxel promotion gate.  0 = legacy
+    // (every voxel writes to grid), >0 = require N frames of observation per
+    // tracked instance before its voxels reach the grid.
+    {
+        // P2-E from PR #641 review: clamp + WARN.  A negative value
+        // silently disables (gated by `> 0` downstream); a massive value
+        // (e.g. 999) would block all obstacles forever and the drone
+        // would collide.  Cap at a reasonable upper bound (60 frames =
+        // 6 s @ 10 Hz) and warn beyond that.
+        constexpr int kMaxObservationsCap = 60;
+        const int     raw_obs             = ctx.cfg.get<int>(
+            drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INSTANCE_PROMOTION_OBSERVATIONS,
+            planner_cfg.voxel_instance_promotion_observations);
+        int obs = raw_obs;
+        if (obs < 0) {
+            DRONE_LOG_WARN("[OccGrid] instance_promotion_observations {} negative — "
+                           "disabling gate (was attempting silent disable)",
+                           raw_obs);
+            obs = 0;
+        } else if (obs > kMaxObservationsCap) {
+            DRONE_LOG_WARN("[OccGrid] instance_promotion_observations {} above cap {} — "
+                           "tracked instances would never promote and obstacles would "
+                           "never reach the grid; clamping to {}",
+                           raw_obs, kMaxObservationsCap, kMaxObservationsCap);
+            obs = kMaxObservationsCap;
+        }
+        planner_cfg.voxel_instance_promotion_observations = obs;
+        if (planner_cfg.voxel_instance_promotion_observations > 0) {
+            DRONE_LOG_INFO("[OccGrid] Instance-promotion gate enabled: {} frames required per "
+                           "tracked instance before voxels reach the grid (#638 Phase 3)",
+                           planner_cfg.voxel_instance_promotion_observations);
+        }
+    }
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,
@@ -222,11 +301,22 @@ int main(int argc, char* argv[]) {
     planner_cfg.yaw_smoothing_rate =
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::YAW_SMOOTHING_RATE,
                            planner_cfg.yaw_smoothing_rate);
+    planner_cfg.yaw_towards_velocity =
+        ctx.cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::YAW_TOWARDS_VELOCITY,
+                          planner_cfg.yaw_towards_velocity);
+    planner_cfg.yaw_velocity_threshold_mps = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::YAW_VELOCITY_THRESHOLD_MPS,
+        planner_cfg.yaw_velocity_threshold_mps);
     planner_cfg.snap_approach_bias =
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS,
                            planner_cfg.snap_approach_bias);
 
-    auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
+    auto planner_result = drone::planner::create_path_planner(planner_backend, planner_cfg);
+    if (planner_result.is_err()) {
+        DRONE_LOG_ERROR("[P4] {}", planner_result.error().message());
+        return EXIT_FAILURE;
+    }
+    auto path_planner = std::move(planner_result).value();
     DRONE_LOG_INFO("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
 
@@ -236,8 +326,13 @@ int main(int argc, char* argv[]) {
 
     auto avoider_backend = ctx.cfg.get<std::string>(
         drone::cfg_key::mission_planner::obstacle_avoider::BACKEND, "potential_field");
-    auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
-                                                           repulsive_gain, &ctx.cfg);
+    auto avoider_result = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
+                                                                  repulsive_gain, &ctx.cfg);
+    if (avoider_result.is_err()) {
+        DRONE_LOG_ERROR("[P4] {}", avoider_result.error().message());
+        return EXIT_FAILURE;
+    }
+    auto avoider = std::move(avoider_result).value();
     DRONE_LOG_INFO("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
@@ -352,6 +447,174 @@ int main(int argc, char* argv[]) {
     // ── Create fault manager (config-driven thresholds) ────
     FaultManager fault_mgr(ctx.cfg);
 
+    // ── PATH A voxel subscriber (Epic #520 / Issue #608) ──
+    // Gated on mission_planner.occupancy_grid.voxel_input.enabled; polled
+    // each planning tick alongside the detected-objects stream.  Stays on
+    // the main thread so P4's "single-threaded planner" invariant holds.
+    const bool voxel_input_enabled = ctx.cfg.get<bool>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_ENABLED, false);
+    const float voxel_input_clamp_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_POSITION_CLAMP_M, 1000.0f);
+    float voxel_input_min_confidence = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_MIN_CONFIDENCE, 0.3f);
+    // PR #660 P2 review: clamp voxel_input.min_confidence to [0, 1].
+    // Out-of-range values silently DoS the grid: a value > 1.0 fails the
+    // `confidence < min_confidence` gate at occupancy_grid_3d.h for every
+    // voxel, leaving the static grid permanently empty so the drone flies
+    // through obstacles with no repulsive field.  A negative value
+    // disables filtering entirely.  SemanticVoxel::validate() already
+    // clamps wire-format confidence to [0, 1], so the only path for an
+    // out-of-range filter threshold is config tampering / typos.
+    if (!std::isfinite(voxel_input_min_confidence) || voxel_input_min_confidence < 0.0f ||
+        voxel_input_min_confidence > 1.0f) {
+        const float raw            = voxel_input_min_confidence;
+        voxel_input_min_confidence = std::clamp(std::isfinite(raw) ? raw : 0.0f, 0.0f, 1.0f);
+        DRONE_LOG_WARN("[VoxelSub] voxel_input.min_confidence {:.2f} outside [0, 1] — "
+                       "clamping to {:.2f}.  >1.0 would drop all voxels (silent DoS); "
+                       "<0.0 disables filter; NaN treated as 0.",
+                       raw, voxel_input_min_confidence);
+    }
+    // P2-F from PR #641 review: warn on the silent-misconfig trap where
+    // an operator enables the instance gate but forgets to subscribe to
+    // /semantic_voxels.  The gate is configured but no batches arrive,
+    // so it never trips — looks like the gate is "off" when it isn't.
+    if (planner_cfg.voxel_instance_promotion_observations > 0 && !voxel_input_enabled) {
+        DRONE_LOG_WARN("[VoxelSub] instance_promotion_observations={} configured but "
+                       "voxel_input.enabled=false — gate is inert (no /semantic_voxels "
+                       "subscriber).  Either set voxel_input.enabled=true or set "
+                       "instance_promotion_observations=0",
+                       planner_cfg.voxel_instance_promotion_observations);
+    }
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::SemanticVoxelBatch>> voxel_sub;
+    if (voxel_input_enabled) {
+        if (grid_planner == nullptr) {
+            DRONE_LOG_ERROR(
+                "[VoxelSub] voxel_input.enabled=true but path planner is not grid-based "
+                "— voxel input disabled");
+        } else {
+            voxel_sub = ctx.bus.subscribe<drone::ipc::SemanticVoxelBatch>(
+                drone::ipc::topics::SEMANTIC_VOXELS);
+            // Suppress detector-path static promotion while voxel input is active.
+            // Otherwise `update_from_objects()` + `color_contour + depth` flood
+            // the static layer with ghost cells faster than the mask-aware PATH A
+            // voxels can make an impact on the repulsive field (uncovered during
+            // scenario-33 end-to-end testing — 1286 promoted cells, mostly false
+            // positives, dominated the avoider over 5 real wall cells).  The
+            // dynamic TTL layer keeps populating, so reactive avoidance of
+            // moving objects still works.
+            grid_planner->set_promotion_paused(true);
+            // Issue #645 — radar-confirmed bypass.  When enabled, radar-
+            // confirmed tracks promote into the static layer even with the
+            // pause active.  Lets the strategic path planner see radar-
+            // detected obstacles (otherwise only ObstacleAvoider3D's reactive
+            // path knows about them via DetectedObjectList).
+            const bool allow_radar_promotion = ctx.cfg.get<bool>(
+                "mission_planner.occupancy_grid.voxel_input.allow_radar_promotion", false);
+            grid_planner->set_allow_radar_promotion_when_paused(allow_radar_promotion);
+            DRONE_LOG_INFO("[VoxelSub] Subscribed to {} (clamp={:.0f} m, min_conf={:.2f}); "
+                           "detector-path static promotion PAUSED — PATH A is sole static-cell "
+                           "source while voxel_input is enabled (radar bypass: {})",
+                           drone::ipc::topics::SEMANTIC_VOXELS, voxel_input_clamp_m,
+                           voxel_input_min_confidence, allow_radar_promotion ? "ON" : "OFF");
+        }
+    }
+
+    // ── Issue #698 Fix #1 — cross-modal veto wiring (ADR-013 §2 item 4) ─
+    // Gate is constructed unconditionally so it can be tested by ops via
+    // config flips, but the gate pointer passed into insert_voxels is null
+    // unless `cross_veto.enabled = true`.  Without that flag everything
+    // continues to work exactly as before.
+    const bool cross_veto_enabled = ctx.cfg.get<bool>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::ENABLED, false);
+
+    drone::planner::RadarFovConfig fov_cfg;
+    fov_cfg.fov_azimuth_rad =
+        ctx.cfg.get<float>(std::string(drone::cfg_key::perception::radar::SECTION) +
+                               drone::cfg_key::hal::FOV_AZIMUTH_RAD,
+                           fov_cfg.fov_azimuth_rad);
+    fov_cfg.fov_elevation_rad =
+        ctx.cfg.get<float>(std::string(drone::cfg_key::perception::radar::SECTION) +
+                               drone::cfg_key::hal::FOV_ELEVATION_RAD,
+                           fov_cfg.fov_elevation_rad);
+    fov_cfg.min_range_m = ctx.cfg.get<float>(
+        std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MIN_RANGE_M,
+        fov_cfg.min_range_m);
+    fov_cfg.max_range_m = ctx.cfg.get<float>(
+        std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MAX_RANGE_M,
+        fov_cfg.max_range_m);
+
+    drone::planner::CrossVetoPolicy veto_policy;
+    veto_policy.short_range_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::SHORT_RANGE_M,
+        veto_policy.short_range_m);
+    {
+        const auto staleness_ms = ctx.cfg.get<int>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::RADAR_MAX_STALENESS_MS,
+            100);
+        veto_policy.radar_max_staleness_ns = static_cast<uint64_t>(std::max(0, staleness_ms)) *
+                                             1'000'000ULL;
+    }
+    veto_policy.min_gate_radius_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::GATE_MIN_RADIUS_M,
+        veto_policy.min_gate_radius_m);
+    {
+        const auto residency_s = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::FOV_RESIDENCY_PROMOTE_S,
+            2.0f);
+        veto_policy.fov_residency_promote_ns =
+            static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
+    }
+    {
+        const auto cap_s = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::DYNAMIC_AGE_CAP_S, 30.0f);
+        veto_policy.dynamic_age_cap_ns = static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
+    }
+
+    drone::planner::RadarFovGate radar_fov_gate(fov_cfg, veto_policy);
+
+    // Subscribe to /radar_detections so the gate can answer
+    // "is there a radar return near this cell" inside insert_voxels().
+    // Only subscribe when cross_veto.enabled — disabled scenarios should
+    // not pay the per-tick drain cost of a feature that is inactive.
+    // (Copilot review flagged the unconditional subscription on PR #704.)
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>> radar_dets_sub;
+    bool radar_sub_failed = false;
+    if (cross_veto_enabled) {
+        radar_dets_sub =
+            ctx.bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
+        if (!radar_dets_sub) {
+            // Without a radar subscription the gate's `radar_initialized_`
+            // stays false forever, every distant voxel promotion defers,
+            // and the cross-veto gate is silently disabled.  Promote to
+            // ERROR (instead of WARN) so the operator log surfaces the
+            // failure during startup-review, and OR the radar-loss fault
+            // bit into `status.active_faults` each planner tick below
+            // so P7 / GCS see the cross-veto gate is operating blind.
+            radar_sub_failed = true;
+            DRONE_LOG_ERROR(
+                "[CrossVeto] /radar_detections subscription FAILED — gate disabled, all "
+                "distant PATH A promotions will defer.  Setting FAULT_PERCEPTION_DEAD on "
+                "every planner tick so operator + GCS see the degraded state.  Check IPC "
+                "bus and radar publisher health.");
+        }
+    }
+
+    if (cross_veto_enabled) {
+        DRONE_LOG_INFO("[CrossVeto] ENABLED — short_range={:.1f}m, gate_min_r={:.2f}m, "
+                       "radar_staleness_ms={}, fov_residency_s={:.2f}, dynamic_age_cap_s={:.1f}; "
+                       "radar FOV ±{:.1f}°×±{:.1f}° range=[{:.1f},{:.1f}]m",
+                       veto_policy.short_range_m, veto_policy.min_gate_radius_m,
+                       veto_policy.radar_max_staleness_ns / 1'000'000ULL,
+                       veto_policy.fov_residency_promote_ns / 1.0e9,
+                       veto_policy.dynamic_age_cap_ns / 1.0e9,
+                       fov_cfg.fov_azimuth_rad * 180.0f / static_cast<float>(M_PI),
+                       fov_cfg.fov_elevation_rad * 180.0f / static_cast<float>(M_PI),
+                       fov_cfg.min_range_m, fov_cfg.max_range_m);
+    } else {
+        DRONE_LOG_INFO("[CrossVeto] disabled (cross_veto.enabled=false) — PATH A promotes "
+                       "unconditionally (legacy behaviour)");
+    }
+
     DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
 
@@ -363,6 +626,22 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
                                                         watchdog);
     uint32_t                           health_tick = 0;
+
+    // ── Optional benchmark profiler (Epic #523, Issue #571) ──
+    // Opt-in via `benchmark.profiler.enabled`. When active, captures per-tick
+    // latency for PlannerLoop / GeofenceCheck / FaultEval and dumps to JSON
+    // on shutdown. See DR-022 for the priority-inversion analysis permitting
+    // the mutex-protected record path on this flight-critical thread.
+    const bool benchmark_profiler_enabled =
+        ctx.cfg.get<bool>(drone::cfg_key::benchmark::PROFILER_ENABLED, false);
+    std::optional<drone::util::LatencyProfiler> benchmark_profiler;
+    if (benchmark_profiler_enabled) {
+        benchmark_profiler.emplace();
+        DRONE_LOG_INFO("[Benchmark] LatencyProfiler enabled — stages: PlannerLoop, GeofenceCheck, "
+                       "FaultEval");
+    }
+    drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
+                                                                    : nullptr;
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Execution order contract:
@@ -376,15 +655,164 @@ int main(int argc, char* argv[]) {
     while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
         drone::systemd::notify_watchdog();
-        drone::util::FrameDiagnostics diag(loop_tick);
-        drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
+        drone::util::FrameDiagnostics             diag(loop_tick);
+        drone::util::ScopedDiagTimer              loop_timer(diag, "PlannerLoop");
+        std::optional<drone::util::ScopedLatency> bench_loop;
+        // DR-022: profiler mutex is safe here — single-threaded planner loop
+        // at 10 Hz, mutex hold-time <100ns vs multi-ms tick work, opt-in only.
+        if (profiler_ptr) bench_loop.emplace(*profiler_ptr, "PlannerLoop");
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
-        pose_sub->receive(pose);
+        bool             got_pose = pose_sub->receive(pose);
+        // Issue #720 — drop poses published before this planner process
+        // started.  Zenoh's last-value cache can deliver a stale pose from
+        // a previous P3 session before the fresh publisher emits its first
+        // message; treating it as fresh would let FaultManager compute a
+        // multi-minute staleness and escalate to LOITER mid-takeoff.  See
+        // `planner_birth_ns` declaration for the full rationale.
+        //
+        // PR #721 Copilot review — overflow-safe subtraction form: avoids
+        // the uint64_t addition `timestamp_ns + slack` which could wrap
+        // for `timestamp_ns` near UINT64_MAX.  The guarded subtraction
+        // `(planner_birth_ns - pose.timestamp_ns)` only runs when
+        // `pose.timestamp_ns < planner_birth_ns`, so the subtraction
+        // is well-defined.
+        if (got_pose && pose.timestamp_ns > 0 && pose.timestamp_ns < planner_birth_ns &&
+            (planner_birth_ns - pose.timestamp_ns) > kPoseBirthSlackNs) {
+            if (!stale_pose_logged) {
+                DRONE_LOG_WARN("[Planner] Discarded stale pose from previous publisher "
+                               "session (age vs planner_start: {} ms) — waiting for fresh "
+                               "pose from current P3 SLAM/VIO (Issue #720)",
+                               (planner_birth_ns - pose.timestamp_ns) / 1'000'000ULL);
+                stale_pose_logged = true;
+            }
+            got_pose = false;
+            pose     = drone::ipc::Pose{};  // clear so downstream sees no-pose-this-tick
+        }
+        if (got_pose) {
+            // Issue #698 Fix #1 — keep the cross-veto gate's pose cache fresh.
+            // Cheap (vector + quaternion conjugate); safe to call every tick
+            // even if the gate is disabled (the gate just stores the pose).
+            radar_fov_gate.set_pose(pose);
+        }
 
         drone::ipc::DetectedObjectList objects{};
         obj_sub->receive(objects);
+
+        // ── 1a. Drain /radar_detections so the cross-veto gate's cache is
+        // current before insert_voxels() queries it.  Issue #698 Fix #1.
+        // We keep only the latest message — the gate doesn't need history.
+        if (radar_dets_sub) {
+            drone::ipc::RadarDetectionList latest_radar{};
+            bool                           got_any_radar = false;
+            for (int i = 0; i < 16; ++i) {  // bounded drain — single tick budget
+                drone::ipc::RadarDetectionList next{};
+                if (!radar_dets_sub->receive(next)) break;
+                latest_radar  = next;
+                got_any_radar = true;
+            }
+            if (got_any_radar) {
+                const auto now_ns =
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count());
+                radar_fov_gate.set_radar_detections(latest_radar, now_ns);
+            }
+        }
+
+        // ── 1b. Drain PATH A voxel batches (Epic #520 / Issue #608) ──
+        // Polled on the planner thread to preserve P4's single-threaded
+        // invariant.  Each batch is validated, clamped, and inserted into
+        // the occupancy grid's static layer.  Non-empty inserts invalidate
+        // the cached path via the GridPlannerBase::insert_voxels hook.
+        if (voxel_sub && grid_planner) {
+            uint32_t batches_drained        = 0;
+            uint32_t inserted_total         = 0;
+            uint32_t dropped_total          = 0;
+            uint32_t instance_skipped_total = 0;  // Phase 3 gate rejections
+            uint32_t voxels_with_instance   = 0;  // count of voxels carrying instance_id != 0
+            uint32_t voxels_total           = 0;
+            for (;;) {
+                drone::ipc::SemanticVoxelBatch batch{};
+                if (!voxel_sub->receive(batch)) break;
+                if (!batch.validate()) {
+                    DRONE_LOG_WARN("[VoxelSub] rejected malformed batch (num_voxels={})",
+                                   batch.num_voxels);
+                    continue;
+                }
+                // Issue #638 Phase 4 P3 from PR #642 review: detect the
+                // binary-version-mismatch trap.  If the gate is enabled
+                // (Phase 3 binary loaded) but all incoming voxels carry
+                // `instance_id == 0` (producer is Phase-pre-#639 binary,
+                // didn't run the clusterer/tracker), every voxel is
+                // rejected as noise and the grid stays empty silently.
+                voxels_total += batch.num_voxels;
+                for (uint32_t i = 0; i < batch.num_voxels; ++i) {
+                    if (batch.voxels[i].instance_id != 0) ++voxels_with_instance;
+                }
+                // Issue #698 Fix #1 — when cross_veto is enabled, pass the
+                // gate so insert_voxels can apply the ADR-013 §2 item 4
+                // promotion rule.  The gate carries its own cached pose
+                // from the most recent set_pose() call (line 624 above), so
+                // we do NOT gate on `got_pose` — that bug intermittently
+                // disabled the veto whenever a tick happened to miss a
+                // pose message (Copilot review on PR #704).
+                drone::planner::RadarFovGate* gate_for_veto = cross_veto_enabled ? &radar_fov_gate
+                                                                                 : nullptr;
+                auto stats = grid_planner->insert_voxels(batch.voxels, batch.num_voxels,
+                                                         voxel_input_clamp_m,
+                                                         voxel_input_min_confidence, gate_for_veto);
+                inserted_total += static_cast<uint32_t>(stats.inserted);
+                dropped_total += static_cast<uint32_t>(
+                    stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);
+                instance_skipped_total += static_cast<uint32_t>(stats.instance_skipped);
+                ++batches_drained;
+                // Hard cap on drain iterations per tick — a runaway publisher
+                // must not starve the planning loop.
+                if (batches_drained >= 10) break;
+            }
+            // Phase 4 P3: one-shot binary-version-mismatch self-check.
+            // First time the gate is active and we've seen ≥ 100 voxels
+            // total but ZERO carry an instance_id, log a one-time fatal
+            // configuration warning — operators don't have to wait for
+            // the throttled rejection log to figure out why the drone
+            // isn't seeing obstacles.
+            static bool version_mismatch_warned = false;
+            if (planner_cfg.voxel_instance_promotion_observations > 0 && !version_mismatch_warned &&
+                voxels_total >= 100 && voxels_with_instance == 0) {
+                DRONE_LOG_ERROR(
+                    "[VoxelSub] Binary version mismatch: instance gate is enabled "
+                    "(instance_promotion_observations={}) but all {} received voxels carry "
+                    "instance_id=0.  P2 likely runs a pre-#639 binary that doesn't run the "
+                    "clusterer/tracker — every voxel is being rejected as noise and the grid "
+                    "will stay empty.  Either rebuild + redeploy P2, or set "
+                    "instance_promotion_observations=0 to fall back to per-cell promotion.",
+                    planner_cfg.voxel_instance_promotion_observations, voxels_total);
+                version_mismatch_warned = true;
+            }
+            if (batches_drained > 0) {
+                DRONE_LOG_INFO("[VoxelSub] tick={} batches={} inserted={} dropped={} "
+                               "instance_skipped={}",
+                               loop_tick, batches_drained, inserted_total, dropped_total,
+                               instance_skipped_total);
+                // Issue #638 P1-A from PR #641 review: when the instance
+                // gate is rejecting all voxels (publisher alive, gate
+                // suppressing every batch), the failure mode looks
+                // identical to a dead publisher (`inserted=0 dropped=0`).
+                // Surface it explicitly so an operator can distinguish
+                // gate-misconfig from sensor silence.  Throttled to
+                // every 10 ticks (~1 s at 10 Hz) to avoid log floods.
+                if (instance_skipped_total > 0 && inserted_total == 0 && (loop_tick % 10) == 0) {
+                    DRONE_LOG_WARN("[VoxelSub] instance gate rejecting all voxels "
+                                   "({} skipped this tick) — check perception.path_a.cluster + "
+                                   "tracker config and "
+                                   "mission_planner.occupancy_grid.voxel_input.instance_promotion_"
+                                   "observations",
+                                   instance_skipped_total);
+                }
+            }
+        }
 
         drone::ipc::FCState fc_state{};
         if (fc_state_sub->is_connected()) {
@@ -424,7 +852,9 @@ int main(int argc, char* argv[]) {
 
         // ── 4. Geofence check (airborne only, skip TAKEOFF) ─
         {
-            drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
+            drone::util::ScopedDiagTimer              fence_timer(diag, "GeofenceCheck");
+            std::optional<drone::util::ScopedLatency> bench_fence;
+            if (profiler_ptr) bench_fence.emplace(*profiler_ptr, "GeofenceCheck");
             if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
                 fsm.state() != MissionState::PREFLIGHT && fsm.state() != MissionState::TAKEOFF) {
                 auto fence_result = geofence.check(static_cast<float>(pose.translation[0]),
@@ -448,7 +878,9 @@ int main(int argc, char* argv[]) {
 
         // ── 5. Fault evaluate ───────────────────────────────
         auto fault = [&]() {
-            drone::util::ScopedDiagTimer t(diag, "FaultEval");
+            drone::util::ScopedDiagTimer              t(diag, "FaultEval");
+            std::optional<drone::util::ScopedLatency> bench_fault;
+            if (profiler_ptr) bench_fault.emplace(*profiler_ptr, "FaultEval");
             return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns,
                                       pose.quality);
         }();
@@ -465,6 +897,20 @@ int main(int argc, char* argv[]) {
         state_tick.tick(fsm, pose, fc_state, objects, *path_planner, grid_planner, *avoider,
                         obstacle_layer, *traj_pub, *payload_pub, send_fc,
                         gcs_handler.active_correlation_id(), diag);
+
+        // ── 8a. Issue #698 Fix #1 — advance per-cell FOV-residency ─
+        // counters so cells outside the radar FOV with no return get a
+        // chance to age into the single-modality-promote escape hatch.
+        // Cheap (O(N) over dynamic cells, ~80 µs at scenario-33 worst case).
+        // Only runs when cross_veto is enabled — disabled grid pays nothing.
+        if (cross_veto_enabled && grid_planner) {
+            const auto now_ns =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+            radar_fov_gate.tick_residency(grid_planner->grid_dynamic_cell_keys(),
+                                          grid_planner->grid_resolution_m(), now_ns);
+        }
 
         // Handle fault reset on landing
         if (state_tick.consume_fault_reset()) {
@@ -493,6 +939,13 @@ int main(int argc, char* argv[]) {
         if (state_tick.flight_state().stuck_fault_active) {
             status.active_faults |= drone::ipc::FaultType::FAULT_STUCK;
         }
+        // Cross-veto gate operating blind because /radar_detections never
+        // came up: surface as FAULT_PERCEPTION_DEAD so the system-health
+        // monitor + GCS see the degraded state instead of treating the
+        // run as nominal while every distant voxel defers.
+        if (radar_sub_failed) {
+            status.active_faults |= drone::ipc::FaultType::FAULT_PERCEPTION_DEAD;
+        }
         status.fault_action = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);
 
@@ -515,6 +968,26 @@ int main(int argc, char* argv[]) {
 
         ++loop_tick;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
+    }
+
+    // ── Benchmark profiler JSON dump (Issue #571 wiring) ──────
+    // Dump before notify_stopping() so the I/O is under the active-state
+    // watchdog and any failure is logged at ERROR (not a shutdown-window
+    // WARN). P4 is single-threaded so the loop exit above is enough to
+    // guarantee the profiler's mutex is uncontended. DR-022 covers the
+    // flight-critical analysis.
+    if (benchmark_profiler) {
+        const std::string output_dir = ctx.cfg.get<std::string>(
+            drone::cfg_key::benchmark::PROFILER_OUTPUT_DIR, "drone_logs/benchmark");
+        const std::filesystem::path path = std::filesystem::path(output_dir) /
+                                           "latency_mission_planner.json";
+        const auto status = benchmark_profiler->dump_to_file(path);
+        if (status == drone::util::LatencyProfiler::DumpStatus::Ok) {
+            DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path.string());
+        } else {
+            DRONE_LOG_ERROR("[Benchmark] Profiler dump FAILED for {}: {}", path.string(),
+                            drone::util::LatencyProfiler::describe(status));
+        }
     }
 
     drone::systemd::notify_stopping();

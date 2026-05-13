@@ -133,6 +133,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/drone_mission_cam` | `drone/video/frame` |
 | `/drone_stereo_cam` | `drone/video/stereo_frame` |
 | `/detected_objects` | `drone/perception/detections` |
+| `/semantic_voxels` | `drone/perception/voxels` |
 | `/slam_pose` | `drone/slam/pose` |
 | `/mission_status` | `drone/mission/status` |
 | `/trajectory_cmd` | `drone/mission/trajectory` |
@@ -393,6 +394,7 @@ Classification label for detected objects.
 | 5 | `ANIMAL` |
 | 6 | `BUILDING` |
 | 7 | `TREE` |
+| 8 | `GEOMETRIC_OBSTACLE` |
 
 ### `DetectedObjectList`
 
@@ -412,6 +414,46 @@ struct DetectedObjectList {
 **Topic:** `/detected_objects` to Zenoh key `drone/perception/detections`
 **Publisher:** P2 (perception)
 **Subscribers:** P4 (mission planner)
+
+### `SemanticVoxel` / `SemanticVoxelBatch`
+
+Output of the PATH A pipeline (Epic #520): mask-aware back-projection of SAM masks through
+depth into world-frame voxels. Each voxel is already confidence-scored and class-labelled
+by `MaskClassAssigner`, so the planner can insert into the occupancy grid without the
+`promotion_hits` filter required by the detector-driven path.
+
+```cpp
+struct SemanticVoxel {
+    float       position_x, position_y, position_z;  // world frame (m)
+    float       occupancy;                           // [0, 1]
+    float       confidence;                          // [0, 1]
+    ObjectClass semantic_label;                      // from MaskClassAssigner
+    uint8_t     _pad_label[3];
+    uint64_t    timestamp_ns;                        // source-frame capture time
+    uint32_t    instance_id;                         // Issue #638 Phase 1 — per-frame cluster ID (0=noise)
+    uint32_t    _pad_instance;                       // 8-byte struct alignment
+};
+
+constexpr uint32_t MAX_VOXELS_PER_BATCH = 1024;
+
+struct alignas(64) SemanticVoxelBatch {
+    uint64_t      timestamp_ns;     // batch emission time
+    uint64_t      frame_sequence;   // source video-frame sequence
+    uint32_t      num_voxels;
+    uint32_t      _pad_hdr;
+    SemanticVoxel voxels[MAX_VOXELS_PER_BATCH];
+};
+```
+
+**Topic:** `/semantic_voxels` to Zenoh key `drone/perception/voxels`
+**Publisher:** P2 (perception, PATH A — added in PR wiring E5.INT / Issue #608)
+**Subscribers:** P4 (mission planner — occupancy-grid writer, added in PR 3)
+**Wire size:** `sizeof(SemanticVoxel) = 40 B`, `sizeof(SemanticVoxelBatch) = 41024 B` (~40 KB). Header is 24 B (incl. 4 B `_pad_hdr`); voxel array is 1024 × 40 B = 40960 B; total before `alignas(64)` is 40984 B which the alignment rounds up to 41024 B. The struct grew from 32 B to 40 B per voxel in PR #639 (Issue #638 Phase 1) when `instance_id` + 4-byte trailing pad were added — wire-size assert in `ipc_types.h` enforces this. One Zenoh SHM packet.
+**Trivially copyable / standard layout:** yes — `static_assert`ed in `ipc_types.h`, along with per-field `offsetof` and `sizeof` guards that catch silent field reorder / resize at compile time.
+**Alignment:** `alignas(64)` — matches `Pose` / `FaultOverrides` precedent so the 24 B header is cache-line-isolated from the voxel array on the subscriber side.
+
+Coexists with `/detected_objects` for backwards compatibility: scenarios that keep the
+detector-only path unchanged see no new traffic on this channel.
 
 ### `MissionState` (enum)
 
@@ -545,6 +587,7 @@ Flight controller telemetry (P5 to P4, P7).
 | `flight_mode` | `uint8_t` | FC flight mode |
 | `armed` | `bool` | True if armed |
 | `connected` | `bool` | True if FC link active |
+| `armable` | `bool` | True once FC reports preflight checks passed (Issue #716). MAVSDK: `Telemetry::health_all_ok` (EKF2 converged + sensors initialized + GPS lock). Cosys/Simulated: true once connected (SimpleFlight has no real preflight check). P4 `mission_planner::tick_preflight` gates the ARM command on this flag to avoid racing PX4's EKF2 init on cold-start Gazebo SITL boots. |
 | `gps_fix_type` | `uint8_t` | GPS fix type |
 | `satellites_visible` | `uint8_t` | GPS satellite count |
 
@@ -824,11 +867,20 @@ struct ServiceResponse {
 | `SimulatedVIOBackend` | Target-following dynamics + feature extraction + stereo matching + IMU pre-integration |
 | `GazeboVIOBackend` | Ground-truth odometry via gz-transport (HAVE_GAZEBO) |
 | `GazeboFullVIOBackend` | Full VIO pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO) |
+| `CosysVIOBackend` | Cosys-AirSim ground-truth kinematics via RPC (HAVE_COSYS_AIRSIM) |
 
-**Factory:** `create_vio_backend(backend)` — backends: `"simulated"`, `"gazebo"`, `"gazebo_full_vio"`
+**Factory:** `[[nodiscard]] create_vio_backend(backend)` — returns
+`VIOResult<std::unique_ptr<IVIOBackend>>` (PR #704: was `unique_ptr` +
+exception, now Result-based; library code never throws).  Backends:
+`"simulated"`, `"gazebo"`, `"gazebo_full_vio"`, `"cosys_airsim"`.
 
 ```cpp
-auto vio = create_vio_backend("simulated");
+auto vio_result = create_vio_backend("simulated");
+if (vio_result.is_err()) {
+    DRONE_LOG_ERROR("VIO init: {}", vio_result.error().message);
+    return 1;
+}
+auto vio = std::move(vio_result.value());
 auto result = vio->process_frame(stereo_frame, imu_samples);
 ```
 
@@ -970,6 +1022,10 @@ Radar sensor interface. Returns a `RadarDetectionList` each call to `read()`. De
 | Key | Class | Notes |
 | --- | ----- | ----- |
 | `"simulated"` | `SimulatedRadar` | Configurable FoV, range, target count, and Gaussian noise model. |
+| `"gazebo"` | `GazeboRadarBackend` | gpu_lidar HAL → radar emulation (Gazebo SITL). |
+| `"cosys_airsim"` | `CosysRadarBackend` | Lidar-emulated radar (deprecated; prefer `cosys_echo`). |
+| `"cosys_airsim_groundtruth"` | `CosysGroundTruthRadarBackend` | Ground-truth via `simListInstanceSegmentationPoses` — one detection per visible obstacle, no clutter. Validation oracle. |
+| `"cosys_echo"` | `CosysEchoBackend` | Cosys-Lab Echo sensor (sensor type 7) — physical FMCW radar simulator with multipath + attenuation. |
 
 **Config section:** `perception.radar`
 

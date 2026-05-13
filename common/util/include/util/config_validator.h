@@ -17,6 +17,7 @@
 #pragma once
 #include "util/config.h"
 #include "util/config_keys.h"
+#include "util/per_class_config.h"
 #include "util/result.h"
 
 #include <cmath>
@@ -227,6 +228,16 @@ public:
         return *this;
     }
 
+    /// Validate a per-class config section for unknown class names (Epic #519).
+    ConfigSchema& per_class_section(const std::string& key) {
+        auto k = key;
+        extra_rules_.emplace_back([k](const Config& cfg, std::vector<std::string>& errors) {
+            auto section_errors = validate_per_class_section(cfg, k);
+            errors.insert(errors.end(), section_errors.begin(), section_errors.end());
+        });
+        return *this;
+    }
+
     /// Build all rules into a flat list.
     [[nodiscard]] std::vector<ValidationRule> build() const {
         std::vector<ValidationRule> rules;
@@ -335,6 +346,8 @@ inline ConfigSchema perception_schema() {
     s.optional<int>(cfg_key::perception::radar::UPDATE_RATE_HZ).range(1, 1000);
     // Fusion
     s.optional<int>(cfg_key::perception::fusion::RATE_HZ).range(1, 1000);
+    // Per-class motion model section (Epic #519)
+    s.per_class_section(cfg_key::perception::tracker::PER_CLASS_MOTION_MODEL);
     return s;
 }
 
@@ -398,6 +411,13 @@ inline ConfigSchema mission_planner_schema() {
     s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE_BYPASS_HYSTERESIS_M)
         .range(0.0, 10.0);
     s.optional<bool>(cfg_key::mission_planner::obstacle_avoidance::LOG_CORRECTIONS);
+    // Per-class obstacle avoidance sections (Epic #519)
+    namespace oa = cfg_key::mission_planner::obstacle_avoidance;
+    s.per_class_section(oa::PER_CLASS_INFLUENCE_RADIUS_M);
+    s.per_class_section(oa::PER_CLASS_REPULSIVE_GAIN);
+    s.per_class_section(oa::PER_CLASS_MIN_DISTANCE_M);
+    s.per_class_section(oa::PER_CLASS_PREDICTION_DT_S);
+    s.per_class_section(oa::PER_CLASS_MIN_CONFIDENCE);
     // Geofence
     s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M).range(-1000.0, 10000.0);
     s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M).range(0.0, 10000.0);

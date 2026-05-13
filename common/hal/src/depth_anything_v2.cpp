@@ -21,9 +21,63 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const drone::Config& cfg,
                                                   "models/depth_anything_v2_vits.onnx");
     input_size_            = cfg.get<int>(section + ".input_size", 518);
     max_depth_m_           = cfg.get<float>(section + ".max_depth_m", 20.0f);
+    // Lower metric bound — closest reportable obstacle (PR #620 code-quality
+    // review).  `max_depth_m_` was configurable but `min_depth_m_` was hardcoded
+    // at 0.1 — asymmetric.  Operators tuning tight indoor flights may want a
+    // narrower floor; symmetric tunability closes the gap.
+    namespace dav2 = drone::cfg_key::perception::depth_estimator::dav2;
+    min_depth_m_   = cfg.get<float>(dav2::MIN_DEPTH_M, 0.1f);
 
-    DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}", input_size_,
-                   max_depth_m_);
+    // Calibration (Issue #616) — all default-off; per-frame path is still used
+    // unless all refs + coefs are explicitly provided.
+    calibration_enabled_ = cfg.get<bool>(dav2::CALIBRATION_ENABLED, false);
+    raw_min_ref_         = cfg.get<float>(dav2::RAW_MIN_REF, raw_min_ref_);
+    raw_max_ref_         = cfg.get<float>(dav2::RAW_MAX_REF, raw_max_ref_);
+    calibration_coef_a_  = cfg.get<float>(dav2::CALIBRATION_COEF_A, calibration_coef_a_);
+    calibration_coef_b_  = cfg.get<float>(dav2::CALIBRATION_COEF_B, calibration_coef_b_);
+
+    // Safety-check the calibration inputs.  If enabled but refs are invalid,
+    // fall back to per-frame normalisation rather than silently producing
+    // garbage metres.
+    if (calibration_enabled_) {
+        const bool refs_valid = std::isfinite(raw_min_ref_) && std::isfinite(raw_max_ref_) &&
+                                raw_max_ref_ > raw_min_ref_;
+        if (!refs_valid) {
+            DRONE_LOG_WARN("[DepthAnythingV2] calibration_enabled=true but raw_min_ref={:.3f} / "
+                           "raw_max_ref={:.3f} invalid — falling back to per-frame normalisation.",
+                           raw_min_ref_, raw_max_ref_);
+            calibration_enabled_ = false;
+        }
+    }
+
+    // CUDA inference (Issue #626) — engage only when the config opts in.
+    // Silently ignored in every scenario before this PR.  Set via
+    // `perception.depth_estimator.use_cuda`.
+    // PR #631 P2 review: use the canonical config-key constant rather
+    // than `section + ".use_cuda"` string concatenation.  The
+    // constant is fully qualified (matches the documented key), so
+    // bypassing the section param keeps caller and constant in sync
+    // — a future rename of either side surfaces as a build error
+    // instead of a silently-different runtime key.
+    use_cuda_ = cfg.get<bool>(drone::cfg_key::perception::depth_estimator::USE_CUDA, false);
+
+    DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}, "
+                   "use_cuda={}, calibration={} (a={:.3f}, b={:.3f}, raw_ref=[{:.3f},{:.3f}])",
+                   input_size_, max_depth_m_, use_cuda_ ? "true" : "false",
+                   calibration_enabled_ ? "on" : "off", calibration_coef_a_, calibration_coef_b_,
+                   raw_min_ref_, raw_max_ref_);
+
+    // PR #631 P2 review: relative-only path policy applies to
+    // CONFIG-injected paths (the actual attack surface).  Direct
+    // construction via the (model_path, ...) ctor is trusted —
+    // tests + calibration tools own that path themselves.
+    if (!model_path.empty() && model_path.front() == '/') {
+        DRONE_LOG_ERROR("[DepthAnythingV2] Rejected absolute model path from config "
+                        "(relative-only allowed): {}",
+                        model_path);
+        model_loaded_ = false;
+        return;
+    }
     load_model(model_path);
 }
 
@@ -37,7 +91,11 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const std::string& model_path
 // ── Model loading ───────────────────────────────────────────
 void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     // Path traversal guard: reject paths containing ".." components.
-    // Prevents directory traversal from config-injected paths.
+    // Prevents directory traversal from config-injected paths.  The
+    // stricter "no absolute path" check lives in the config constructor
+    // (`load_model_from_config`); direct construction via the explicit
+    // (model_path, input_size, max_depth_m) ctor is trusted because the
+    // caller (tests, calibration tooling) builds the path itself.
     if (model_path.find("..") != std::string::npos) {
         DRONE_LOG_ERROR("[DepthAnythingV2] Rejected model path with '..': {}", model_path);
         model_loaded_ = false;
@@ -57,12 +115,79 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 #ifdef HAS_OPENCV
     try {
         net_ = cv::dnn::readNetFromONNX(canonical.string());
-        net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+
+        // Issue #626 — CUDA backend engagement.  Falls back to CPU with a
+        // WARN when (a) no CUDA device is visible or (b) a canary forward
+        // pass fails (the common case on machines with a cuDNN/CUDA
+        // version mismatch — e.g. cuDNN 8.5 built for CUDA 11 on a
+        // CUDA 12 host, where the CUDA backend's dlopen of cuDNN dies
+        // at the first inference call and takes the perception process
+        // with it).  The canary runs one forward pass on a zero-input
+        // blob so any load-time failure happens here in the constructor
+        // (before the Depth thread starts) rather than in the hot path.
+        bool cuda_engaged = false;
+        if (use_cuda_) {
+            const int cuda_devices = cv::cuda::getCudaEnabledDeviceCount();
+            if (cuda_devices == 0) {
+                DRONE_LOG_WARN("[DepthAnythingV2] use_cuda=true but "
+                               "cv::cuda::getCudaEnabledDeviceCount()=0 — falling back to CPU. "
+                               "Rebuild OpenCV with -DWITH_CUDA=ON -DWITH_CUDNN=ON, or set "
+                               "use_cuda=false to silence this warning.");
+            } else {
+                try {
+                    net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                    net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                    // Canary inference — zero blob at the configured input size.
+                    // A cuDNN/CUDA version mismatch shows up here rather than
+                    // in the real Depth thread's first frame.
+                    cv::Mat canary_blob = cv::Mat::zeros(cv::Size(input_size_, input_size_),
+                                                         CV_32FC3);
+                    cv::Mat canary_input;
+                    cv::dnn::blobFromImage(canary_blob, canary_input, 1.0 / 255.0,
+                                           cv::Size(input_size_, input_size_), cv::Scalar(0, 0, 0),
+                                           false, false);
+                    net_.setInput(canary_input);
+                    (void)net_.forward();  // throws or silently OK
+                    cuda_engaged = true;
+                } catch (const cv::Exception& e) {
+                    DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference failed ({}) — "
+                                   "falling back to CPU.  Common causes: cuDNN/CUDA version "
+                                   "mismatch, or OpenCV built without CUDA_DNN.",
+                                   e.what());
+                } catch (const std::exception& e) {
+                    DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference threw std::exception "
+                                   "({}) — falling back to CPU",
+                                   e.what());
+                } catch (...) {
+                    // PR #631 P2 review: previously a non-cv::Exception
+                    // non-std::exception escaped the outer catch
+                    // silently — model_loaded_ stayed true but the
+                    // backend was in an indeterminate state.  Catch-all
+                    // logs the unknown exception class so the fault
+                    // surfaces in the Depth thread's startup logs
+                    // instead of taking the perception process down on
+                    // first inference.
+                    DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference threw unknown "
+                                   "exception type — falling back to CPU after rebuild");
+                }
+                // PR #634 P2 review: if the canary path partially configured
+                // the CUDA backend then threw, net_ is in an indeterminate
+                // state — rebuild from ONNX before the CPU-fallback target
+                // is set so we start clean.  Mirrors FastSAM's PR #681 fix
+                // for the same canary pattern.
+                if (!cuda_engaged) {
+                    net_ = cv::dnn::readNetFromONNX(canonical.string());
+                }
+            }
+        }
+        if (!cuda_engaged) {
+            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        }
         model_loaded_ = true;
 
-        DRONE_LOG_INFO("[DepthAnythingV2] Model loaded: {} (input={}x{})", model_path, input_size_,
-                       input_size_);
+        DRONE_LOG_INFO("[DepthAnythingV2] Model loaded: {} (input={}x{}, backend={})", model_path,
+                       input_size_, input_size_, cuda_engaged ? "CUDA" : "CPU");
     } catch (const cv::Exception& e) {
         DRONE_LOG_ERROR("[DepthAnythingV2] Failed to load model '{}': {}", model_path, e.what());
         model_loaded_ = false;
@@ -127,9 +252,22 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     try {
         output = net_.forward();
     } catch (const cv::Exception& e) {
+        // PR #631 P2 review: track consecutive failures so persistent
+        // runtime degradation (e.g. CUDA driver crash) is visible to
+        // P7 / run-report via `consecutive_inference_failures()`.
+        // Escalating WARN every 10 failures so the log surfaces
+        // chronic failure even when callers swallow the Err result.
+        const uint64_t fails =
+            consecutive_inference_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (fails == 1 || fails % 10 == 0) {
+            DRONE_LOG_WARN("[DepthAnythingV2] forward() failed ({} consecutive): {}", fails,
+                           e.what());
+        }
         return drone::util::Result<DepthMap, std::string>::err(
             std::string("DepthAnythingV2: forward() failed: ") + e.what());
     }
+    // Successful inference resets the streak counter.
+    consecutive_inference_failures_.store(0, std::memory_order_relaxed);
 
     // ── Step 4: Parse output ────────────────────────────────
     // DA V2 output: [1, 1, H, W] or [1, H, W] — relative inverse depth (float32)
@@ -170,23 +308,58 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     const auto  num_pixels = static_cast<size_t>(out_h) * static_cast<size_t>(out_w);
 
     // ── Step 5: Convert relative inverse depth → metric depth ──
-    // DA V2 outputs unnormalized inverse depth: higher raw value = closer object.
-    // We normalize to [0,1] then linearly map to metric depth:
-    //   normalized=1 (closest object, highest inverse depth) → min_depth (0.1m)
-    //   normalized=0 (farthest object, lowest inverse depth) → max_depth
-    // This provides full utilization of the [min_depth, max_depth] range.
-    // Note: DA V2 is a relative (not metric) model — the absolute scale depends
-    // on the scene. The linear mapping is the simplest correct conversion.
-    float min_val = raw_data[0];
-    float max_val = raw_data[0];
-    for (size_t i = 1; i < num_pixels; ++i) {
-        min_val = std::min(min_val, raw_data[i]);
-        max_val = std::max(max_val, raw_data[i]);
+    // DA V2 outputs unnormalised inverse depth: higher raw value = closer object.
+    // Two conversion paths — see class docstring for the design rationale:
+    //
+    //   (a) Per-frame normalisation (default, pre-#616 behaviour):
+    //       min/max of raw_data this frame → linear remap to
+    //       [min_depth_m_, max_depth_m_].
+    //
+    //   (b) Calibrated (Issue #616, opt-in via `dav2.calibration_enabled`):
+    //       use fitted `(raw_min_ref, raw_max_ref)` to anchor normalisation
+    //       across frames, then apply linear fit `a * metric_anchored + b`.
+    //
+    // Delegates per-pixel math to `convert_raw_to_metric()` (free function at
+    // file scope in depth_anything_v2.h) so the conversion is unit-testable
+    // without a loaded ONNX model (PR #620 review refactor).
+    constexpr float eps = 1e-6f;
+
+    // Per-frame min/max is required for (a) the diagnostic log emitted every
+    // 30th call and (b) the per-frame conversion path.  In calibrated mode
+    // the output doesn't need it, but we still scan every 30th frame so the
+    // log continues to fire and the calibration tool keeps working.  That
+    // saves ~29/30 × 268k FP compares when calibration is on.
+    static std::atomic<uint64_t> scan_counter{0};
+    const bool                   need_scan = !calibration_enabled_ ||
+                           (scan_counter.fetch_add(1, std::memory_order_relaxed) % 30 == 0);
+    float min_val = 0.0f;
+    float max_val = 0.0f;
+    if (need_scan) {
+        min_val = raw_data[0];
+        max_val = raw_data[0];
+        for (size_t i = 1; i < num_pixels; ++i) {
+            min_val = std::min(min_val, raw_data[i]);
+            max_val = std::max(max_val, raw_data[i]);
+        }
     }
 
-    constexpr float eps       = 1e-6f;
-    constexpr float min_depth = 0.1f;  // Minimum metric depth (closest objects)
-    const float     range     = max_val - min_val;
+    // Build conversion parameters — anchor choice hoisted outside the pixel
+    // loop (per PR #620 code-quality review: `calibration_enabled_` is
+    // invariant across all pixels).
+    DepthConversionParams params;
+    params.min_depth_m         = min_depth_m_;
+    params.max_depth_m         = max_depth_m_;
+    params.calibration_enabled = calibration_enabled_;
+    params.calibration_coef_a  = calibration_coef_a_;
+    params.calibration_coef_b  = calibration_coef_b_;
+    if (calibration_enabled_) {
+        params.anchor_min = raw_min_ref_;
+        params.anchor_max = raw_max_ref_;
+    } else {
+        params.anchor_min = min_val;
+        params.anchor_max = max_val;
+    }
+    const float range = params.anchor_max - params.anchor_min;
 
     DepthMap map;
     map.width         = static_cast<uint32_t>(out_w);
@@ -198,15 +371,16 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     map.data.resize(num_pixels);
 
     if (range < eps) {
-        // Flat output (all pixels same depth) — return uniform max_depth
+        // Flat scale range — uniform max_depth output.  Per-frame path: raw
+        // scene is constant (flat wall / unlit frame).  Calibrated path: refs
+        // are near-equal (config rounding — the constructor's `>` guard lets
+        // refs that differ by a hair through).  Either way a fall-back to
+        // "everything is far" is conservative: the grid gets no near
+        // obstacles, the planner doesn't route around phantoms.
         std::fill(map.data.begin(), map.data.end(), max_depth_m_);
     } else {
         for (size_t i = 0; i < num_pixels; ++i) {
-            // Normalize inverse depth to [0, 1]: 1 = closest, 0 = farthest
-            const float normalized = (raw_data[i] - min_val) / range;
-            // Linear map: high inverse depth (close) → small depth, low → large depth
-            const float metric = min_depth + (max_depth_m_ - min_depth) * (1.0f - normalized);
-            map.data[i]        = metric;
+            map.data[i] = convert_raw_to_metric(raw_data[i], range, params);
         }
     }
 

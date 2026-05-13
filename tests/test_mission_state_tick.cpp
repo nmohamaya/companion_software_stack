@@ -1,5 +1,7 @@
 // tests/test_mission_state_tick.cpp
 // Unit tests for MissionStateTick (Issue #154).
+#include "planner/grid_planner_base.h"
+#include "planner/iobstacle_avoider.h"
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
@@ -44,10 +46,15 @@ Pose make_pose(float x, float y, float z) {
     return p;
 }
 
+// Issue #716 — `armable` defaults to true so the bulk of existing tests
+// (which exercise post-preflight behaviour) do not need to know about the
+// PREFLIGHT gate.  Tests that specifically exercise the gate override
+// `armable=false` after construction.
 FCState make_fc(bool armed, float rel_alt) {
     FCState fc{};
     fc.armed             = armed;
     fc.connected         = true;
+    fc.armable           = true;
     fc.rel_alt           = rel_alt;
     fc.battery_remaining = 80.0f;
     fc.timestamp_ns      = 1000;
@@ -75,9 +82,9 @@ protected:
         fsm.on_arm();  // → PREFLIGHT
     }
 
-    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite");
-    std::unique_ptr<IObstacleAvoider> avoider_ = create_obstacle_avoider("potential_field_3d", 5.0f,
-                                                                         2.0f);
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite").value();
+    std::unique_ptr<IObstacleAvoider> avoider_ =
+        create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
 
     void do_tick(const Pose& pose, const FCState& fc_state) {
         DetectedObjectList            objects{};
@@ -110,6 +117,96 @@ TEST_F(MissionStateTickTest, PreflightTransitionsOnArmed) {
     do_tick(pose, fc);
 
     EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issue #716 — ARM gated on FC preflight readiness
+// ═══════════════════════════════════════════════════════════
+TEST_F(MissionStateTickTest, PreflightWaitsWhenFCNotArmable) {
+    // FC not yet ready (EKF2 converging, sensors warming).  Planner must
+    // NOT send ARM in this state — sending ARM produces PX4's
+    // "Arming denied: Resolve system health failures first" log spam and,
+    // worse, can arm the vehicle in a degraded state when health flickers
+    // through OK.  See #713 for the cold-start race this guards against.
+    auto pose  = make_pose(0, 0, 0);
+    auto fc    = make_fc(false, 0);
+    fc.armable = false;
+
+    do_tick(pose, fc);
+
+    // No ARM command should have been issued
+    EXPECT_TRUE(fc_calls.empty())
+        << "Planner sent ARM before FC reported armable=true (Issue #716 regression)";
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+TEST_F(MissionStateTickTest, PreflightSendsARMWhenFCBecomesArmable) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Tick 1: FC not yet armable — no ARM sent
+    auto fc_not_ready    = make_fc(false, 0);
+    fc_not_ready.armable = false;
+    do_tick(pose, fc_not_ready);
+    EXPECT_TRUE(fc_calls.empty());
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);  // Issue #716 review — assert state too
+
+    // Tick 2: FC reports armable — ARM should be sent immediately on the
+    // very next tick (no 3-second wait imposed by the wait-log path).
+    auto fc_ready = make_fc(false, 0);  // make_fc defaults armable=true
+    do_tick(pose, fc_ready);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+// Issue #716 review (test-quality / test-unit P2) — two consecutive ticks
+// with armable=true must produce only ONE ARM within the retry interval.
+// Prior to the fix, last_arm_time_ being constructor-initialised to
+// `now - 10s` guarantees the first ARM fires; a follow-up tick within 3 s
+// must NOT add a second ARM.
+TEST_F(MissionStateTickTest, PreflightDoesNotResendArmWithinRetryInterval) {
+    auto pose = make_pose(0, 0, 0);
+    auto fc   = make_fc(false, 0);  // armable=true (default), not armed yet
+
+    do_tick(pose, fc);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+
+    // Second tick within the 3-second retry window — must not fire again
+    do_tick(pose, fc);
+    EXPECT_EQ(fc_calls.size(), 1u) << "Planner sent a duplicate ARM within the retry interval "
+                                      "(Issue #716 retry-dedup regression)";
+}
+
+// Issue #716 review (test-unit P2 + fault-recovery P3) — armable can flicker
+// true → false → true during EKF lock loss or sensor reinitialisation mid-
+// PREFLIGHT.  After a brief false dip, the planner must NOT spuriously
+// re-arm (the retry window protects against that), and it must STILL
+// eventually issue the ARM once armable recovers (the gate must not
+// permanently latch on the false transition).
+TEST_F(MissionStateTickTest, PreflightHandlesArmableFlicker) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Tick 1: armable=true → ARM fires
+    auto fc_ok = make_fc(false, 0);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+
+    // Tick 2: armable goes false (EKF flicker) → no new ARM, still PREFLIGHT
+    auto fc_lost    = make_fc(false, 0);
+    fc_lost.armable = false;
+    do_tick(pose, fc_lost);
+    EXPECT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Tick 3: armable recovers — within the retry window, so no immediate
+    // re-arm (consistent with PreflightDoesNotResendArmWithinRetryInterval).
+    // The FSM stays in PREFLIGHT until either the retry interval elapses
+    // (production path) or fc_state.armed flips true (PX4 acknowledged the
+    // earlier ARM after the flicker cleared).
+    do_tick(pose, fc_ok);
+    EXPECT_LE(fc_calls.size(), 1u);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -336,8 +433,8 @@ TEST(MissionStateTickUnstuckTest, ExitsOnTimerExpiry) {
     local_fsm.on_stuck();
     ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE_UNSTUCK);
 
-    auto                local_planner = create_path_planner("dstar_lite");
-    auto                local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+    auto local_planner = create_path_planner("dstar_lite").value();
+    auto local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
     StaticObstacleLayer local_layer;
 
     Pose                          pose = make_pose(5, 5, 5);
@@ -386,8 +483,8 @@ TEST(MissionStateTickUnstuckTest, NavigateTickDetectsStuckAndTransitions) {
     local_fsm.on_navigate();
     ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE);
 
-    auto                local_planner = create_path_planner("dstar_lite");
-    auto                local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+    auto local_planner = create_path_planner("dstar_lite").value();
+    auto local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
     StaticObstacleLayer local_layer;
 
     Pose                          pose = make_pose(5, 5, 5);
@@ -469,4 +566,172 @@ TEST_F(MissionStateTickTest, WaypointOvershootAdvancesToNext) {
 
     // Should have advanced past WP1 due to overshoot detection
     EXPECT_EQ(fsm.current_wp_index(), 2u);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Issue #624 — post-avoider yaw-towards-velocity refresh
+// ═══════════════════════════════════════════════════════════════════
+//
+// When the planner's `yaw_towards_velocity` is on AND the avoider
+// deflects velocity during NAVIGATE, `target_yaw` must follow the
+// deflected velocity — not stay on the planner's pre-avoidance
+// heading.  Verified against scenario 33 failure mode where the drone
+// body was yawed at +9° while the avoider deflected motion to -91°
+// (= 100° misalignment) — camera lost the cube to the blind spot and
+// the drone drifted back into it from the side.
+
+namespace {
+
+/// Stub IObstacleAvoider that overwrites the planned velocity with a
+/// caller-provided pure-sideways deflection (+Y direction).  Used to
+/// exercise the post-avoider yaw refresh in isolation from real
+/// avoider dynamics.
+class DeflectingAvoider : public drone::planner::IObstacleAvoider {
+public:
+    drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd& planned,
+                                    const drone::ipc::Pose& /*pose*/,
+                                    const drone::ipc::DetectedObjectList& /*objects*/) override {
+        auto out       = planned;
+        out.velocity_x = 0.0f;  // cancel planned forward motion
+        out.velocity_y = 1.5f;  // pure +Y deflection (= East in ENU)
+        out.velocity_z = 0.0f;
+        // target_yaw deliberately LEFT at the planner's value — the
+        // whole point of the test is that mission_state_tick refreshes
+        // it from the (new) velocity, NOT the avoider.
+        return out;
+    }
+    std::string name() const override { return "DeflectingAvoider"; }
+};
+
+}  // namespace
+
+class Issue624YawRefreshTest : public ::testing::Test {
+protected:
+    // GridPlannerBase config with yaw_towards_velocity ON + low threshold
+    // so the refresh fires at any non-hover speed.
+    drone::planner::GridPlannerConfig grid_cfg = [] {
+        drone::planner::GridPlannerConfig c;
+        c.yaw_towards_travel         = true;
+        c.yaw_towards_velocity       = true;
+        c.yaw_velocity_threshold_mps = 0.1f;
+        return c;
+    }();
+
+    // Minimal grid planner (D* Lite accepts GridPlannerConfig; we only
+    // use it for the two accessors #624 added — never for real search).
+    std::unique_ptr<drone::planner::IPathPlanner> planner =
+        drone::planner::create_path_planner("dstar_lite", grid_cfg).value();
+
+    // The planner in mission_state_tick is typed as IPathPlanner*,
+    // and grid_planner as IGridPlanner* — same underlying object here.
+    drone::planner::IGridPlanner* grid_planner =
+        dynamic_cast<drone::planner::IGridPlanner*>(planner.get());
+
+    DeflectingAvoider                         avoider;
+    drone::planner::StaticObstacleLayer       obstacle_layer;
+    drone::planner::StateTickConfig           config{10.0f, 1.5f, 0.5f, 5};
+    drone::planner::MissionStateTick          state_tick{config};
+    MockPublisher<drone::ipc::TrajectoryCmd>  traj_pub;
+    MockPublisher<drone::ipc::PayloadCommand> payload_pub;
+    drone::planner::MissionFSM                fsm;
+    std::vector<FCCallRecord>                 fc_calls;
+    drone::planner::FCSendFn send_fc = [this](drone::ipc::FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+
+    void SetUp() override {
+        ASSERT_NE(grid_planner, nullptr) << "test harness needs grid_planner downcast to work";
+        ASSERT_TRUE(grid_planner->yaw_towards_velocity_enabled());
+        // Mission with a waypoint east of origin so NAVIGATE is exercised.
+        fsm.load_mission({{20.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3, false}});
+        fsm.on_arm();
+        fsm.on_takeoff();
+        fsm.on_navigate();
+    }
+
+    void do_navigate_tick(const drone::ipc::Pose& pose) {
+        drone::ipc::DetectedObjectList objects{};
+        drone::util::FrameDiagnostics  diag(0);
+        auto                           fc = make_fc(true, 5.0f);
+        state_tick.tick(fsm, pose, fc, objects, *planner, grid_planner, avoider, obstacle_layer,
+                        traj_pub, payload_pub, send_fc, 0, diag);
+    }
+};
+
+TEST_F(Issue624YawRefreshTest, TargetYawFollowsAvoiderDeflectedVelocity) {
+    // Drone is mid-mission at (0,0,5), planner would normally emit a
+    // +X-ish velocity toward the waypoint at (20,0,5) → bee-line yaw 0.
+    // DeflectingAvoider forces the velocity to pure +Y (1.5 m/s).
+    // Expected: target_yaw = atan2(1.5, 0) = +π/2 (≈ 1.5708 rad, East).
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+    do_navigate_tick(pose);
+
+    ASSERT_FALSE(traj_pub.messages().empty()) << "NAVIGATE tick should have published a trajectory";
+    const auto& cmd = traj_pub.messages().back();
+    EXPECT_NEAR(cmd.velocity_x, 0.0f, 1e-5f) << "avoider cancelled +X velocity";
+    EXPECT_NEAR(cmd.velocity_y, 1.5f, 1e-5f) << "avoider emitted +Y velocity";
+    EXPECT_NEAR(cmd.target_yaw, M_PI_2, 1e-3f)
+        << "target_yaw must track avoider-deflected velocity (atan2(1.5, 0) = π/2). "
+           "If this fires with target_yaw ≈ 0 instead, the post-avoider yaw refresh "
+           "in mission_state_tick.h has regressed (Issue #624).";
+}
+
+TEST_F(Issue624YawRefreshTest, YawRefreshSkippedBelowVelocityThreshold) {
+    // Below-threshold avoider: low velocity in a direction (+X +Y, 45°) that
+    // would produce target_yaw ≈ π/4 if the refresh fired unconditionally.
+    // The avoider deliberately does NOT touch target_yaw — so whatever value
+    // ends up in the published trajectory comes from either:
+    //   - the planner's own yaw_towards_travel output (≈ atan2(0, 20) = 0,
+    //     bee-line east toward waypoint at (20, 0, 5)) when the refresh is
+    //     correctly skipped, OR
+    //   - atan2(0.01, 0.01) ≈ π/4 when the refresh fires despite |v| < thr,
+    //     OR
+    //   - atan2(0.01, 0.01) ≈ π/4 when the #624 yaw-refresh code is removed
+    //     entirely AND the planner separately yaw-towards-velocity'd to that
+    //     value (which it would, since the planner reads the same
+    //     yaw_towards_velocity flag) — so this test alone doesn't prove
+    //     #624 is wired up; that's the job of the companion test
+    //     `TargetYawFollowsAvoiderDeflectedVelocity`.
+    //
+    // What this test specifically locks in: the *threshold* guard at the
+    // mission_state_tick refresh site (mission_state_tick.h ~line 414) is
+    // honoured.  Pre-#624 (no refresh code), planner emits its own yaw based
+    // on its own smoothed velocity; with #624's threshold guard correctly
+    // applied, target_yaw stays at the planner's value, NOT atan2(vx, vy)
+    // of the avoider's tiny (0.01, 0.01) deflection.
+    class HoverAvoider : public drone::planner::IObstacleAvoider {
+    public:
+        drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd& planned,
+                                        const drone::ipc::Pose& /*pose*/,
+                                        const drone::ipc::DetectedObjectList& /*objects*/) override {
+            auto out       = planned;
+            out.velocity_x = 0.01f;  // << 0.1 threshold (= 0.0001 < 0.01²)
+            out.velocity_y = 0.01f;
+            // target_yaw deliberately NOT modified — flows through from
+            // planner so we can observe whether the refresh overwrites it.
+            return out;
+        }
+        std::string name() const override { return "HoverAvoider"; }
+    } hover_avoider;
+
+    auto                           pose = make_pose(0.0f, 0.0f, 5.0f);
+    drone::ipc::DetectedObjectList objects{};
+    drone::util::FrameDiagnostics  diag(0);
+    auto                           fc = make_fc(true, 5.0f);
+    state_tick.tick(fsm, pose, fc, objects, *planner, grid_planner, hover_avoider, obstacle_layer,
+                    traj_pub, payload_pub, send_fc, 0, diag);
+
+    ASSERT_FALSE(traj_pub.messages().empty());
+    const auto& cmd = traj_pub.messages().back();
+    // If the threshold guard fires correctly, target_yaw is the planner's
+    // emitted value (NOT atan2(0.01, 0.01) ≈ 0.785).  Use a wide-margin
+    // assertion on the failure mode rather than the success mode — the
+    // planner's exact yaw depends on smoothing state we don't want to
+    // reach into.  Anything within 0.1 rad of π/4 indicates the refresh
+    // fired in spite of the threshold check.
+    EXPECT_GT(std::abs(cmd.target_yaw - M_PI_4), 0.1f)
+        << "target_yaw is suspiciously close to atan2(0.01, 0.01) = π/4 — "
+           "the post-avoider yaw refresh appears to have fired despite "
+           "|v|² = 0.0002 < threshold² = 0.01.  The threshold guard at "
+           "mission_state_tick.h ~line 414 has regressed (Issue #624).";
 }

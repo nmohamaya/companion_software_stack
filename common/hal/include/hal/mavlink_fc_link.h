@@ -327,6 +327,16 @@ private:
             cached_state_.armed = armed;
         });
 
+        // Issue #716 — preflight readiness.  PX4 reports this true once EKF2
+        // has converged, sensors are initialized, GPS lock is established, etc.
+        // P4 mission_planner gates the ARM command on this flag to avoid the
+        // cold-start `Arming denied: Resolve system health failures first` race
+        // on Gazebo SITL boots (see #713 for the misdiagnosis that led here).
+        telemetry_->subscribe_health_all_ok([this](bool ok) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.armable = ok;
+        });
+
         // GPS info
         telemetry_->subscribe_gps_info([this](mavsdk::Telemetry::GpsInfo gps) {
             std::lock_guard<std::mutex> lock(state_mtx_);

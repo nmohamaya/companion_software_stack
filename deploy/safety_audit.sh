@@ -385,7 +385,7 @@ fi
 # Flags every production-code use of a known MUTEX-PROTECTED observability
 # primitive. Each hit requires EITHER (a) manual confirmation that the
 # caller runs on a non-real-time thread (periodic logger, scenario-end
-# dump, etc.) OR (b) a DR-NNN entry in docs/guides/DESIGN_RATIONALE.md
+# dump, etc.) OR (b) a DR-NNN entry in docs/tracking/DESIGN_RATIONALE.md
 # documenting the hazard analysis: priority isolation + bounded hold-time
 # + config gating. See CLAUDE.md § Concurrency tiering → "Observability
 # on flight-critical threads."

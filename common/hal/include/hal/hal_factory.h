@@ -16,18 +16,29 @@
 // Future backends: "v4l2", "udp", "siyi", "bmi088", etc.
 #pragma once
 
+#include "hal/cpu_semantic_projector.h"
+#include "hal/edge_contour_sam_backend.h"
+#include "hal/fastsam_inference_backend.h"
 #include "hal/icamera.h"
+#include "hal/ievent_camera.h"
 #include "hal/ifc_link.h"
 #include "hal/igcs_link.h"
 #include "hal/igimbal.h"
 #include "hal/iimu_source.h"
+#include "hal/iinference_backend.h"
+#include "hal/isemantic_projector.h"
+#include "hal/ivolumetric_map.h"
 #include "hal/simulated_camera.h"
 #include "hal/simulated_depth_estimator.h"
+#include "hal/simulated_event_camera.h"
 #include "hal/simulated_fc_link.h"
 #include "hal/simulated_gcs_link.h"
 #include "hal/simulated_gimbal.h"
 #include "hal/simulated_imu.h"
+#include "hal/simulated_inference_backend.h"
 #include "hal/simulated_radar.h"
+#include "hal/simulated_sam_backend.h"
+#include "hal/simulated_volumetric_map.h"
 
 
 // Optional backends — only included when the dependency is found by CMake
@@ -44,8 +55,11 @@
 #ifdef HAVE_COSYS_AIRSIM
 #include "hal/cosys_camera.h"
 #include "hal/cosys_depth.h"
+#include "hal/cosys_segmentation_backend.h"
 #include "hal/cosys_fc_link.h"
 #include "hal/cosys_imu.h"
+#include "hal/cosys_echo_backend.h"
+#include "hal/cosys_groundtruth_radar.h"
 #include "hal/cosys_radar.h"
 #include "hal/cosys_rpc_client.h"
 #endif
@@ -284,6 +298,25 @@ template<typename Interface>
         return std::make_unique<CosysRadarBackend>(detail::get_shared_cosys_client(cfg), cfg,
                                                    section);
     }
+    // Issue #698 — sim-only ground-truth radar.  Skips the lidar-emulation
+    // pipeline entirely and emits one RadarDetection per visible scene
+    // object using simListInstanceSegmentationPoses().  Zero clutter, zero
+    // multipath; useful for isolating planner / avoider bugs from radar
+    // sensor noise.  Pair with depth_estimator.backend=cosys_airsim and
+    // path_a.sam.backend=cosys_airsim for end-to-end ground-truth perception.
+    if (backend == "cosys_airsim_groundtruth") {
+        return std::make_unique<CosysGroundTruthRadarBackend>(
+            detail::get_shared_cosys_client(cfg), cfg, section);
+    }
+    // Issue #705 — Cosys-Lab Echo sensor (sensor type 7) — physical FMCW-
+    // style radar simulator with beam pattern, multipath reflections, and
+    // attenuation.  Replaces CosysRadarBackend (lidar emulation, #702) for
+    // the proper "radar physics" role.  CosysGroundTruthRadarBackend stays
+    // available as a validation oracle.
+    if (backend == "cosys_echo") {
+        return std::make_unique<CosysEchoBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                   section);
+    }
 #endif
 
 #ifdef HAVE_PLUGINS
@@ -332,6 +365,118 @@ template<typename Interface>
 #endif
 
     throw std::runtime_error("[HAL] Unknown depth estimator backend: " + backend);
+}
+
+/// Create an inference backend from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.inference_backend")
+[[nodiscard]] inline std::unique_ptr<IInferenceBackend> create_inference_backend(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::inference_backend::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating inference backend '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedInferenceBackend>(cfg, section);
+    }
+    if (backend == "sam_simulated") {
+        return std::make_unique<SimulatedSAMBackend>(cfg, section);
+    }
+    // Algorithmic class-agnostic segmentation — OpenCV edge+contour based.
+    // Produces real masks from image content without any ML dependency;
+    // the interim fill between SimulatedSAMBackend (test scaffold) and a
+    // real SAM-2 ONNX backend (Epic #520 / Issue #555).
+    if (backend == "edge_contour_sam") {
+        return std::make_unique<EdgeContourSAMBackend>(cfg, section);
+    }
+    // Real class-agnostic SAM via FastSAM ONNX (YOLOv8-seg architecture
+    // trained on Meta's SA-1B).  The drop-in for what Epic #520 / Issue
+    // #555 actually needed.  Requires `models/fastsam_s.onnx` — run
+    // `bash models/download_fastsam.sh` to fetch + export.
+    if (backend == "fastsam") {
+        return std::make_unique<FastSamInferenceBackend>(cfg, section);
+    }
+#ifdef HAVE_COSYS_AIRSIM
+    // Issue #698 — sim-only ground-truth instance segmentation.  Pulls
+    // ImageType::Segmentation from Cosys-AirSim and emits one detection
+    // per visible scene object with pixel-perfect masks.  Pair with
+    // depth_estimator.backend=cosys_airsim for end-to-end ground-truth
+    // PATH A (no ML inference, no SAM mega-mask collapse).
+    if (backend == "cosys_airsim") {
+        return std::make_unique<CosysSegmentationBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                          section);
+    }
+#endif
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IInferenceBackend>(cfg, section, "inference backend");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown inference backend: " + backend);
+}
+
+/// Create a volumetric map from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.volumetric_map")
+[[nodiscard]] inline std::unique_ptr<IVolumetricMap> create_volumetric_map(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::volumetric_map::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating volumetric map '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedVolumetricMap>(cfg, section);
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IVolumetricMap>(cfg, section, "volumetric map");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown volumetric map backend: " + backend);
+}
+
+/// Create an event camera from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.event_camera")
+[[nodiscard]] inline std::unique_ptr<IEventCamera> create_event_camera(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::event_camera::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating event camera '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedEventCamera>();
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IEventCamera>(cfg, section, "event camera");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown event camera backend: " + backend);
+}
+
+/// Create a semantic projector from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.semantic_projector")
+[[nodiscard]] inline std::unique_ptr<ISemanticProjector> create_semantic_projector(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::semantic_projector::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "cpu");
+    DRONE_LOG_INFO("[HAL] Creating semantic projector '{}' backend='{}'", section, backend);
+
+    if (backend == "cpu") {
+        return std::make_unique<CpuSemanticProjector>();
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<ISemanticProjector>(cfg, section, "semantic projector");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown semantic projector backend: " + backend);
 }
 
 }  // namespace drone::hal

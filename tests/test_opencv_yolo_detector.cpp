@@ -176,32 +176,32 @@ static bool model_exists() {
 
 TEST(OpenCvYoloDetectorTest, ConstructWithMissingModelGraceful) {
     // Should not crash — just sets model_loaded_ to false
-    OpenCvYoloDetector det("nonexistent_model.onnx");
+    OpenCvYoloDetector det("models/nonexistent_model.onnx");
     EXPECT_FALSE(det.is_loaded());
     EXPECT_EQ(det.name(), "OpenCvYoloDetector");
 }
 
 TEST(OpenCvYoloDetectorTest, DetectWithUnloadedModelReturnsEmpty) {
-    OpenCvYoloDetector det("nonexistent_model.onnx");
+    OpenCvYoloDetector det("models/nonexistent_model.onnx");
     auto               img    = make_solid_image(640, 480, 128, 128, 128);
     auto               result = det.detect(img.data(), 640, 480, 3);
     EXPECT_TRUE(result.empty());
 }
 
 TEST(OpenCvYoloDetectorTest, NullFrameReturnsEmpty) {
-    OpenCvYoloDetector det("nonexistent_model.onnx");
+    OpenCvYoloDetector det("models/nonexistent_model.onnx");
     EXPECT_TRUE(det.detect(nullptr, 640, 480, 3).empty());
 }
 
 TEST(OpenCvYoloDetectorTest, ZeroDimensionsReturnsEmpty) {
-    OpenCvYoloDetector   det("nonexistent_model.onnx");
+    OpenCvYoloDetector   det("models/nonexistent_model.onnx");
     std::vector<uint8_t> data(100, 0);
     EXPECT_TRUE(det.detect(data.data(), 0, 480, 3).empty());
     EXPECT_TRUE(det.detect(data.data(), 640, 0, 3).empty());
 }
 
 TEST(OpenCvYoloDetectorTest, LessThanThreeChannelsReturnsEmpty) {
-    OpenCvYoloDetector   det("nonexistent_model.onnx");
+    OpenCvYoloDetector   det("models/nonexistent_model.onnx");
     std::vector<uint8_t> data(100, 0);
     EXPECT_TRUE(det.detect(data.data(), 10, 10, 2).empty());
     EXPECT_TRUE(det.detect(data.data(), 10, 10, 1).empty());
@@ -213,7 +213,7 @@ TEST(OpenCvYoloDetectorTest, ConfigConstructionWithMissingModel) {
         "perception": {
             "detector": {
                 "backend": "yolov8",
-                "model_path": "nonexistent.onnx",
+                "model_path": "models/nonexistent.onnx",
                 "confidence_threshold": 0.3,
                 "nms_threshold": 0.5,
                 "input_size": 640
@@ -345,7 +345,7 @@ TEST(YoloFactoryTest, Yolov8BackendWithConfig) {
     auto          path = create_temp_config(R"({
         "perception": {
             "detector": {
-                "model_path": "nonexistent.onnx",
+                "model_path": "models/nonexistent.onnx",
                 "confidence_threshold": 0.3
             }
         }

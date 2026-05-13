@@ -650,3 +650,61 @@ Tests now run and validate in CI — no skipping, actual coverage.
 - Tests that load project files must use `PROJECT_CONFIG_DIR` (or similar CMake compile definition) to construct absolute paths — never rely on CWD being the repo root
 - `GTEST_SKIP()` is only appropriate for **genuinely optional** capabilities (e.g., Zenoh SHM where the library feature isn't compiled in). Don't use it to paper over path resolution issues
 - Check existing test targets for established patterns before inventing a new approach
+
+---
+
+## CI-012: `perception-check` dry-run `KeyError: 'metrics'` — baseline format mismatch
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-04-21 |
+| **Branch** | `feature/epic-519-per-class-config` |
+| **PR** | #599 |
+| **Affected step** | "Run perception CI" (dry-run mode) |
+| **CI job** | `perception-check` (advisory, `continue-on-error: true`) |
+
+### Symptoms
+
+```
+KeyError: 'metrics'
+```
+
+The `perception-check` CI job failed at the "Run perception CI" step in dry-run mode. The job is advisory (`continue-on-error: true`) so it didn't block merge, but it showed as a red X on every PR touching perception code.
+
+### Root Cause
+
+PR #596 (`feat(#573): baseline capture infrastructure`) changed `benchmarks/baseline.json` from a flat metrics format to the `BaselineCapture` format with nested `scenarios → detection/tracking` structure:
+
+```json
+// Old format (expected by CI script):
+{ "metrics": { "recall": { "value": 0.9, "threshold": 0.05 } } }
+
+// New format (BaselineCapture, PR #596):
+{ "version": 1, "scenarios": { "obstacle_avoidance": { "detection": { "micro_precision": 0.0 } } } }
+```
+
+Both the dry-run and live-compare Python snippets in `tests/run_perception_ci.sh` read `bl['metrics']` which no longer exists. The dry-run snippet (line 55) hit the `KeyError` immediately because there are no cloud credentials in CI, so every run goes through the dry-run path.
+
+### Fix Applied
+
+**Commit:** `b100d16`
+
+Updated both Python snippets in `tests/run_perception_ci.sh` to flatten the `BaselineCapture` `scenarios` structure into the flat `metrics` dict that the PR comment renderer (JavaScript in `ci-perception.yml`) expects:
+
+```python
+# Flatten BaselineCapture scenarios into flat metrics dict
+flat = {}
+for scenario, data in bl.get('scenarios', {}).items():
+    for section in ('detection', 'tracking'):
+        for metric, value in data.get(section, {}).items():
+            key = f'{scenario}.{section}.{metric}'
+            flat[key] = {'value': value, 'threshold': 0.05, ...}
+```
+
+Verified locally: dry-run now produces 50/50 metrics passing from the 5-scenario baseline.
+
+### Prevention
+
+- When changing a data format (like baseline JSON), search for all consumers of that format — not just the tool that writes it. `git grep 'metrics' -- '*.sh' '*.yml' '*.py'` would have caught the CI script.
+- The CI workflow's JS renderer already handled missing `metrics` with `results.metrics || {}`, but the Python snippets upstream didn't. Both layers should be defensive.
+- Consider adding a schema version check: if `bl.get('version')` exists, use the new flattening path; otherwise fall back to the legacy `bl['metrics']` path.

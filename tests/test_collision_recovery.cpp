@@ -145,11 +145,24 @@ protected:
     void SetUp() override {
         fsm.load_mission({{10, 0, 5, 0, 2, 3, false}, {20, 0, 5, 0, 2, 3, false}});
         fsm.on_arm();
+
+        // Unwrap the Result<> with explicit ASSERT so a factory error produces
+        // a clean test-fixture failure rather than std::bad_variant_access
+        // during construction (where the diagnostic would be obscure).
+        auto planner_r = create_path_planner("dstar_lite");
+        ASSERT_TRUE(planner_r.is_ok())
+            << "create_path_planner(\"dstar_lite\") failed: " << planner_r.error().message();
+        planner_ = std::move(planner_r.value());
+
+        auto avoider_r = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+        ASSERT_TRUE(avoider_r.is_ok())
+            << "create_obstacle_avoider(\"potential_field_3d\", 5.0, 2.0) failed: "
+            << avoider_r.error().message();
+        avoider_ = std::move(avoider_r.value());
     }
 
-    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite");
-    std::unique_ptr<IObstacleAvoider> avoider_ = create_obstacle_avoider("potential_field_3d", 5.0f,
-                                                                         2.0f);
+    std::unique_ptr<IPathPlanner>     planner_;
+    std::unique_ptr<IObstacleAvoider> avoider_;
 
     void do_tick(const Pose& pose, const FCState& fc_state) {
         DetectedObjectList            objects{};

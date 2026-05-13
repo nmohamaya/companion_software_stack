@@ -31,6 +31,13 @@ When working on any task, **always look for and suggest improvements** you notic
 
 Flag these as suggestions (don't silently implement them). Use your judgement on severity — mention critical issues immediately, batch minor suggestions at the end of your response.
 
+**Where deferred items are logged:** two destinations, never mixed:
+
+- **Proactive findings I noticed myself** (not in response to a review comment) → `docs/tracking/IMPROVEMENTS.md`. Backlog of nice-to-haves for quiet windows. Entries are dated, prioritised (P1/P2/P3), categorised, and moved to a **Resolved** section with a PR/commit reference once addressed.
+- **Declining or disagreeing with a review comment** (from agents, Copilot, or humans) → `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. This is the audit trail proving the comment was evaluated and the call was intentional.
+
+When writing "Review Fixes" tables on a PR and marking an item deferred, always include a DR-NNN reference. When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
+
 **Safety issues are critical** — any memory safety violations, undefined behaviour, race conditions, missing error handling on flight-critical paths, or other issues that could cause loss of vehicle must be reported to the user **immediately** when noticed, not batched.
 
 ## Build Commands
@@ -93,7 +100,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches baseline? (currently **1479** — see [tests/TESTS.md](tests/TESTS.md))
+- [ ] Test count matches baseline? (currently **1707** — see [tests/TESTS.md](tests/TESTS.md))
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 
@@ -252,6 +259,35 @@ Every PR must update the relevant docs:
 - Zenoh tests must use `RESOURCE_LOCK` to prevent parallel session exhaustion
 - New bugs get a regression test before the fix
 
+### Commit hygiene — commit after each fix lands green
+
+**Rule:** each discrete fix gets committed as soon as it (a) builds clean, (b) passes its test, and (c) is genuinely independent of any larger work still in progress. **Do not batch multiple unrelated fixes into one uncommitted pile of working-tree changes** just because a bigger investigation is ongoing.
+
+**Failure mode we have hit:** during a scenario-debug session, three independent fixes (PathATrace absolute-path acceptance, its unit test, telemetry-poller NED→ENU conversion) sat uncommitted in a worktree for over an hour. The user surfaced it with "I can still see so many uncommitted changes" before anything was lost. PR #623 rescued them — but only after the explicit prompt.
+
+**What to do:**
+
+- As soon as a change compiles + its tests pass + it's separable from larger in-progress work, commit it. Don't wait for "end of session."
+- Stage by file name (`git add path/to/file.cpp`) — never `git add -A` / `git add .` / `git add -f` (risks staging gitignored proprietary/USP files, untracked SDK trees, large model files).
+- Small diagnostic-only one-liners still get a commit + PR. Small, single-concern PRs merge fast.
+- If a fix is genuinely entangled with in-progress larger work, commit it to a WIP branch (`wip/<topic>`) rather than leaving an unnamed dirty tree.
+- Before ending any session or switching tasks, run `git status` in every active worktree and either commit, `git stash push -m "<descriptive name>"`, or write a clear `tasks/todo.md` note about the deliberate dirty state.
+
+### Worktree hygiene — remove worktrees immediately after merge
+
+**Rule:** when a worktree's PR merges (or the branch is abandoned), remove the worktree **and** the local branch **immediately** — not at "end of session," not "once I'm back on this work."
+
+```bash
+# From any other worktree (e.g., main checkout):
+git worktree remove ~/Projects/companion_software_stack_worktrees/<branch-name>
+git branch -D <feature/branch-name>
+git fetch --prune origin   # drop deleted origin branches
+```
+
+**Why it matters:** each stale worktree carries a multi-GB `build/` dir, a checkout that diverges from `origin/main` the moment main moves, a local branch that shadows the origin branch, and an IDE workspace that keeps opening old paths. In a multi-agent environment, these accumulate into confusion quickly.
+
+**Session-start audit:** start every session with `git worktree list` and `git stash list`. Reconcile state you don't recognise — commit, stash, or remove — before starting new work. Old stashes and phantom worktrees are the #1 source of "I thought this was committed" bugs.
+
 ### Review Fix Protocol
 After addressing review comments:
 1. Commit with list of fixes in body: `fix: address PR #N review comments`
@@ -261,7 +297,7 @@ After addressing review comments:
 
 **Codebase-wide scope:** When a review comment identifies an issue that could apply elsewhere in the codebase (e.g., misleading comments, inconsistent log levels, missing test patterns), always search for and fix all occurrences — not just the one the reviewer pointed out. A review comment on one file is a signal to check the whole codebase for the same pattern.
 
-**Disagreeing with review comments:** When declining to fix a review comment (from Copilot, review agents, or humans) based on a justified rationale, **always document the decision in `docs/guides/DESIGN_RATIONALE.md`** as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, the trade-offs were weighed, and the decision was intentional — not an oversight. Include the question, arguments for both sides, our decision, and when to revisit. This applies to both P3 deferrals and genuine "we disagree" situations.
+**Disagreeing with review comments:** When declining to fix a review comment (from Copilot, review agents, or humans) based on a justified rationale, **always document the decision in `docs/tracking/DESIGN_RATIONALE.md`** as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, the trade-offs were weighed, and the decision was intentional — not an oversight. Include the question, arguments for both sides, our decision, and when to revisit. This applies to both P3 deferrals and genuine "we disagree" situations.
 
 ### Planning & Self-Correction (from `docs/guides/work_instructions.md`)
 - Enter plan mode for any non-trivial task (3+ steps or architectural decisions)
@@ -317,7 +353,7 @@ This is a **safety-critical drone software stack**. Use appropriate C++ construc
 - **Mutex (`std::lock_guard`):** Non-hot-path shared state — config access, ring buffers, logging. Always use RAII (`lock_guard`/`unique_lock`), never manual `lock()`/`unlock()`.
 - **Avoid:** Recursive mutexes (restructure code instead), `memory_order_relaxed` without justification, bare `lock()`/`unlock()` calls.
 
-**Observability on flight-critical threads:** Mutex-protected observability primitives (loggers, profilers, metrics collectors — e.g. `LatencyProfiler`, `JsonLogSink`) SHOULD NOT be called from flight-critical or real-time threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog touch paths) *without documented justification*. The default hazards are (a) **priority inversion** — a lower-priority thread holding the observability mutex can block a higher-priority control thread, and (b) **observation affecting measurement** — the mutex cost contaminates the latency being measured. If a control-loop thread needs to emit telemetry, the preferred pattern is to buffer into a lock-free primitive (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. If mutex-protected observability is used on a real-time thread anyway (e.g. benchmark-harness profiler wiring), record the analysis as a DR-NNN entry in `docs/guides/DESIGN_RATIONALE.md` showing (1) all recorders share similar priority (no inversion risk), (2) mutex-hold-time is bounded and dominated by the measured work, and (3) the usage is gated behind an explicit configuration flag so production builds don't pay the cost. Each observability primitive's header must document the constraint (e.g. "For >10 kHz hot loops, prefer `LatencyTracker` directly").
+**Observability on flight-critical threads:** Mutex-protected observability primitives (loggers, profilers, metrics collectors — e.g. `LatencyProfiler`, `JsonLogSink`) SHOULD NOT be called from flight-critical or real-time threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog touch paths) *without documented justification*. The default hazards are (a) **priority inversion** — a lower-priority thread holding the observability mutex can block a higher-priority control thread, and (b) **observation affecting measurement** — the mutex cost contaminates the latency being measured. If a control-loop thread needs to emit telemetry, the preferred pattern is to buffer into a lock-free primitive (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. If mutex-protected observability is used on a real-time thread anyway (e.g. benchmark-harness profiler wiring), record the analysis as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` showing (1) all recorders share similar priority (no inversion risk), (2) mutex-hold-time is bounded and dominated by the measured work, and (3) the usage is gated behind an explicit configuration flag so production builds don't pay the cost. Each observability primitive's header must document the constraint (e.g. "For >10 kHz hot loops, prefer `LatencyTracker` directly").
 
 ### Root Cause Analysis
 
@@ -349,7 +385,7 @@ After pushing review-fix commits, update the PR body right away. Don't wait to b
 - `docs/design/perception_design.md` — P2 pipeline detail
 - `docs/design/hardening-design.md` — Watchdog and systemd integration
 - `docs/guides/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
-- `docs/guides/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
+- `docs/tracking/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
 - `docs/tracking/BUG_FIXES.md` — 29 documented bugs fixed (good reference for common pitfalls)
 - `docs/adr/` — Architecture Decision Records
 - `docs/design/API.md` — IPC message type reference

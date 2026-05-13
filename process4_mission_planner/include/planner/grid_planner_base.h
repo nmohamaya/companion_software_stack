@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <optional>
@@ -59,9 +60,44 @@ struct GridPlannerConfig {
     int   max_static_cells   = 0;              // Cap on promoted static cells (0 = unlimited)
     bool  yaw_towards_travel = true;           // Face sensors toward next waypoint during NAVIGATE
     float yaw_smoothing_rate = 0.3f;  // EMA alpha for yaw transitions (0=frozen, 1=instant)
-    float snap_approach_bias = 0.5f;  // Approach-direction penalty for snap fallback
-    bool  prediction_enabled = true;  // Enable velocity-based obstacle prediction
-    float prediction_dt_s    = 2.0f;  // Prediction horizon (seconds into the future)
+    // When `yaw_towards_velocity` is true (and `yaw_towards_travel` also true),
+    // the yaw target follows the smoothed velocity command instead of the
+    // bee-line to the next waypoint. Points the camera at the actual flight
+    // direction during obstacle detours so PATH A can voxelise the obstacle's
+    // far face before the drone clips it. Default false to preserve existing
+    // behaviour; scenario 33 turns it on (Issue #612).
+    bool yaw_towards_velocity = false;
+
+    // Minimum velocity magnitude (m/s) below which `yaw_towards_velocity`
+    // falls back to the bee-line-to-goal yaw.  Prevents jitter when the
+    // drone is hovering or moving slower than sensor noise.  Tuned against
+    // scenario 33 detour profile (nominal detour speed 1.5-2.5 m/s).
+    float yaw_velocity_threshold_mps = 0.4f;
+    float snap_approach_bias         = 0.5f;  // Approach-direction penalty for snap fallback
+    bool  prediction_enabled         = true;  // Enable velocity-based obstacle prediction
+    float prediction_dt_s            = 2.0f;  // Prediction horizon (seconds into the future)
+    // Issue #635 — PATH A voxel observations become permanent static cells
+    // only after this many hits.  Prevents transient voxels (misprojections,
+    // one-frame artefacts) from cementing as permanent obstacles that wall
+    // off return corridors.  Real walls / pillars get re-observed every
+    // frame while in FOV and promote quickly; sparse detections decay via
+    // TTL.  Default 3 — mirrors `promotion_hits` magnitude for the
+    // detector-observation path.
+    int voxel_promotion_hits = 3;
+    // Issue #635 — TTL for *promoted* static cells (cells that came via
+    // voxel/radar promotion, NOT HD-map).  When > 0, promoted cells decay
+    // out of `static_occupied_` if they aren't re-observed for this many
+    // seconds.  HD-map cells loaded via `add_static_obstacle` are never
+    // affected.  0 = disabled (legacy permanent-promotion behaviour).
+    // Recommended: 30-60 s for no-HD-map scenarios so the outbound voxel
+    // wake doesn't wall off return corridors.
+    float static_cell_ttl_s = 0.0f;
+    // Issue #638 Phase 3 — instance-aware voxel promotion gate.  When > 0,
+    // PATH A voxels are only written to the grid once their tracked
+    // instance has accumulated this many distinct frames of observation.
+    // Noise voxels (instance_id == 0) are unconditionally rejected.
+    // 0 = disabled (legacy behaviour, voxels write directly to grid).
+    int voxel_instance_promotion_observations = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -79,9 +115,36 @@ public:
     /// Pre-load a static obstacle from the HD map (scenario config).
     virtual void add_static_obstacle(float wx, float wy, float radius_m, float height_m) = 0;
 
-    /// True if the last planning cycle could not find a search path
-    /// and fell back to a direct line toward the target.
+    /// Insert world-frame voxels from the PATH A semantic-voxels pipeline
+    /// (Epic #520 / Issue #608).  See `OccupancyGrid3D::insert_voxels` for
+    /// semantics; this is the IGridPlanner pass-through so the P4 voxel
+    /// subscriber thread doesn't need a downcast to GridPlannerBase.
+    ///
+    /// Issue #698 Fix #1 — optional `radar_gate` parameter engages the
+    /// cross-modal veto from ADR-013 §2 item 4.  When null (legacy callers,
+    /// tests not exercising the veto), promotion is unconditional —
+    /// preserves backward compatibility.  When non-null, the gate must have
+    /// been seeded with at least one `set_pose()` call before it activates;
+    /// the gate's own cached pose is used, so callers do not need to gate
+    /// on a fresh-this-tick pose receive.
+    virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(
+        const drone::ipc::SemanticVoxel* voxels, uint32_t n, float clamp_m, float min_confidence,
+        RadarFovGate* radar_gate = nullptr) = 0;
+
+    /// True if the last planning cycle could not find a search path AND
+    /// there was no cached path to keep following — in that case plan()
+    /// returns a hover-in-place command (NOT a direct line through
+    /// obstacles, despite the legacy method name).  See
+    /// `GridPlannerBase::plan()` for the hover branch.
     [[nodiscard]] virtual bool using_direct_fallback() const = 0;
+
+    /// Total number of plan() calls where search failed AND there was no
+    /// cached path to fall back to, so the planner hovered in place
+    /// (Plan A diagnostic — Issue #645 follow-up).  Persistent non-zero
+    /// indicates the obstacle grid is over-occupied for the current
+    /// waypoint and the drone cannot make progress without grid
+    /// reconfiguration.
+    [[nodiscard]] virtual uint64_t hover_fallback_count() const noexcept = 0;
 
     /// Invalidate the cached path, forcing a full replan on the next tick.
     /// Called after collision recovery to avoid re-using a path that led into an obstacle.
@@ -90,11 +153,38 @@ public:
     /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
     virtual void set_promotion_paused(bool paused) = 0;
 
+    /// Issue #645 — when promotion is paused, allow radar-confirmed detected
+    /// objects to bypass the pause.  Default false = legacy behaviour.  See
+    /// `OccupancyGrid3D::set_allow_radar_promotion_when_paused()` for the
+    /// full rationale.
+    virtual void set_allow_radar_promotion_when_paused(bool allow) = 0;
+
+    /// Issue #645 review fix (#661 P1, SAFETY-CRITICAL): landing-approach
+    /// protection (Issue #340).  When set true (RTL/LAND), ALL promotion is
+    /// blocked unconditionally — including the radar bypass.  Distinct from
+    /// `set_promotion_paused()`; both can be active.  See
+    /// `OccupancyGrid3D::set_landing_pause()` for the full rationale.
+    virtual void set_landing_pause(bool landing) = 0;
+
+    /// Issue #638 Phase 3 — clear per-instance observation counters.
+    /// Call on FSM transitions where the perception context resets
+    /// (RTL/LAND, mission abort) so a stale instance_id from earlier in
+    /// the mission can't keep promoting after a P2 restart re-mints
+    /// fresh IDs that collide with existing counters.  Mirror of the
+    /// `set_promotion_paused()` pattern; both protect the grid during
+    /// state transitions that perception is unaware of.
+    virtual void clear_instance_state() = 0;
+
     /// Grid diagnostic counters — exposed on the interface so diagnostic
     /// logging in tick_survey/tick_navigate can avoid dynamic_cast.
     [[nodiscard]] virtual size_t grid_occupied_count() const = 0;
     [[nodiscard]] virtual size_t grid_static_count() const   = 0;
-    [[nodiscard]] virtual int    grid_promoted_count() const = 0;
+    /// Issue #698 Fix #1 — snapshot of dynamic-cell keys for the cross-veto
+    /// gate's per-tick FOV-residency advance.  See OccupancyGrid3D for
+    /// cost analysis.  Empty when no grid exists or no cells are tracked.
+    [[nodiscard]] virtual std::vector<GridCell> grid_dynamic_cell_keys() const = 0;
+    [[nodiscard]] virtual float                 grid_resolution_m() const      = 0;
+    [[nodiscard]] virtual int                   grid_promoted_count() const    = 0;
 
     /// Whether the planner has snapped the current goal to an alternate position.
     [[nodiscard]] virtual bool has_snapped_goal() const = 0;
@@ -102,6 +192,16 @@ public:
     /// Get the snapped world-frame position {x, y, z} if a snap is active.
     /// Returns std::nullopt when no snap is active (has_snapped_goal() == false).
     [[nodiscard]] virtual std::optional<std::array<float, 3>> snapped_goal_xyz() const = 0;
+
+    /// Issue #624 — post-avoider yaw refresh needs read-only access to the
+    /// yaw-towards-velocity feature flag and velocity threshold so the
+    /// orchestration layer (mission_state_tick) can honour the same values
+    /// the planner was configured with, without duplicating config wiring
+    /// or downcasting.  `noexcept` because both are simple scalar reads of
+    /// already-stored config values — the no-exceptions contract for
+    /// flight-critical accessors (PR #632 review-memory-safety P2).
+    [[nodiscard]] virtual bool  yaw_towards_velocity_enabled() const noexcept = 0;
+    [[nodiscard]] virtual float yaw_velocity_threshold_mps() const noexcept   = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -115,13 +215,26 @@ public:
 
 class GridPlannerBase : public IGridPlanner {
 public:
+    /// Issue #624 — expose the yaw-towards-velocity config to the
+    /// orchestration layer.  The planner already uses these values
+    /// internally; the post-avoider yaw refresh needs to honour the
+    /// same feature flag and threshold without downcasting from the
+    /// IGridPlanner interface.
+    [[nodiscard]] bool yaw_towards_velocity_enabled() const noexcept override {
+        return config_.yaw_towards_velocity;
+    }
+    [[nodiscard]] float yaw_velocity_threshold_mps() const noexcept override {
+        return config_.yaw_velocity_threshold_mps;
+    }
+
     explicit GridPlannerBase(const GridPlannerConfig& config = {})
         : config_(config)
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
                 config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
-                config.require_radar_for_promotion) {}
+                config.require_radar_for_promotion, config.voxel_promotion_hits,
+                config.static_cell_ttl_s, config.voxel_instance_promotion_observations) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
@@ -133,13 +246,40 @@ public:
         snap_valid_ = false;
     }
 
+    OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
+                                                    uint32_t n, float clamp_m, float min_confidence,
+                                                    RadarFovGate* radar_gate = nullptr) override {
+        auto stats = grid_.insert_voxels(voxels, n, clamp_m, min_confidence, radar_gate);
+        // If any voxel landed OR was deferred / single-modality-promoted, the
+        // cached path may be stale (cells changed state in dynamic OR static).
+        // Invalidate so D*Lite/A* replan on the next tick.  Issue #698 Fix #1.
+        if (stats.inserted > 0 || stats.cross_veto_deferred > 0 ||
+            stats.fov_silence_promoted > 0 || stats.age_cap_evicted > 0) {
+            snap_valid_ = false;
+        }
+        return stats;
+    }
+
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
 
+    [[nodiscard]] uint64_t hover_fallback_count() const noexcept override {
+        return hover_fallback_count_.load(std::memory_order_relaxed);
+    }
+
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
+    void set_allow_radar_promotion_when_paused(bool allow) override {
+        grid_.set_allow_radar_promotion_when_paused(allow);
+    }
+    void set_landing_pause(bool landing) override { grid_.set_landing_pause(landing); }
+    void clear_instance_state() override { grid_.clear_instance_state(); }
 
     [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }
     [[nodiscard]] size_t grid_static_count() const override { return grid_.static_count(); }
-    [[nodiscard]] int    grid_promoted_count() const override { return grid_.promoted_count(); }
+    [[nodiscard]] std::vector<GridCell> grid_dynamic_cell_keys() const override {
+        return grid_.dynamic_cell_keys();
+    }
+    [[nodiscard]] float grid_resolution_m() const override { return grid_.resolution(); }
+    [[nodiscard]] int   grid_promoted_count() const override { return grid_.promoted_count(); }
 
     void invalidate_path() override {
         cached_path_.clear();
@@ -240,21 +380,56 @@ public:
                     direct_fallback_ = false;
                 }
             } else {
-                if (!cached_path_.empty()) {
-                    // Keep following the last good path — much safer than
-                    // a direct line which flies through obstacles.
+                // Issue #698 — validate the cached path against the CURRENT
+                // grid before reusing it.  Old behaviour: if D*Lite fails
+                // we keep following whatever path was last computed.  But
+                // the grid may have changed since then — newly-promoted
+                // static cells (e.g. a cube the camera just confirmed) may
+                // now sit ON the cached path, and "follow it anyway" would
+                // route the drone straight into the obstacle.  Scenario 33
+                // run 2026-05-03_140302_ABORTED logged 82 stale-cached-path
+                // reuses; the drone collided with both pillar_01 and a
+                // TemplateCube whose cells were in static_occupied_ at the
+                // moment the planner was still following the old path.
+                //
+                // Walk the remaining cached path and check each cell for
+                // current occupancy.  If ANY remaining cell is now an
+                // obstacle, drop the cached path → fall through to hover.
+                bool cached_path_clear = !cached_path_.empty();
+                if (cached_path_clear) {
+                    for (size_t i = path_index_; i < cached_path_.size(); ++i) {
+                        const auto& wp = cached_path_[i];
+                        const GridCell c = grid_.world_to_grid(wp[0], wp[1], wp[2]);
+                        if (grid_.is_occupied(c)) {
+                            cached_path_clear = false;
+                            DRONE_LOG_WARN(
+                                "[PlanBase] Cached path now blocked at idx {} "
+                                "(world ({:.1f},{:.1f},{:.1f})) — dropping cache, "
+                                "falling back to hover",
+                                i, wp[0], wp[1], wp[2]);
+                            break;
+                        }
+                    }
+                }
+                if (cached_path_clear) {
+                    // Cached path is still valid — keep following it.
                     direct_fallback_ = false;
                     last_plan_time_  = now;  // avoid hammering failed replans
                     DRONE_LOG_WARN("[PlanBase] Search failed — keeping last good path "
-                                   "({} pts, idx {}) (took {:.0f}ms)",
+                                   "({} pts, idx {}, validated clear) (took {:.0f}ms)",
                                    cached_path_.size(), path_index_, replan_ms);
                 } else {
-                    // No cached path at all — hover in place (zero velocity)
-                    // rather than flying a direct line through obstacles.
+                    // No cached path or it's blocked — hover in place
+                    // (zero velocity) rather than routing through obstacles.
+                    cached_path_.clear();
+                    path_index_      = 0;
                     direct_fallback_ = true;
-                    DRONE_LOG_WARN("[PlanBase] Search failed, no cached path — "
-                                   "hovering in place (took {:.0f}ms)",
-                                   replan_ms);
+                    const uint64_t new_hover_count =
+                        hover_fallback_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+                    DRONE_LOG_WARN("[PlanBase] Search failed, no usable path — "
+                                   "hovering in place (took {:.0f}ms, total "
+                                   "hover-fallback count={})",
+                                   replan_ms, new_hover_count);
                 }
             }
         }
@@ -370,9 +545,25 @@ public:
         // Yaw-towards-travel: face sensors toward the next waypoint.
         // Uses waypoint direction (not path step) to avoid feedback loop
         // where camera view → grid → planner → yaw → camera causes circling.
+        //
+        // When `yaw_towards_velocity` is true, override the bee-line-to-goal
+        // direction with the actual smoothed velocity command — the camera
+        // tracks the *real* flight direction during obstacle detours so PATH A
+        // can voxelise the obstacle's far face before the drone clips it
+        // (Issue #612 — observed: drone routed around one cube face, then
+        // clipped the unseen face on the way back to the waypoint).  Reverts
+        // to bee-line direction when velocity magnitude is too small to
+        // estimate a heading, so we don't yaw randomly during hover.
         if (config_.yaw_towards_travel) {
-            const float ytt_dx   = target.x - px;
-            const float ytt_dy   = target.y - py;
+            float ytt_dx = target.x - px;
+            float ytt_dy = target.y - py;
+            if (config_.yaw_towards_velocity) {
+                const float vmag = std::sqrt(smooth_vx_ * smooth_vx_ + smooth_vy_ * smooth_vy_);
+                if (vmag > config_.yaw_velocity_threshold_mps) {
+                    ytt_dx = smooth_vx_;
+                    ytt_dy = smooth_vy_;
+                }
+            }
             const float ytt_dist = std::sqrt(ytt_dx * ytt_dx + ytt_dy * ytt_dy);
             if (ytt_dist > 0.5f) {
                 constexpr float kPi     = 3.14159265358979323846f;
@@ -611,9 +802,26 @@ private:
     }
 
     // Cached path
-    std::vector<std::array<float, 3>>     cached_path_;
-    size_t                                path_index_      = 0;
-    bool                                  direct_fallback_ = false;
+    std::vector<std::array<float, 3>> cached_path_;
+    size_t                            path_index_ = 0;
+    // Despite the legacy name, direct_fallback_=true means the planner is
+    // HOVERING in place because search failed and there's no cached path to
+    // keep following.  No code path actually flies a direct line through
+    // obstacles — the hover branch in plan() at the `direct_fallback_ &&
+    // cached_path_.empty()` guard catches it.  Renaming the flag is a wider
+    // refactor (touches IGridPlanner, derived classes, tests, log lines);
+    // deferred to a follow-up — Plan A's observability fix corrects the
+    // user-facing message text without that blast radius.
+    bool direct_fallback_ = false;
+    // Plan A diagnostic — count of plan() calls where search returned no
+    // path AND there was no cached path to fall back to, so the planner
+    // hovered in place.  Persistent non-zero indicates the obstacle grid is
+    // over-occupied for the current waypoint.  Surfaced by
+    // `hover_fallback_count()` for run-report telemetry.
+    // Issue #650 review fix: telemetry can be read from any thread, so
+    // make the counter atomic.  relaxed ordering is fine — this is a
+    // pure observability counter, not a synchronization barrier.
+    std::atomic<uint64_t>                 hover_fallback_count_{0};
     std::chrono::steady_clock::time_point last_plan_time_{};
 
     // Cached snapped goal — single source of truth for snapped world position.

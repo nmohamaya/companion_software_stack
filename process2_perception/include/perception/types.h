@@ -1,6 +1,8 @@
 // process2_perception/include/perception/types.h
 // All data types for perception: detections, tracked/fused objects.
 #pragma once
+#include "hal/iinference_backend.h"
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -14,14 +16,15 @@ namespace drone::perception {
 // Object Classification
 // ═══════════════════════════════════════════════════════════
 enum class ObjectClass : uint8_t {
-    UNKNOWN       = 0,
-    PERSON        = 1,
-    VEHICLE_CAR   = 2,
-    VEHICLE_TRUCK = 3,
-    DRONE         = 4,
-    ANIMAL        = 5,
-    BUILDING      = 6,
-    TREE          = 7,
+    UNKNOWN            = 0,
+    PERSON             = 1,
+    VEHICLE_CAR        = 2,
+    VEHICLE_TRUCK      = 3,
+    DRONE              = 4,
+    ANIMAL             = 5,
+    BUILDING           = 6,
+    TREE               = 7,
+    GEOMETRIC_OBSTACLE = 8,  // class-agnostic SAM mask with no detector match
 };
 
 inline const char* object_class_name(ObjectClass c) {
@@ -33,6 +36,7 @@ inline const char* object_class_name(ObjectClass c) {
         case ObjectClass::ANIMAL: return "Animal";
         case ObjectClass::BUILDING: return "Building";
         case ObjectClass::TREE: return "Tree";
+        case ObjectClass::GEOMETRIC_OBSTACLE: return "GeometricObstacle";
         default: return "Unknown";
     }
 }
@@ -54,6 +58,18 @@ struct Detection2DList {
     std::vector<Detection2D> detections;
     uint64_t                 timestamp_ns   = 0;
     uint64_t                 frame_sequence = 0;
+};
+
+// ═══════════════════════════════════════════════════════════
+// SAM Masks (PATH A — Epic #520, Issue #608)
+// Carries class-agnostic mask output from an IInferenceBackend (e.g.
+// SimulatedSAMBackend) plus the source frame's sequence number so the
+// mask_projection_thread can correlate with detector bboxes + depth.
+// ═══════════════════════════════════════════════════════════
+struct Masks2DList {
+    std::vector<drone::hal::InferenceDetection> masks;
+    uint64_t                                    timestamp_ns   = 0;
+    uint64_t                                    frame_sequence = 0;
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -115,10 +131,10 @@ struct FusedObjectList {
 // ═══════════════════════════════════════════════════════════
 namespace drone::perception {
 
-inline constexpr uint8_t kNumObjectClasses = 8;
+inline constexpr uint8_t kNumObjectClasses = 9;
 // height_priors[] is indexed by static_cast<uint8_t>(ObjectClass).
 // Update kNumObjectClasses when adding new ObjectClass values.
-static_assert(static_cast<uint8_t>(ObjectClass::TREE) < kNumObjectClasses,
+static_assert(static_cast<uint8_t>(ObjectClass::GEOMETRIC_OBSTACLE) < kNumObjectClasses,
               "ObjectClass enum grew beyond kNumObjectClasses — update height_priors array");
 
 /// Calibration data for camera-based depth estimation.
@@ -137,6 +153,7 @@ struct CalibrationData {
         0.8f,   // ANIMAL
         10.0f,  // BUILDING
         6.0f,   // TREE
+        2.0f,   // GEOMETRIC_OBSTACLE — conservative mid-range default
     };
 };
 

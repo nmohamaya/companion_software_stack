@@ -158,7 +158,10 @@ gh pr create --base main --head feature/perception-avoidance-integration \
   --title "feat: Perception-driven obstacle avoidance (Issues #222, #224, #225)" \
   --body "Complete camera+radar perception pipeline with tuned avoidance."
 
-# After review + CI green → squash merge to main
+# After review + CI green → squash merge to main (small integration: ~few PRs)
+# For larger rollups (50+ commits / weeks of work), prefer a merge commit
+# instead — see "Integration-to-main rollup — review process" below for
+# the full rationale.
 # Delete the integration branch
 ```
 
@@ -179,6 +182,142 @@ main (demo-ready throughout)
 2. **Use the REST API as a fallback** when `gh pr edit` fails due to GitHub's GraphQL projects-classic limitations.
 3. **Each sub-issue PR gets reviewed independently** on the integration branch. The final PR to `main` is the fully-tested aggregate.
 4. **Run scenario tests on the integration branch** before the final merge — this is where integration bugs surface (e.g., radar ground-plane flooding wasn't visible until camera+radar+fusion were all running together).
+
+### Integration-to-main rollup — review process
+
+When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks) and is ready to merge into `main`, follow this checklist.  Tracked end-to-end in a GitHub issue (use a plain bug-tracking issue — there is no dedicated template; tag it with `tech-debt` + `domain:integration` and link the relevant feature branch).
+
+#### Why a special process is needed
+
+Individual PRs are reviewed at land-time, but the **combined diff** going to `main` is much larger than any single PR.  Risks the standard PR review misses:
+
+- Cross-cutting interactions between features that landed separately
+- Documentation drift across PROGRESS.md / ROADMAP.md / API.md / TESTS.md
+- Test-baseline drift (TESTS.md counts go stale across many PRs)
+- Latent gaps where a per-site fix should have been a wrapper-level fix (see #720/#722 for an example)
+- Performance / CPU-usage regression that's invisible per-PR but compounds
+
+The standard `/review-pr` skill is designed for single-PR review (~hundreds of lines).  An integration rollup needs a different approach.
+
+#### Phase 1 — Pre-review cleanup
+
+Before kicking off agent reviews, get the branch into a clean baseline state:
+
+- [ ] **Resolve all failing tests** — `ctest -j$(nproc)` must be fully green at the integration HEAD.  A "fix" means either correcting the code-under-test or correcting the test itself with a documented rationale; **simply leaving a failing test in place is not acceptable**.  Tests that are intentionally inactive must be marked `GTEST_SKIP()` (counts as passed) or commented out with an explanation, not left as `FAILED`.
+- [ ] **Refresh `docs/tracking/PROGRESS.md`** with improvement entries for every PR landed since the last main merge.
+- [ ] **Refresh `docs/tracking/ROADMAP.md`** — mark issues done (strikethrough + checkmark), update metrics table.
+- [ ] **Refresh `docs/design/API.md`** if any IPC types or HAL interfaces changed.
+- [ ] **Refresh `tests/TESTS.md`** — update test counts + add entries for new test files.
+- [ ] **Verify `bash deploy/run_ci_local.sh` clean** (build + format + tests + sanitizers).
+- [ ] **Triage all open follow-up issues** filed during the integration work — mark which block merge vs which are post-merge.
+
+#### Phase 2 — Scenario sweep on integration HEAD
+
+Run all Gazebo scenarios (and Cosys-AirSim scenarios if applicable) on the integration branch's HEAD.  Capture results in a tracking doc (`docs/tracking/INTEGRATION_MERGE_SCENARIO_SWEEP.md` or similar):
+
+- [ ] Each scenario: PASS / FAIL + key metrics (PX4 denies count, hover-fallback events, mission-complete state)
+- [ ] Document any scenarios known to be flaky on this machine
+- [ ] Compare against the last `main` baseline if available
+
+This is the **integration-test gate** — multi-agent code review cannot catch runtime regressions.  If a scenario regressed, it's a P1 blocker.
+
+#### Phase 3 — Themed multi-agent reviews
+
+Split the diff into ~5-7 thematic chunks of related PRs.  Run `/review-pr` (10-agent pipeline + Copilot) on each chunk separately to avoid context-window saturation.
+
+Typical themes:
+
+1. **Benchmark / observability infrastructure** (profilers, dashboards, GT emitters)
+2. **HAL / interface layer changes** (new HAL types, refactors)
+3. **Feature epics** (one per epic if there were multiple)
+4. **Scenario-specific stacks** (e.g. scenario 33 stack)
+5. **Review-fix waves** (Pass 1/2 follow-ups from individual PRs)
+6. **Safety / fault recovery changes**
+7. **Cross-cutting docs / tests / infra**
+
+For each pass, deliverables (follow the standard severity policy defined in the [Review Comment Handling](#review-comment-handling) section below):
+
+- [ ] All P1 findings either fixed inline or filed as merge-blockers
+- [ ] All P2 findings fixed inline (per the standard "within PR" policy); explicit deferrals require a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md`
+- [ ] All P3 findings fixed inline OR deferred with a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` — **NOT** filed to `IMPROVEMENTS.md`.  Review-flagged items always route to `DESIGN_RATIONALE.md` per the "Critical distinction" rule documented under Step 7 ("Update Documentation").  `IMPROVEMENTS.md` is reserved for proactive findings the agent noticed itself, not review comments.
+- [ ] Copilot findings overlap with agent findings — deduplicate
+
+> **Note:** Rollup reviews tend to surface more P2/P3 findings than per-PR reviews (larger surface, more cross-cutting context).  Use judgement — if a P3 finding is genuinely a "would be nice but won't change correctness" comment, a one-line DR-NNN entry is appropriate.  If it's actionable in <15 minutes, fix it inline.
+
+> **Phase 4 and Phase 5 run in parallel — but with a deliberate ordering for Copilot independence.** Open the integration→main PR *first* (per Phase 5 below) so Copilot starts reviewing in the background.  Then do Phase 4 fix-finding **from your own agent reviews only** — do **not** look at Copilot's comments while resolving Phase 3 findings.  Only *after* Phase 4 is complete should you triage Copilot's comments (see Phase 4b below).  This preserves the independence of the two review streams: when Copilot and the themed-agent passes converge on the same finding, that's strong evidence; when they diverge, both perspectives are useful.
+
+#### Phase 4 — Fix findings (your agent reviews only)
+
+Address all P1 findings before merge.  Apply the same severity policy as standard PRs (see [Review Comment Handling](#review-comment-handling)) — P2/P3 should be fixed inline; any deferral must be recorded as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` per the "Critical distinction" rule under Step 7.  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
+
+**Do not read Copilot's comments yet.**  Work only from the themed-agent passes (Phase 3) and your own proactive notice.  This is the rollup's chance to compare independent reviewer streams — peeking now collapses that signal.
+
+#### Phase 4b — Triage Copilot comments (after Phase 4 is otherwise complete)
+
+Once Phase 4's agent-finding fixes have landed, switch to Copilot's review on the open PR.  Same severity policy applies — fix inline or DR-NNN.  Two outcomes are interesting to record on the rollup tracking issue:
+
+- **Overlap** (Copilot found the same issue your agents found): high confidence — typically a real bug.
+- **Divergence** (Copilot raises a concern your agents didn't, or vice versa): a different perspective — usually a code-quality / test-coverage / doc-staleness item that the themed agents underweighted.
+
+Note the overlap/divergence ratio in the Phase 4 checkpoint comment on the rollup tracking issue — it's useful calibration data for tuning the themed-review prompts in future rollups.
+
+#### Phase 5 — Open the integration→main PR
+
+**Open this PR as soon as Phase 3 completes (i.e. before starting Phase 4 fix-finding).**  The PR's diff updates automatically as Phase 4 commits land on the integration branch, so Copilot reviews the evolving rollup in parallel with the human/agent fix-finding.  This is a meaningful wall-time savings on a multi-day rollup.
+
+- Title: `feat: merge feature/<name> into main (<duration> of work)`
+- Body must include:
+  - Summary of themes (link to the tracking issue)
+  - Link to the scenario-sweep results doc
+  - List of every merged PR with one-line description
+  - Link to the changes-since-main doc (e.g. `tasks/INTEGRATION_BRANCH_CHANGES_SINCE_MAIN.md`)
+  - Any DR-NNN entries written during the rollup
+  - A `## Known limitations` section listing any P1 findings deliberately deferred post-merge (with linked issues) — these should be exceptional and explicitly green-lit by the maintainer at the Phase 2 or Phase 4 checkpoint
+
+#### Phase 5b — Agent re-review on the post-fix diff (before Phase 6)
+
+Once Phase 4 (agent findings) and Phase 4b (Copilot triage) have both landed their fixes onto the integration branch, **re-run the themed multi-agent reviews from Phase 3 one more time** against the now-updated commit range.  The point isn't to re-do every finding from scratch — it's to verify that:
+
+1. Each P1 fix actually addresses the original concern without introducing a new one (sanity check on the patches that landed).
+2. Any P2/P3 deferrals are now reflected in `docs/tracking/DESIGN_RATIONALE.md` as DR-NNN entries (the routing rule actually held).
+3. No new P1 surfaces appeared in the Phase 4 fix-commits themselves — easy to introduce a regression when refactoring under pressure.
+
+Document the re-review's findings as a brief comment on the rollup tracking issue.  If a new P1 surfaces, return to Phase 4 — do **not** proceed to Phase 6 until the re-review is clean.  Phase 6 runs Gazebo + Cosys scenarios which take real wall-clock time; you want the re-review's blessing before paying that cost.
+
+#### Phase 6 — Final pre-merge validation
+
+- [ ] Re-run scenario sweep on the PR branch with main merged-in (catches surface regressions from any merge conflicts)
+- [ ] Verify `ctest` fully green
+- [ ] Verify CI workflow passes on the PR
+
+#### Phase 7 — Merge decision
+
+Two options exist; the right one depends on the **size of the rollup**:
+
+- **Squash** the integration branch into one commit on main: keeps main linear, loses individual PR history
+- **Merge commit** (preserves all N commits): main retains the development arc, useful for `git log` / `git bisect` on per-PR resolution
+
+| Rollup size | Default | Why |
+|-------------|---------|-----|
+| **Small** (a few related PRs, <2 weeks) | **Squash** | Short-lived integration branches have lower audit-trail value; squash keeps `git log` tidy on `main`.  This is what the example earlier in this doc ("Integration Branch Pattern (Multi-Issue Features)") uses for the perception-avoidance integration (3 issues, 1 week). |
+| **Large** (50+ commits / weeks of work, this rollup process) | **Merge commit** | Every PR already has review evidence; squashing erases that audit trail.  Future `git bisect` across hundreds of commits needs per-PR resolution.  Worth paying the "non-linear main" cost. |
+
+**Default for this checklist (large rollups): merge commit.**  Use squash only if a PR landed buggy and got rescued by follow-up commits that you don't want polluting `git log` — in which case, squash that specific PR's portion via interactive rebase before opening the integration-to-main PR, then keep the rest as merge commit.
+
+#### Phase 8 — Post-merge cleanup
+
+- [ ] Delete the integration branch on origin
+- [ ] Remove all integration-branch worktrees
+- [ ] Update `tasks/active-work.md` and similar trackers
+- [ ] Close the rollup tracking issue with a summary
+
+#### Cost estimate
+
+Typical integration rollup: **6-12 hours over 2-3 sessions**.  Phase 2 (scenario sweep) is often the longest because of Gazebo's slow iteration.  Phase 3 (themed reviews) is the most parallelisable.
+
+#### Example
+
+See [Issue #723 — Integration → main merge for feature/perception-v2-integration](https://github.com/nmohamaya/companion_software_stack/issues/723) for a fully-tracked rollup.  87 commits over 3 weeks; this checklist applied.
 
 ### Cleanup
 
@@ -226,6 +365,48 @@ git checkout -b feature/issue-XX-short-description
 - Reference issue numbers in commits: `fix(#XX): description`
 - Add or update unit tests for any changed logic
 - Use `cfg.get<>()` for all tunables — no magic numbers in process code
+
+##### Commit hygiene — commit after each fix lands green
+
+**Rule:** each discrete fix gets committed as soon as it builds clean and its tests pass. **Do not batch multiple independent fixes into one uncommitted pile of working-tree changes** just because you're "still debugging a bigger problem."
+
+**Why:** unbatched, uncommitted work is fragile and invisible. Concrete failure modes observed on this project:
+
+- A 2026-04-24 scenario-33 diagnostic session produced three independent small fixes (PathATrace absolute-path acceptance, test coverage for it, telemetry-poller NED→ENU conversion). All three sat uncommitted in a worktree for over an hour while debugging continued; a crash or accidental `git checkout` would have discarded them. PR #623 rescued them, but only after a direct "why aren't these committed?" prompt from the user.
+- Uncommitted work doesn't appear in `git worktree list`, doesn't show up in review agents' context, and is invisible to other agents working concurrently on the same branch.
+- Bundled "end of debug session" commits mix unrelated changes, making review harder and bisect useless.
+
+**What to do:**
+
+1. As soon as a fix (a) builds clean, (b) passes its test, and (c) is genuinely independent of any larger work still in progress — commit it. Even if you're mid-session and the overall investigation is ongoing.
+2. Name the files explicitly (`git add path/to/file.cpp`). Never `git add -A` / `git add .` — risks staging gitignored proprietary files, untracked noise, or stashed submodule contents.
+3. If the change is a diagnostic-only one-liner, it still gets a commit + PR. Small, single-concern PRs merge fast.
+4. If a fix is genuinely entangled with a larger in-progress change, commit it to a **WIP branch** (`wip/<short-description>`) rather than leaving it in an unnamed working tree.
+5. Before ending any session or context-switching between tasks, run `git status` in every active worktree and either commit, stash (with a descriptive name, `git stash push -m "..."`), or consciously accept the dirty state in writing (e.g. a `tasks/todo.md` note).
+
+##### Worktree hygiene — remove worktrees immediately after merge
+
+**Rule:** when a worktree's PR merges (or the branch is abandoned), the worktree **and** the local branch get removed immediately. Not at "end of session." Not "once I'm back on this work." **Immediately.**
+
+**Why:** stale worktrees pile up quickly in a multi-agent environment. Each one carries:
+
+- a `build/` directory (often 5-10 GB of object files)
+- a checkout that diverges from `origin/main` the moment main moves
+- a local branch that shadows the origin branch and confuses future `git checkout`
+- an IDE workspace that keeps opening old paths
+
+**What to do after merge:**
+
+```bash
+# From any other worktree (e.g., main checkout):
+git worktree remove ~/Projects/companion_software_stack_worktrees/<branch-name>
+git branch -D <feature/branch-name>
+git fetch --prune origin   # drop deleted origin branches
+```
+
+If the worktree has unexpected uncommitted work, investigate before removing (it may be legitimate in-progress work from another agent). If it's clearly yours and the PR is merged, it is safe to remove.
+
+**Session-start audit:** at the start of any working session, run `git worktree list` and `git stash list`. Reconcile any state you don't recognise — commit, stash, or remove — before starting new work. Old stashes and phantom worktrees are the most reliable source of "I thought this was committed" bugs.
 
 #### Step 4: Pre-Push Verification
 
@@ -355,6 +536,20 @@ bash tests/test_zenoh_e2e.sh
 - Mark simulation-dependent tests with a GTest filter tag: `TEST(Integration, ...)`
 - Document any required environment setup in the PR description
 
+##### Tier-3 / Cosys-AirSim model preflight (Issue #625)
+
+`tests/run_scenario_cosys.sh` and `tests/run_scenario_gazebo.sh` both run a preflight check that verifies every `model_path` referenced in the merged scenario config exists on disk **before** launching any companion process. Missing models otherwise produce silent in-process degradation (e.g. `[OpenCvYoloDetector] Failed to load model`) that looks identical to genuine logic bugs and burns 30+ minutes per scenario debug.
+
+If the runner reports `✗ Preflight failed: missing model file(s)` it will list each missing file with the exact download script to run, e.g.:
+
+```
+config key:  perception.detector.model_path
+expected at: /path/to/models/yolov8n.onnx
+→ run: bash models/download_yolov8n.sh
+```
+
+The `models/` directory is gitignored — every fresh checkout / new dev machine needs the relevant download scripts run once before scenario testing works.
+
 #### Step 5: Create Pull Request
 
 1. Push branch: `git push origin feature/issue-XX-description`
@@ -423,7 +618,34 @@ Before merging, update the project's tracking documents:
    - Update suite/test counts in the summary table
    - Document what each new suite validates
 
-7. **When to update:** Include doc updates in the same PR branch, committed before merge.
+7. **`DESIGN_RATIONALE.md`** — Add a new `DR-NNN` entry when:
+   - You are **declining or disagreeing with a review comment** (from a review agent, Copilot, or a human reviewer) based on a justified rationale. This creates the audit trail showing the comment was evaluated intentionally, not missed.
+   - You made a **gray-area design decision where both sides are defensible** — e.g. "opt-in observability on a flight-critical thread is OK because the default is off and the gate is config-driven."
+   - You marked an item **deferred** in a PR's Review Fixes table — the DR is where the reasoning lives. Every deferral must cite a DR-NNN reference.
+   - You need to document a **revisit trigger** — a condition under which the decision should be reconsidered (e.g. "if a production config ever wants this enabled, promote to SPSC-ring").
+   - Format each entry as: Question / For-X / For-Y / Decision / Revisit when / Date. See existing DR-001 through DR-034 for style.
+   - DR entries are append-only. If a decision is superseded, keep the old entry and add a new one referencing it.
+
+8. **`IMPROVEMENTS.md`** — Add an entry when:
+   - You notice a **proactive improvement yourself** (not in response to a review comment) — infrastructure cleanups, architecture nits, code-quality nice-to-haves, missing tests, documentation gaps, stale numbers, tool ergonomics, etc.
+   - The improvement is **worth doing but not worth interrupting current work** — quiet-window backlog for when a PR is waiting on review or a test is running.
+   - You batched minor suggestions at the end of a task summary — anything that would otherwise "float in conversation only" belongs here instead.
+   - Entries must include: date, priority (P1/P2/P3), category (Infra / Arch / CodeQual / Functional / Tests / Docs / Scripts), file/area, what/why, suggested approach.
+   - Move completed entries to a **Resolved** section at the bottom, with the PR or commit reference.
+
+   **Critical distinction — which file gets the entry?**
+
+   | Origin of the item | Destination |
+   |---|---|
+   | A review agent / Copilot / human reviewer flagged it *and* we are declining to fix it | `DESIGN_RATIONALE.md` (new DR-NNN) |
+   | A review agent / Copilot / human reviewer flagged it *and* we are fixing it now | Nothing — just fix it in the PR |
+   | A review agent / Copilot / human reviewer flagged it *and* we are deferring | `DESIGN_RATIONALE.md` (new DR-NNN); cite the DR number in the PR's Review Fixes table |
+   | We noticed it ourselves and it's outside the current PR's scope | `IMPROVEMENTS.md` |
+   | We noticed it ourselves and we're fixing it now | Nothing — just fix it in the PR |
+
+   Never mix the two destinations. `IMPROVEMENTS.md` is a backlog of nice-to-haves; `DESIGN_RATIONALE.md` is the audit trail for evaluated-and-declined review comments. They serve different readers (backlog groomers vs future PR reviewers checking why X wasn't fixed).
+
+9. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 

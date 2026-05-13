@@ -90,7 +90,34 @@ public:
         if (timestamp_ns) {
             *timestamp_ns = msg_ts;
         }
-        if (track_latency_ && msg_ts > 0) {
+        // Only record a latency sample when the message timestamp has changed
+        // since the previous receive().  Without this guard, a sticky-true
+        // has_data_ + an unchanged timestamp_ns_ (publisher silent) makes every
+        // poll record `now - last_callback_time`, which grows linearly with
+        // wall-clock and looks like an unbounded queue backlog.  Bug surfaced
+        // during scenario-33 forensics on 2026-04-30 when fc_command latency
+        // appeared to climb to 220s but the publisher was idle after TAKEOFF.
+        //
+        // PR #674 P1 review (refined by PR #691 Copilot): relaxed memory
+        // ordering is correct here because `last_recorded_ts_` is only
+        // ever loaded/stored from `receive()`, which is called from a
+        // SINGLE consumer thread per the `ISubscriber<T>::receive()`
+        // contract (documented in `isubscriber.h`).  `on_sample()` (Zenoh
+        // callback thread) NEVER touches this field — only `latest_msg_`
+        // and `timestamp_ns_`, both guarded by `data_mutex_`.
+        //
+        // Because access is single-threaded by the contract, technically
+        // no atomic is needed at all (same-thread reads of one's own
+        // previous writes do not constitute a data race per C++17
+        // [intro.races]).  The atomic remains for two reasons: (a)
+        // defence-in-depth against a future caller that violates the
+        // single-consumer contract — relaxed atomics on x86 / aarch64
+        // compile to plain loads/stores so there's zero hot-path cost,
+        // and (b) it documents the field's threading semantics directly
+        // in the type rather than only in a comment.
+        if (track_latency_ && msg_ts > 0 &&
+            msg_ts != last_recorded_ts_.load(std::memory_order_relaxed)) {
+            last_recorded_ts_.store(msg_ts, std::memory_order_relaxed);
             uint64_t now = drone::util::LatencyTracker::now_ns();
             if (now > msg_ts) {
                 latency_tracker_.record(now - msg_ts);
@@ -108,7 +135,19 @@ public:
     [[nodiscard]] const std::string& topic_name() const override { return key_expr_; }
 
     /// Access the latency tracker for periodic reporting.
-    [[nodiscard]] drone::util::LatencyTracker& latency_tracker() const { return latency_tracker_; }
+    /// PR #674 / PR #691 Copilot review: returns a `const&` to enforce
+    /// the dedup invariant in the type system.  Previously returned a
+    /// non-const reference, which let callers directly invoke
+    /// `latency_tracker().record(...)` and bypass the timestamp-change
+    /// dedup maintained by receive().  All current callers
+    /// (`log_latency_if_due`, run-report) only need read access for
+    /// summary stats — `LatencyTracker`'s read-side methods (`p50()`,
+    /// `p95()`, `count()`, `clear()`) work on a `const` instance.
+    /// The single producer of samples is `receive()` (which holds the
+    /// non-const `latency_tracker_` directly).
+    [[nodiscard]] const drone::util::LatencyTracker& latency_tracker() const {
+        return latency_tracker_;
+    }
 
     /// Log latency summary if enough samples have been collected.
     bool log_latency_if_due(size_t min_samples = 100) const override {
@@ -186,6 +225,10 @@ private:
     uint64_t                            timestamp_ns_{0};
     std::atomic<bool>                   has_data_{false};
     mutable drone::util::LatencyTracker latency_tracker_{1024};
+    // Tracks the timestamp of the last message we recorded a latency sample
+    // for.  Lets receive() suppress duplicate samples on quiet topics so the
+    // tracker reports real callback→poll delay rather than wall-clock drift.
+    mutable std::atomic<uint64_t> last_recorded_ts_{0};
 };
 
 }  // namespace drone::ipc
