@@ -62,6 +62,10 @@ FAIL=0
 TOTAL=0
 LAUNCHER_PID=""
 SCENARIO_NAME=""
+# Issue #740 Layer 3 — Gate 1 (contact sensor) state.
+CONTACT_CAPTURE_PID=""
+CONTACT_CAPTURE_LOG=""
+WORLD_NAME=""
 
 # ── Parse args ────────────────────────────────────────────────
 SCENARIO_FILE=""
@@ -553,6 +557,14 @@ cleanup_scenario() {
     pkill -f "gz sim" 2>/dev/null || true
     pkill -f "ruby.*gz" 2>/dev/null || true
     pkill -f "px4.*sitl" 2>/dev/null || true
+    # Issue #740 Layer 3 — stop the contact-sensor capture if it was started.
+    # `gz topic -e` doesn't exit cleanly on SIGTERM in some gz-transport
+    # versions, so we follow up with SIGKILL after a brief grace period.
+    if [[ -n "$CONTACT_CAPTURE_PID" ]] && kill -0 "$CONTACT_CAPTURE_PID" 2>/dev/null; then
+        kill -SIGTERM "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    fi
     sleep 2
     # Force kill any stragglers that ignored SIGTERM
     pkill -9 -f "build/bin/video_capture" 2>/dev/null || true
@@ -622,6 +634,43 @@ if [[ "$STARTUP_OK" == "true" ]]; then
     # Extra settle time for PX4 to fully boot and start publishing telemetry
     echo -e "  ${CYAN}Settling (5s) — waiting for MAVLink telemetry...${NC}"
     sleep 5
+
+    # ── Issue #740 Layer 3 Gate 1 — start contact-sensor capture ──
+    # Scenario flight-quality gate: parse Gazebo's `/world/<name>/contacts`
+    # topic post-hoc to catch drone-vs-obstacle physical contact that the
+    # existing log-pattern checks miss (#727 reproduction: scenarios 25, 26
+    # report PASS while the drone visibly hits cylinders / objects).
+    #
+    # Gate runs unless the scenario explicitly opts out via
+    # `flight_quality_gates.contact_sensor_enabled: false`.  We default
+    # ON because the user reported 50% of cold-starts had visible flight
+    # quality issues that the runner falsely reported as PASS.
+    CONTACT_GATE_ENABLED=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_sensor_enabled" "true")
+    if [[ "$CONTACT_GATE_ENABLED" == "true" ]]; then
+        # Extract world name from the SDF that Gazebo loaded.  `gz topic`
+        # needs the world name (not the SDF path) to construct the topic.
+        WORLD_NAME=$(grep -oP '<world\s+name="\K[^"]+' "$GZ_WORLD" 2>/dev/null | head -1)
+        if [[ -z "$WORLD_NAME" ]]; then
+            echo -e "  ${YELLOW}WARN: could not extract <world name=...> from ${GZ_WORLD};${NC}"
+            echo -e "  ${YELLOW}      contact-sensor gate disabled for this run.${NC}"
+        elif ! command -v gz >/dev/null 2>&1; then
+            echo -e "  ${YELLOW}WARN: 'gz' CLI not in PATH — contact-sensor gate disabled.${NC}"
+        else
+            CONTACT_CAPTURE_LOG="${SCENARIO_LOG_DIR}/gz_contacts.log"
+            echo -e "  ${CYAN}Starting contact-sensor capture on /world/${WORLD_NAME}/contacts${NC}"
+            # `gz topic -e -t ...` echoes the topic in text format.  We don't
+            # set a duration — it runs until killed in cleanup_scenario.
+            # stderr captured separately so we can debug subscription issues
+            # without polluting the contact log we'll parse.
+            gz topic -e -t "/world/${WORLD_NAME}/contacts" \
+                > "$CONTACT_CAPTURE_LOG" \
+                2> "${SCENARIO_LOG_DIR}/gz_contacts.stderr" &
+            CONTACT_CAPTURE_PID=$!
+        fi
+    else
+        echo -e "  ${CYAN}Contact-sensor gate disabled by scenario config.${NC}"
+    fi
 else
     check "PX4 + Gazebo + Stack started" 1
     echo -e "${RED}  Stack failed to start. Check:${NC}"
@@ -725,6 +774,51 @@ while read -r pattern; do
         check "Log correctly does NOT contain: ${pattern}" 0
     fi
 done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_must_not_contain")
+
+# ── Issue #740 Layer 3 Gate 1 — contact-sensor verification ──
+# Parse the captured `gz topic -e -t /world/<name>/contacts` log for
+# drone-vs-obstacle physical contact during the run.  Closes the
+# observability gap surfaced by #727 evidence (scenarios 25 / 26 reported
+# PASS while the drone visibly hit objects in the Gazebo GUI).
+if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
+    echo ""
+    echo "Flight-quality gates:"
+    # Stop the capture so the file is fully flushed before we parse it.
+    # `gz topic -e` doesn't always exit on SIGTERM cleanly, so we use
+    # SIGKILL after a grace period.  The cleanup_scenario trap will
+    # also try to kill it; that's idempotent.
+    kill -SIGTERM "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    sleep 1
+    kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    wait "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    CONTACT_CAPTURE_PID=""
+
+    # Build the allowlist.  Default: `ground_plane` (covers Gazebo's
+    # default ground at takeoff / landing).  Scenario can extend via
+    # `flight_quality_gates.contact_allowlist` JSON array — values are
+    # comma-joined for the Python helper.
+    CONTACT_ALLOWLIST="ground_plane"
+    EXTRA_ALLOW=$(json_get_array "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_allowlist" | paste -sd, -)
+    if [[ -n "$EXTRA_ALLOW" ]]; then
+        CONTACT_ALLOWLIST="${CONTACT_ALLOWLIST},${EXTRA_ALLOW}"
+    fi
+
+    CONTACT_DRONE_PATTERN=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_drone_pattern" "x500_companion")
+
+    if python3 "${SCRIPT_DIR}/lib_check_contacts.py" "$CONTACT_CAPTURE_LOG" \
+            --drone-pattern "$CONTACT_DRONE_PATTERN" \
+            --allowlist "$CONTACT_ALLOWLIST" \
+            | tee -a "$COMBINED_LOG"; then
+        check "Contact-sensor: no drone-vs-obstacle contacts" 0
+    else
+        check "Contact-sensor: drone-vs-obstacle contact(s) detected" 1
+        if [[ "$VERBOSE" == "true" ]]; then
+            echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        fi
+    fi
+fi
 
 # Check processes alive
 echo ""
