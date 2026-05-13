@@ -136,7 +136,7 @@ it is clamped to the nearest limit and a warning is logged. Thread loops use
 ## Component: IVIOBackend
 
 - **Header:** [`ivio_backend.h`](../process3_slam_vio_nav/include/slam/ivio_backend.h)
-- **Tests:** [`test_vio_backend.cpp`](../tests/test_vio_backend.cpp) (15 tests)
+- **Tests:** see [`tests/TESTS.md`](../../tests/TESTS.md) for the current test inventory
 - **Namespace:** `drone::slam`
 
 ### Interface
@@ -144,7 +144,7 @@ it is clamped to the nearest limit and a warning is logged. Thread loops use
 ```cpp
 class IVIOBackend {
     virtual VIOResult<VIOOutput> process_frame(
-        const ShmStereoFrame& frame,
+        const StereoFrame& frame,
         const std::vector<ImuSample>& imu_samples) = 0;
     virtual VIOHealth health() const = 0;
     virtual std::string name() const = 0;
@@ -157,7 +157,8 @@ class IVIOBackend {
 |---------|-------------|-------------|
 | `SimulatedVIOBackend` | `"simulated"` | Circular trajectory with noise. Runs full pipeline (extract → match → preintegrate) but generates pose independently. |
 | `GazeboVIOBackend` | `"gazebo"` | Reads ground-truth odometry from gz-transport topic. Ignores stereo/IMU data. Requires `HAVE_GAZEBO` build flag. |
-| `GazeboFullVIOBackend` | `"gazebo_full_vio"` | Runs the **full VIO pipeline** (feature extraction → stereo matching → IMU pre-integration) on each frame, but obtains the final pose from Gazebo ground truth. Unlike `GazeboVIOBackend` (which skips the pipeline entirely), this exercises all estimation code paths while still producing a reliable pose for downstream consumers. Uses covariance-based health assessment (see below). Requires `HAVE_GAZEBO`. Used in scenario 26 for VIO validation. Source: `ivio_backend.h`. |
+| `GazeboFullVIOBackend` | `"gazebo_full_vio"` | Runs the **full VIO pipeline** (feature extraction → stereo matching → IMU pre-integration) on each frame, but obtains the final pose from Gazebo ground truth. Unlike `GazeboVIOBackend` (which skips the pipeline entirely), this exercises all estimation code paths while still producing a reliable pose for downstream consumers. Uses covariance-based health assessment (see below). Requires `HAVE_GAZEBO`. Used in scenario 26 for VIO validation. |
+| `SwvioBackend` *(in progress, Epic #497)* | `"swvio"` | Custom in-house sliding-window VIO with IMU pre-integration, error-state formulation, and Schur-complement marginalisation. License-clean replacement for VINS-Fusion / ORB-SLAM3 / Kimera-VIO. See [ADR-014](../adr/ADR-014-stereo-inertial-vio-algorithm-selection.md) for the algorithm-selection rationale and [`swvio_implementation.md`](./swvio_implementation.md) for the detailed implementation guide. |
 
 ### SimulatedVIOBackend Pipeline
 
@@ -229,7 +230,7 @@ struct VIOOutput {
 ## Component: IFeatureExtractor
 
 - **Header:** [`ifeature_extractor.h`](../process3_slam_vio_nav/include/slam/ifeature_extractor.h)
-- **Tests:** [`test_feature_extractor.cpp`](../tests/test_feature_extractor.cpp) (11 tests)
+- **Tests:** [`test_feature_extractor.cpp`](../../tests/test_feature_extractor.cpp) (see [`tests/TESTS.md`](../../tests/TESTS.md) for count)
 
 ### Interface
 
@@ -253,7 +254,7 @@ class IFeatureExtractor {
 ## Component: IStereoMatcher
 
 - **Header:** [`istereo_matcher.h`](../process3_slam_vio_nav/include/slam/istereo_matcher.h)
-- **Tests:** [`test_stereo_matcher.cpp`](../tests/test_stereo_matcher.cpp) (14 tests)
+- **Tests:** [`test_stereo_matcher.cpp`](../../tests/test_stereo_matcher.cpp) (see [`tests/TESTS.md`](../../tests/TESTS.md) for count)
 
 ### Interface
 
@@ -292,7 +293,7 @@ struct StereoMatch {
 
 - **Header:** [`imu_preintegrator.h`](../process3_slam_vio_nav/include/slam/imu_preintegrator.h)
 - **Source:** [`imu_preintegrator.cpp`](../process3_slam_vio_nav/src/imu_preintegrator.cpp)
-- **Tests:** [`test_imu_preintegrator.cpp`](../tests/test_imu_preintegrator.cpp) (12 tests)
+- **Tests:** [`test_imu_preintegrator.cpp`](../../tests/test_imu_preintegrator.cpp) (see [`tests/TESTS.md`](../../tests/TESTS.md) for count)
 
 Implements the Forster et al. (2017) IMU pre-integration formulation.
 
