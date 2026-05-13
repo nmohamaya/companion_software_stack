@@ -1273,7 +1273,7 @@ Pattern B becomes a one-liner; Pattern A doesn't fit cleanly because its compari
 **Action items:**
 
 1. **None immediately** — this is the audit trail for "considered, declined now".
-2. **Filed [#742](https://github.com/nmohamaya/companion_software_stack/issues/748)** as the follow-up — extraction work scheduled to happen alongside #718 (PREFLIGHT-timeout escalation), which will add the third pattern that informs the right abstraction.
+2. **Filed [#742](https://github.com/nmohamaya/companion_software_stack/issues/742)** as the follow-up — extraction work scheduled to happen alongside #718 (PREFLIGHT-timeout escalation), which will add the third pattern that informs the right abstraction.
 3. **In any future PR touching either of the two existing sites**, the reviewer MUST cross-reference the other site to check for asymmetric maintenance. Reference this DR-047 entry in the PR body if such a change lands.
 
 **Revisit when:**

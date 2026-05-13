@@ -249,6 +249,29 @@ private:
             std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
     }
 
+    // Issue #740 / PR #743 review (code-quality P2): the PREFLIGHT block
+    // had three near-identical inline throttle checks of the form
+    //   if (last_ns == 0 || now_ns < last_ns || (now_ns - last_ns) >= period_ns)
+    // — sentinel-0 "never fired", backward-clock guard (for mock-clock
+    // resets / host clock skew), and elapsed-period.  Extracted to one
+    // helper so the four-condition contract (including the `last_ns =
+    // now_ns` update) is documented in one place.
+    //
+    // Note: this is NOT the same as the `armable_first_seen_ns_` window-
+    // start pattern in `tick_preflight` — that one starts a window with
+    // just sentinel-0 + backward-clock guards (no elapsed-period check
+    // because the window is the point of the gate, not a throttle).
+    //
+    // Returns true and updates `last_ns` to `now_ns` if the throttle should
+    // fire this tick.  Returns false (without modifying `last_ns`) otherwise.
+    static bool fire_throttled(uint64_t& last_ns, uint64_t now_ns, uint64_t period_ns) {
+        if (last_ns == 0 || now_ns < last_ns || (now_ns - last_ns) >= period_ns) {
+            last_ns = now_ns;
+            return true;
+        }
+        return false;
+    }
+
     // ── PREFLIGHT: wait for FC readiness, then ARM (retry on configurable
     //               interval as a safety net for dropped MAVLink messages) ──
     //
@@ -317,12 +340,8 @@ private:
             armable_first_seen_ns_ = 0;
             const uint64_t wait_log_interval_ns =
                 static_cast<uint64_t>(std::max(0, config_.preflight_wait_log_s)) * 1'000'000'000ULL;
-            // Sentinel `0` means "never logged" → fire immediately.  Clock-
-            // backward guard via `now_ns >= last`.
-            if (last_wait_log_time_ns_ == 0 || now_ns < last_wait_log_time_ns_ ||
-                (now_ns - last_wait_log_time_ns_) >= wait_log_interval_ns) {
+            if (fire_throttled(last_wait_log_time_ns_, now_ns, wait_log_interval_ns)) {
                 DRONE_LOG_INFO("[Planner] Waiting for FC preflight (armable=false)");
-                last_wait_log_time_ns_ = now_ns;
             }
             return;
         }
@@ -355,15 +374,13 @@ private:
 
         // Stability window satisfied — apply the existing ARM-retry throttle
         // (Issue #716) so duplicate ARMs aren't issued within `preflight_arm_
-        // retry_s` of each other.  Sentinel `0` means "never armed" → fire.
+        // retry_s` of each other.
         const uint64_t retry_interval_ns =
             static_cast<uint64_t>(std::max(0, config_.preflight_arm_retry_s)) * 1'000'000'000ULL;
-        if (last_arm_time_ns_ == 0 || now_ns < last_arm_time_ns_ ||
-            (now_ns - last_arm_time_ns_) >= retry_interval_ns) {
+        if (fire_throttled(last_arm_time_ns_, now_ns, retry_interval_ns)) {
             DRONE_LOG_INFO("[Planner] FC armable stable for {:.1f}s — sending ARM command",
                            static_cast<double>(now_ns - armable_first_seen_ns_) * 1e-9);
             send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
-            last_arm_time_ns_ = now_ns;
         }
     }
 
