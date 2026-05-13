@@ -62,6 +62,10 @@ FAIL=0
 TOTAL=0
 LAUNCHER_PID=""
 SCENARIO_NAME=""
+# Issue #740 Layer 3 — Gate 1 (contact sensor) state.
+CONTACT_CAPTURE_PID=""
+CONTACT_CAPTURE_LOG=""
+WORLD_NAME=""
 
 # ── Parse args ────────────────────────────────────────────────
 SCENARIO_FILE=""
@@ -128,22 +132,32 @@ done
 
 # JSON query helper (uses python3 since jq may not be installed)
 # Variables are passed via sys.argv to avoid shell injection into Python code.
+# Optional 3rd argument is the default value returned when the key is absent
+# (or any intermediate key in the dotted path is missing).  Without it, an
+# absent key returns the empty string — preserved for backwards compatibility
+# with existing call sites that test for `-n "$val"`.
 json_get() {
     local file="$1"
     local query="$2"
-    python3 - "$file" "$query" <<'PYEOF'
+    local default="${3-}"
+    python3 - "$file" "$query" "$default" <<'PYEOF'
 import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
 keys = sys.argv[2].split('.')
+default = sys.argv[3]
 val = data
+found = True
 for k in keys:
     if isinstance(val, dict) and k in val:
         val = val[k]
     else:
-        val = ''
+        found = False
         break
-print(val if not isinstance(val, (dict, list)) else json.dumps(val))
+if not found:
+    print(default)
+else:
+    print(val if not isinstance(val, (dict, list)) else json.dumps(val))
 PYEOF
 }
 
@@ -553,6 +567,14 @@ cleanup_scenario() {
     pkill -f "gz sim" 2>/dev/null || true
     pkill -f "ruby.*gz" 2>/dev/null || true
     pkill -f "px4.*sitl" 2>/dev/null || true
+    # Issue #740 Layer 3 — stop the contact-sensor capture if it was started.
+    # `gz topic -e` doesn't exit cleanly on SIGTERM in some gz-transport
+    # versions, so we follow up with SIGKILL after a brief grace period.
+    if [[ -n "$CONTACT_CAPTURE_PID" ]] && kill -0 "$CONTACT_CAPTURE_PID" 2>/dev/null; then
+        kill -SIGTERM "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    fi
     sleep 2
     # Force kill any stragglers that ignored SIGTERM
     pkill -9 -f "build/bin/video_capture" 2>/dev/null || true
@@ -622,6 +644,58 @@ if [[ "$STARTUP_OK" == "true" ]]; then
     # Extra settle time for PX4 to fully boot and start publishing telemetry
     echo -e "  ${CYAN}Settling (5s) — waiting for MAVLink telemetry...${NC}"
     sleep 5
+
+    # ── Issue #740 Layer 3 Gate 1 — start contact-sensor capture ──
+    # Scenario flight-quality gate: parse Gazebo's `/world/<name>/contacts`
+    # topic post-hoc to catch drone-vs-obstacle physical contact that the
+    # existing log-pattern checks miss (#727 reproduction: scenarios 25, 26
+    # report PASS while the drone visibly hits cylinders / objects).
+    #
+    # Gate runs unless the scenario explicitly opts out via
+    # `flight_quality_gates.contact_sensor_enabled: false`.  We default
+    # ON because the user reported 50% of cold-starts had visible flight
+    # quality issues that the runner falsely reported as PASS.
+    CONTACT_GATE_ENABLED=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_sensor_enabled" "true")
+    if [[ "$CONTACT_GATE_ENABLED" == "true" ]]; then
+        # Extract world name from the SDF that Gazebo loaded.  `gz topic`
+        # needs the world name (not the SDF path) to construct the topic.
+        # Sanitize aggressively before interpolating into a shell argument:
+        # a malicious or malformed SDF attribute value could otherwise inject
+        # backticks / $() into the `gz topic -t /world/${WORLD_NAME}/contacts`
+        # invocation below.  World names in Gazebo are always
+        # `[A-Za-z0-9_-]+` in practice.
+        WORLD_NAME=$(grep -oP '<world\s+name="\K[^"]+' "$GZ_WORLD" 2>/dev/null \
+                     | head -1 | tr -cd 'A-Za-z0-9_-')
+        if [[ -z "$WORLD_NAME" ]]; then
+            # FAIL the run instead of silently skipping — a broken SDF or
+            # an unusual `<world>` attribute format would otherwise let the
+            # scenario pass with no flight-quality coverage at all, which
+            # is the exact false-PASS class this gate exists to prevent.
+            echo -e "  ${RED}ERROR: could not extract <world name=...> from ${GZ_WORLD};${NC}"
+            echo -e "  ${RED}       contact-sensor gate cannot run.${NC}"
+            check "Contact-sensor: world-name extraction failed (gate could not start)" 1
+        elif ! command -v gz >/dev/null 2>&1; then
+            # Same reasoning — the Gazebo runner shouldn't be invoked on a
+            # host without `gz`; treat its absence as an infrastructure
+            # failure rather than a silent skip.
+            echo -e "  ${RED}ERROR: 'gz' CLI not in PATH — contact-sensor gate cannot run.${NC}"
+            check "Contact-sensor: 'gz' CLI missing (gate could not start)" 1
+        else
+            CONTACT_CAPTURE_LOG="${SCENARIO_LOG_DIR}/gz_contacts.log"
+            echo -e "  ${CYAN}Starting contact-sensor capture on /world/${WORLD_NAME}/contacts${NC}"
+            # `gz topic -e -t ...` echoes the topic in text format.  We don't
+            # set a duration — it runs until killed in cleanup_scenario.
+            # stderr captured separately so we can debug subscription issues
+            # without polluting the contact log we'll parse.
+            gz topic -e -t "/world/${WORLD_NAME}/contacts" \
+                > "$CONTACT_CAPTURE_LOG" \
+                2> "${SCENARIO_LOG_DIR}/gz_contacts.stderr" &
+            CONTACT_CAPTURE_PID=$!
+        fi
+    else
+        echo -e "  ${CYAN}Contact-sensor gate disabled by scenario config.${NC}"
+    fi
 else
     check "PX4 + Gazebo + Stack started" 1
     echo -e "${RED}  Stack failed to start. Check:${NC}"
@@ -725,6 +799,94 @@ while read -r pattern; do
         check "Log correctly does NOT contain: ${pattern}" 0
     fi
 done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_must_not_contain")
+
+# ── Issue #740 Layer 3 Gate 1 — contact-sensor verification ──
+# Parse the captured `gz topic -e -t /world/<name>/contacts` log for
+# drone-vs-obstacle physical contact during the run.  Closes the
+# observability gap surfaced by #727 evidence (scenarios 25 / 26 reported
+# PASS while the drone visibly hit objects in the Gazebo GUI).
+if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
+    echo ""
+    echo "Flight-quality gates:"
+    # PR #744 Copilot review: detect early `gz topic` exit before signalling.
+    # `gz topic -e` is designed to run forever (streaming events).  If it
+    # exited before the scenario end, the capture log is unreliable — either
+    # subscription failed (bad world name, gz transport issue) or the
+    # process was killed by something other than our cleanup.  Distinguish
+    # this from "no contacts because the scenario was clean" — without the
+    # check, an empty log silently maps to PASS.
+    if kill -0 "$CONTACT_CAPTURE_PID" 2>/dev/null; then
+        CONTACT_CAPTURE_ALIVE=true
+        # Process was still running — normal stop via SIGTERM then SIGKILL.
+        # `gz topic -e` doesn't always exit on SIGTERM cleanly, so follow up
+        # with SIGKILL after a grace period.  The cleanup_scenario trap will
+        # also try to kill it; that's idempotent (the `kill -0` above in
+        # the trap protects against PID-reuse).
+        kill -SIGTERM "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    else
+        CONTACT_CAPTURE_ALIVE=false
+        echo -e "  ${YELLOW}WARN: contact-sensor capture exited early — gz_contacts.stderr:${NC}"
+        if [[ -s "${SCENARIO_LOG_DIR}/gz_contacts.stderr" ]]; then
+            sed 's/^/    /' "${SCENARIO_LOG_DIR}/gz_contacts.stderr" | head -10
+        else
+            echo -e "    ${YELLOW}(stderr empty — gz topic may have exited silently)${NC}"
+        fi
+    fi
+    wait "$CONTACT_CAPTURE_PID" 2>/dev/null || true
+    CONTACT_CAPTURE_PID=""
+
+    # If the capture process exited early AND the log is empty, the gate
+    # cannot make a flight-quality assessment — emit a distinct
+    # infrastructure-failure check rather than letting the helper's
+    # "empty log → PASS" path silently mask the failure.
+    if [[ "$CONTACT_CAPTURE_ALIVE" == "false" && ! -s "$CONTACT_CAPTURE_LOG" ]]; then
+        check "Contact-sensor: capture exited early with empty log (infrastructure failure)" 1
+        echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC}   ${SCENARIO_LOG_DIR}/gz_contacts.stderr"
+    else
+
+    # Build the allowlist.  Default: `ground_plane` (covers Gazebo's
+    # default ground at takeoff / landing).  Scenario can extend via
+    # `flight_quality_gates.contact_allowlist` JSON array — values are
+    # comma-joined for the Python helper.
+    CONTACT_ALLOWLIST="ground_plane"
+    EXTRA_ALLOW=$(json_get_array "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_allowlist" | paste -sd, -)
+    if [[ -n "$EXTRA_ALLOW" ]]; then
+        CONTACT_ALLOWLIST="${CONTACT_ALLOWLIST},${EXTRA_ALLOW}"
+    fi
+
+    CONTACT_DRONE_PATTERN=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_drone_pattern" "x500_companion")
+
+    # Capture Python helper exit code separately so we can distinguish
+    # exit 1 (drone-vs-obstacle contact) from exit 2 (capture file missing
+    # / unreadable — an infrastructure failure, not a flight-quality
+    # failure).  Without this, both report the same misleading "contact
+    # detected" message.
+    CONTACT_HELPER_OUT="${SCENARIO_LOG_DIR}/contact_helper.out"
+    python3 "${SCRIPT_DIR}/lib_check_contacts.py" "$CONTACT_CAPTURE_LOG" \
+            --drone-pattern "$CONTACT_DRONE_PATTERN" \
+            --allowlist "$CONTACT_ALLOWLIST" \
+            > "$CONTACT_HELPER_OUT" 2>&1
+    CONTACT_HELPER_RC=$?
+    tee -a "$COMBINED_LOG" < "$CONTACT_HELPER_OUT"
+    if [[ $CONTACT_HELPER_RC -eq 0 ]]; then
+        check "Contact-sensor: no drone-vs-obstacle contacts" 0
+    elif [[ $CONTACT_HELPER_RC -eq 2 ]]; then
+        check "Contact-sensor: capture file missing (infrastructure failure)" 1
+        echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC}   ${SCENARIO_LOG_DIR}/gz_contacts.stderr"
+    else
+        check "Contact-sensor: drone-vs-obstacle contact(s) detected" 1
+        if [[ "$VERBOSE" == "true" ]]; then
+            echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        fi
+    fi
+    fi  # end "CONTACT_CAPTURE_ALIVE && log non-empty" branch
+fi
 
 # Check processes alive
 echo ""

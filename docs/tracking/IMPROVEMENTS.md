@@ -36,6 +36,17 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ---
 
+### 2026-05-13 (PR #744 review-fix follow-ups)
+
+#### `tests/lib_check_contacts.py` — no pytest coverage
+
+- **P2** — The Python state machine that parses `gz topic` text format and classifies drone-vs-obstacle pairs is currently only verified by its in-the-loop behaviour during a scenario run.  A regression in `parse_contacts()` (e.g. the `---` delimiter reset added in PR #744 review fixes, or the `is_allowlisted` substring rule) could silently produce phantom or missing events without any unit-test signal.
+  - **Why:** the helper is a small but load-bearing piece of cold-start observability — a quietly-broken parser would re-introduce the false-PASS class this gate exists to prevent.
+  - **Suggested fix:** add `tests/test_lib_check_contacts.py` with pytest cases for: (a) synthetic clean log → exit 0; (b) synthetic single-contact log → exit 1 with the expected pair; (c) allowlist suppression; (d) truncated `contact { ... }` block followed by `---` → no phantom event; (e) missing file → exit 2.  Wire into `tests/run_tests.sh` if pytest is on the CI path.
+  - **When to do it:** next time the parser is touched, or as part of the Tier-1 follow-up gate that will share the same state machine.
+
+---
+
 ### 2026-05-13 (PR #741 review-fix follow-ups — backlog items deferred from the review)
 
 These are valid suggestions surfaced by the [9-agent + Copilot review of PR #741](https://github.com/nmohamaya/companion_software_stack/pull/741#issuecomment-4440678222) that we chose to defer to backlog rather than fix in the immediate follow-up PR #743.  Each has a defined "when to do it" trigger so it doesn't get forgotten.
