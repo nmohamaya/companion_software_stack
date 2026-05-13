@@ -216,6 +216,7 @@ Before kicking off agent reviews, get the branch into a clean baseline state:
 Run all Gazebo scenarios (and Cosys-AirSim scenarios if applicable) on the integration branch's HEAD.  Capture results in a tracking doc (`docs/tracking/INTEGRATION_MERGE_SCENARIO_SWEEP.md` or similar):
 
 - [ ] Each scenario: PASS / FAIL + key metrics (PX4 denies count, hover-fallback events, mission-complete state)
+- [ ] **2-3 consecutive PASS runs per scenario before declaring it clean** — single-run PASSes are insufficient given Gazebo physics seeding + EKF2 cold-start variance.  Same-binary-opposite-result outcomes are run-to-run noise, not code-level signal.  Re-runs at the same commit are the only way to separate the two.
 - [ ] Document any scenarios known to be flaky on this machine
 - [ ] Compare against the last `main` baseline if available
 
@@ -286,9 +287,12 @@ Document the re-review's findings as a brief comment on the rollup tracking issu
 
 #### Phase 6 — Final pre-merge validation
 
-- [ ] Re-run scenario sweep on the PR branch with main merged-in (catches surface regressions from any merge conflicts)
-- [ ] Verify `ctest` fully green
-- [ ] Verify CI workflow passes on the PR
+By this point Phase 4 / 4b / 5b have all landed fix-commits onto the integration branch, and a `main` merge-back may have brought additional changes in (resolve those first if any).  Verify the post-everything state holds:
+
+- [ ] Re-run scenario sweep on the PR branch with main merged-in — catches surface regressions from any merge conflicts.  Apply the same 2-3-consecutive-passes discipline as Phase 2 (re-runs are the only way to distinguish code regressions from Gazebo/EKF2 run-to-run noise).
+- [ ] Run `bash deploy/run_ci_local.sh` **(full, not `--quick`)** locally.  Phase 1 typically uses `--quick` for fast iteration during cleanup; this final pass should run the full matrix (FMT + Build + ctest + ASan + TSan + UBSan + Coverage) so that any sanitizer-detected issue introduced by a Phase 4 fix-commit surfaces before the PR is merged, not after.  GitHub Actions CI covers the same sanitizer matrix in `ci.yml`, so this is defense-in-depth — but a local run also catches problems before the (slower) cloud CI completes.
+- [ ] Verify `ctest -j$(nproc)` fully green on the PR branch — should match the test count documented in `tests/TESTS.md`.
+- [ ] **Verify the GitHub Actions CI workflow on the PR is fully green — every job, not just the build matrix.**  `ci.yml` runs `format-check`, the `build (default|asan|tsan|ubsan)` sanitizer matrix, and `coverage`; `ci-perception.yml` runs the dedicated perception-check sanity job; the orchestrator-tests workflow (if applicable to the rollup's diff) must also be green.  Each is a separate gate.  In particular, a red sanitizer job is a P1 blocker even if `ctest` passed locally — sanitizers catch undefined behavior that release-mode tests silently absorb.  A red `format-check` or `coverage` job is equally blocking: the bar is *all-green*, not *most-green*.
 
 #### Phase 7 — Merge decision
 
