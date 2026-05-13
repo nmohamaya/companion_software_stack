@@ -3607,4 +3607,43 @@ Two-part fix (per #714):
 
 ---
 
-*Last updated after Improvement #94 (PR #725). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #99 — P3 INITIALIZING Pose-Publish Guard (Epic #740 Layer 2, PR #751)
+
+**Date:** 2026-05-13
+**Category:** Hardening — IPC publisher-side staleness defense
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Layer 2 / related to [#727](https://github.com/nmohamaya/companion_software_stack/issues/727)
+**PR:** #751 (open against `feature/cold-start-hardening`)
+**Numbering note:** depends on PRs #743, #744, #745 landing first; renumber if order changes.
+
+**What:**
+
+When a VIO backend (e.g. `GazeboVIOBackend`) is in `INITIALIZING` state, it returns a default-constructed `Pose{}` from `process_frame()` — see `process3_slam_vio_nav/include/slam/ivio_backend.h:385-405`.  Before this PR, the `vio_pipeline_thread` wrote that zero-pose to `pose_buffer` regardless of health, and `pose_publisher_thread` published it on `drone/slam/pose`.  Today the default `Pose` happens to have `timestamp = 0`, which falls out as `timestamp_ns = 0` downstream — so the wrapper-level stale-message filter (PR #745 closing #722) lets it through as a sentinel, and downstream code sees no real data.  This is **fragile**: any future backend that stamps a fresh `timestamp_ns` in the INITIALIZING branch (Cosys backend variants come to mind) would slip past every filter and feed the planner a fresh-stamped zero-pose.
+
+Fix: pin the contract at the publisher side.  `vio_pipeline_thread` now skips `pose_buffer.write()` entirely when `output.health == VIOHealth::INITIALIZING`.  Downstream subscribers see no-pose-this-tick (which they already handle) instead of a fresh-stamped zero-pose.
+
+**Symptom this prevents (#727 evidence):**
+
+Scenario 02 cold-start run 3 (2026-05-12): drone visibly 25 m west of WP0 after takeoff.  Root cause was related to P3 publishing zero-pose early in startup; planner's `try_record_home()` filter caught it via the `pose.timestamp_ns == 0` guard.  A future backend that stamps `now_ns()` in the INITIALIZING branch could produce fresh-stamped zero-poses that slip past every existing filter; this PR closes that latent hole at the source.
+
+**Files modified:**
+
+- `process3_slam_vio_nav/src/main.cpp` — added the `if (output.health == VIOHealth::INITIALIZING)` skip branch in `vio_pipeline_thread`.  Logs once on first skip, increments a diagnostic counter.
+- `docs/tracking/IMPROVEMENTS.md` — logged a P3 follow-up: `vio_pipeline_thread` is currently not unit-testable as a free function.  Refactoring it into a thin glue layer + a testable `should_publish_vio_output()` helper would close the coverage gap.  Deferred to next opportunistic touch.
+
+**Test count:** unchanged (the new branch isn't unit-tested today — see IMPROVEMENTS.md).  Integration coverage via Gazebo scenario sweep (#727 reproduction matrix).  Full ctest 2058/2058 pass.
+
+**Why:**
+
+Wave 2 Layer 2 of the cold-start hardening epic.  Composes with:
+
+- Layer 1 (PR #741, merged) — ARM-gate debounce prevents arming-while-EKF2-still-settling.
+- Layer 2 (this PR) — publisher-side staleness guard prevents `INITIALIZING` fresh-stamped zero-pose.
+- Layer 3 Gate 1 (PR #744) — contact-sensor observability gate measures whether the layers work.
+- Wave 2 PR-B (PR #745) — wrapper-level Zenoh stale-filter (subscriber-side defense-in-depth).
+- Layer 4 (#746) — RTF-aware extension to be empirically informed after Wave 1+2 land.
+
+After this PR + PR #745 land, every safety-critical IPC topic has automatic defense-in-depth against the three known cold-start IPC hazards: Zenoh last-value cache (PR #745, subscriber-side), EKF2 momentary-OK flicker (PR #741, planner-side), and `INITIALIZING` fresh-stamped zero-pose (this PR, publisher-side).
+
+---
+
+*Last updated after Improvement #99 (PR #751). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

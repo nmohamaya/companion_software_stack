@@ -177,8 +177,36 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
 
         if (result.is_ok()) {
             auto& output = result.value();
-            pose_buffer.write(output.pose);
-            pose_buffer.mark_initialized();
+            // Issue #740 Layer 2 / #727 — skip publishing while the backend
+            // is still INITIALIZING.  Backends return a default-zero `Pose{}`
+            // in this state (see e.g. GazeboVIOBackend::process_frame at
+            // ivio_backend.h:385-405 — when `pose_valid_` is false, the
+            // method early-returns with `output.health = INITIALIZING` and
+            // `output.pose` left at default-zero).  In the current Gazebo
+            // path the default Pose has `timestamp = 0` which falls out
+            // downstream — but that's fragile: any future backend that
+            // stamps a fresh `timestamp_ns` in the INITIALIZING branch
+            // would slip past the wrapper-level stale-message filter
+            // (#722) and feed the planner a fresh-stamped zero-pose.
+            // Symptom: drone arrives at first waypoint with wildly wrong
+            // pose (#727 scenario 02 — drone visibly 25 m west of WP0).
+            //
+            // Pinning the contract here means: P3 publishes nothing until
+            // the backend reports either DEGRADED or NOMINAL.  Downstream
+            // subscribers see no-pose-this-tick (which they already handle)
+            // rather than a meaningless zero-pose-with-fresh-timestamp.
+            if (output.health == VIOHealth::INITIALIZING) {
+                static bool init_skip_logged = false;
+                if (!init_skip_logged) {
+                    DRONE_LOG_INFO("[VIOPipeline] Backend INITIALIZING — withholding pose "
+                                   "publication until DEGRADED/NOMINAL (Issue #740 Layer 2)");
+                    init_skip_logged = true;
+                }
+                diag.add_metric("VIO", "init_skipped_frames", 1.0);
+            } else {
+                pose_buffer.write(output.pose);
+                pose_buffer.mark_initialized();
+            }
 
             diag.add_metric("VIO", "features", static_cast<double>(output.num_features));
             diag.add_metric("VIO", "stereo_matches",
@@ -573,13 +601,11 @@ int main(int argc, char* argv[]) {
             std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0");
     }
 #endif
-    auto vio_result = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params,
-                                                      vio_gz_topic, sim_speed_mps, good_trace_max,
-                                                      degraded_trace_max, cosys_client,
-                                                      cosys_vehicle);
+    auto vio_result = drone::slam::create_vio_backend(
+        vio_backend_name, calib, imu_params, vio_gz_topic, sim_speed_mps, good_trace_max,
+        degraded_trace_max, cosys_client, cosys_vehicle);
     if (vio_result.is_err()) {
-        DRONE_LOG_ERROR("[VIOBackend] create_vio_backend failed: {}",
-                        vio_result.error().message);
+        DRONE_LOG_ERROR("[VIOBackend] create_vio_backend failed: {}", vio_result.error().message);
         return 1;
     }
     auto vio = std::move(vio_result.value());
