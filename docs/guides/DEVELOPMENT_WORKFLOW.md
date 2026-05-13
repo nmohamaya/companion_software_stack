@@ -286,9 +286,13 @@ Document the re-review's findings as a brief comment on the rollup tracking issu
 
 #### Phase 6 — Final pre-merge validation
 
-- [ ] Re-run scenario sweep on the PR branch with main merged-in (catches surface regressions from any merge conflicts)
-- [ ] Verify `ctest` fully green
-- [ ] Verify CI workflow passes on the PR
+By this point Phase 4 / 4b / 5b have all landed fix-commits onto the integration branch, and a `main` merge-back may have brought additional changes in (resolve those first if any).  Verify the post-everything state holds:
+
+- [ ] Re-run scenario sweep on the PR branch with main merged-in — catches surface regressions from any merge conflicts.  Apply the same 2-3-consecutive-passes discipline as Phase 2.
+- [ ] Run `bash deploy/run_ci_local.sh` **(full, not `--quick`)** locally.  Phase 1 typically uses `--quick` for fast iteration during cleanup; this final pass should run the full matrix (FMT + Build + ctest + ASan + TSan + UBSan + Coverage) so that any sanitizer-detected issue introduced by a Phase 4 fix-commit surfaces before the PR is merged, not after.  GitHub Actions CI covers the same sanitizer matrix in `ci.yml`, so this is defence-in-depth — but a local run also catches problems before the (slower) cloud CI completes.
+- [ ] Verify `ctest -j$(nproc)` fully green on the PR branch — should match the test count documented in `tests/TESTS.md`.
+- [ ] Verify the GitHub Actions CI workflow on the PR is green across **all** sanitizer matrix entries (`build (default)`, `build (asan)`, `build (tsan)`, `build (ubsan)`).  A red sanitizer job is a P1 blocker even if `ctest` passed locally — sanitizers catch undefined behaviour that release-mode tests silently absorb.
+- [ ] Verify CI's perception-check job is green (the dedicated perception sanity job in `ci-perception.yml`).
 
 #### Phase 7 — Merge decision
 
