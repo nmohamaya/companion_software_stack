@@ -10,8 +10,8 @@ Routing by goal — pick the row that matches what you're trying to do.
 | **Understand the per-process design** | [`design/`](design/) — one doc per process (`video_capture`, `perception`, `slam_vio_nav`, `mission_planner`, `comms`, `payload_manager`, `system_monitor`) |
 | **Understand the IPC wire format** | [`design/ipc_design.md`](design/ipc_design.md) · [`design/API.md`](design/API.md) · [`architecture/ipc-key-expressions.md`](architecture/ipc-key-expressions.md) · `common/ipc/include/ipc/ipc_types.h` (authoritative source) |
 | **Understand the HAL** | [`design/hal_design.md`](design/hal_design.md) · [ADR-006](adr/ADR-006-hal-hardware-abstraction-strategy.md) · `common/hal/include/hal/` (authoritative source) |
-| **Understand SLAM/VIO** | [`design/slam_vio_nav_design.md`](design/slam_vio_nav_design.md) · [`design/swvio_implementation.md`](design/swvio_implementation.md) · [ADR-014](adr/ADR-014-stereo-inertial-vio-algorithm-selection.md) |
-| **Understand perception (PATH A)** | [`design/perception_design.md`](design/perception_design.md) · [`design/perception_architecture.md`](design/perception_architecture.md) · [`design/perception_v2_detailed_design.md`](design/perception_v2_detailed_design.md) · [ADR-013](adr/ADR-013-stereo-radar-redundancy-vs-fusion.md) |
+| **Understand SLAM/VIO** | [`design/slam_vio_nav_design.md`](design/slam_vio_nav_design.md) · [ADR-014](adr/ADR-014-stereo-inertial-vio-algorithm-selection.md) — the SWVIO living implementation guide `design/swvio_implementation.md` is currently a local-only draft on the other dev machine and lands with the first SwvioBackend PR |
+| **Understand perception (PATH A)** | [`design/perception_design.md`](design/perception_design.md) · [ADR-013](adr/ADR-013-stereo-radar-redundancy-vs-fusion.md) — the in-flight `design/perception_architecture.md` and `design/perception_v2_detailed_design.md` are local-only drafts pending commit from the other dev machine |
 | **Understand safety / watchdog / fault recovery** | [`design/hardening-design.md`](design/hardening-design.md) · [`architecture/process-health-monitoring.md`](architecture/process-health-monitoring.md) · [ADR-004](adr/ADR-004-process-thread-watchdog-architecture.md) |
 | **Look up a config key** | `config/default.json` (defaults) · `common/util/include/util/config_keys.h` (declarations) · [`guides/config_reference.md`](guides/config_reference.md) (reference) · [`guides/CONFIG_GUIDE.md`](guides/CONFIG_GUIDE.md) (how-to) |
 | **Develop a feature / fix a bug** | [`guides/DEVELOPMENT_WORKFLOW.md`](guides/DEVELOPMENT_WORKFLOW.md) — per-PR loop |
@@ -53,13 +53,13 @@ docs/
 │   ├── ipc_design.md              # IPC architecture
 │   ├── error_handling_design.md   # Result<T,E> pattern
 │   ├── hardening-design.md        # Three-layer watchdog
-│   ├── hardware_strategy_plan.md  # Hardware target strategy
+│   ├── hardware_strategy_plan.md  # Hardware target strategy (local-only, gitignored)
 │   ├── video_capture_design.md    # P1
 │   ├── perception_design.md       # P2 (v1)
-│   ├── perception_architecture.md # P2 (v2 — current)
-│   ├── perception_v2_detailed_design.md  # P2 (v2 — implementation walkthrough)
+│   ├── perception_architecture.md # P2 (v2 — current; local-only, gitignored)
+│   ├── perception_v2_detailed_design.md  # P2 (v2 — implementation walkthrough; local-only, gitignored)
 │   ├── slam_vio_nav_design.md     # P3
-│   ├── swvio_implementation.md    # P3 — SWVIO living doc
+│   ├── swvio_implementation.md    # P3 — SWVIO living doc (local-only, gitignored)
 │   ├── mission_planner_design.md  # P4
 │   ├── comms_design.md            # P5
 │   ├── payload_manager_design.md  # P6

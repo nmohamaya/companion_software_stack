@@ -4,7 +4,7 @@
 |-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Status**      | Accepted                                                                                                                                                                                                    |
 | **Date**        | 2026-05-13                                                                                                                                                                                                  |
-| **Author**      | Naveen Mohanan + Claude Opus 4.7                                                                                                                                                                            |
+| **Author**      | Team                                                                                                                                                                                                        |
 | **Deciders**    | Project leads                                                                                                                                                                                               |
 | **Supersedes**  | —                                                                                                                                                                                                           |
 | **Related**     | PR #724 (introduced the 8-phase rollup checklist), Issue #723 (first rollup tracked end-to-end — `feature/perception-v2-integration`), [ADR-005](ADR-005-parallel-agent-git-worktree.md), [ADR-010](ADR-010-multi-agent-pipeline-architecture.md), [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/INTEGRATION_ROLLUP_WORKFLOW.md) |
@@ -21,7 +21,7 @@ We have three failure modes when long-running work hits `main` without a coordin
 2. **Documentation drift outpaces the per-PR doc updates.** PROGRESS, ROADMAP, API.md, TESTS.md each lag by N PRs by the time we notice.
 3. **`main` cannot be both demo-ready and the work surface.** If a user clones at any commit on main during a multi-week epic, the tree should be in a runnable state. Coordinating that across N independent PRs is impossible without an intermediate branch.
 
-The first occurrence (PR #723 / `feature/perception-v2-integration`, 87 commits over 3 weeks) was the forcing function. We piloted a long-lived integration branch + 8-phase rollup checklist (PR #724). It worked: cross-cutting findings were caught at the rollup stage, not in production; main stayed clean throughout.
+The first occurrence (Issue #723, merged via PR #729 — `feature/perception-v2-integration`, 87 commits over 3 weeks) was the forcing function. We piloted a long-lived integration branch + 8-phase rollup checklist (introduced by PR #724). It worked: cross-cutting findings were caught at the rollup stage, not in production; main stayed clean throughout.
 
 This ADR records the strategy so future epics use it by default rather than re-deriving it under pressure.
 
@@ -98,7 +98,7 @@ Land everything behind a runtime flag; flip the flag when done.
 
 ## 5. Status
 
-**Accepted** 2026-05-13. The 8-phase checklist was first applied to PR #723 / Issue #723 (`feature/perception-v2-integration`, 87 commits, 3 weeks, perception PATH A end-to-end). Outcome: every cross-cutting finding from the rollup reviews was actionable and caught before main merge; no regressions surfaced on main in the week following the rollup.
+**Accepted** 2026-05-13. The 8-phase checklist was first applied to Issue #723 (rollup tracking issue) and merged via PR #729 — `feature/perception-v2-integration`, 87 commits, 3 weeks, perception PATH A end-to-end. Outcome: every cross-cutting finding from the rollup reviews was actionable and caught before main merge; no regressions surfaced on main in the week following the rollup.
 
 The checklist lives in [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/INTEGRATION_ROLLUP_WORKFLOW.md) and is the canonical reference. `DEVELOPMENT_WORKFLOW.md` retains a brief pointer to that doc.
 
