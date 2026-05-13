@@ -370,6 +370,12 @@ Mixing Release and Coverage builds in the same directory causes `__gcov_init` li
 **PR body updates — do it immediately after fixes**
 After pushing review-fix commits, update the PR body right away. Don't wait to be asked.
 
+**Git commit verification — `git stash pop` silently restores staging state**
+Running `git stash pop` restores both the working directory AND the staging-area state from when the stash was made. A subsequent `git add <file>` ADDS to the index, it does not replace it. Always `git status` + `git diff --staged` after a stash pop, before committing. Always `git show HEAD --stat` after `git commit --amend`, before pushing. Treat `--force-with-lease` as a verification gate, not a habitual finish. See [tasks/lessons.md](tasks/lessons.md) "Git verification before pushing" for the full five-step checklist.
+
+**Public-repo commits — verify private content isn't leaking**
+Before any push to the public repo, scan `git diff origin/<base>..HEAD` for: stray submodule entries (`mode 160000`), `.gitmodules` additions pointing to private repo URLs, references to `business/` or other private content, files from private submodule paths. The `business/` submodule URL points to a private repo and must never appear in `.gitmodules` on the public repo.
+
 ### Common Issues
 
 | Issue | Solution |
