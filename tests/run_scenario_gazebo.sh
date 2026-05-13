@@ -413,14 +413,28 @@ fi
 # Implementation lives in lib_scenario_logging.sh — shared with the cosys runner.
 # See preflight_model_paths() for the path-traversal + json-parse hardening
 # (PR #628 review-security P3, review-code-quality P2).
+# Three exit-code branches (mirroring run_scenario_cosys.sh — previously this
+# runner only checked stdout-empty, so a parse error with rc=2 was silently
+# treated as success.  Aligned with cosys runner via #729 Copilot review):
+#   0 — clean: no missing files, no path-traversal
+#   1 — missing files OR path-traversal entries (stdout lists them)
+#   2 — JSON parse error (stderr already printed by preflight_model_paths)
 MISSING_MODELS=$(preflight_model_paths "$MERGED_CONFIG" "$PROJECT_DIR")
-if [[ -n "$MISSING_MODELS" ]]; then
-    echo -e "  ${RED}✗ Preflight failed: missing model file(s) referenced by scenario config${NC}" >&2
+PREFLIGHT_RC=$?
+if [[ $PREFLIGHT_RC -eq 2 ]]; then
+    echo -e "  ${RED}✗ Preflight failed: scenario config could not be parsed${NC}" >&2
+    SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    exit 1
+fi
+if [[ $PREFLIGHT_RC -ne 0 ]]; then
+    echo -e "  ${RED}✗ Preflight failed: missing model file(s) or path-traversal entry referenced by scenario config${NC}" >&2
     echo "" >&2
     echo "$MISSING_MODELS" | while IFS=$'\t' read -r key path; do
         echo "    config key:  $key" >&2
         echo "    expected at: $path" >&2
         case "$path" in
+            *escapes\ project\ root*)
+                echo "    → SECURITY: model path resolves outside project tree — refusing" >&2 ;;
             *yolov8n*)             echo "    → run: bash models/download_yolov8n.sh"          >&2 ;;
             *yolov8s*)             echo "    → run: bash models/download_yolov8n.sh # use 'n' variant" >&2 ;;
             *yolov8*visdrone*)     echo "    → run: bash models/download_yolov8n_visdrone.sh"  >&2 ;;

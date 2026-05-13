@@ -6,7 +6,7 @@
 > - **How to set up Cosys locally:** see [COSYS_SETUP.md](../guides/COSYS_SETUP.md).
 > - **Cosys HAL backends:** `CosysCameraBackend`, `CosysIMUBackend`, `CosysRadarBackend` (LiDAR-as-radar proxy), `CosysDepthBackend`, `CosysFCLinkBackend` — implemented in `common/hal/src/cosys_*.cpp`, all gated behind `HAVE_COSYS_AIRSIM`.
 > - **Cosys scenarios:** `#29 cosys_perception` (mixed dynamic) and `#30 cosys_static` (static proving ground). See `config/scenarios/29_*.json` / `30_*.json` and `tests/run_scenario_cosys.sh`.
-> - **Benchmark-harness ground-truth emitter for Cosys:** segmentation-mask-based per-frame GT via `simGetSegmentationImage` + `simListSceneObjects`. Design and rationale in [`docs/design/perception_v2_detailed_design.md` § 13 "Ground-truth emitter"](../design/perception_v2_detailed_design.md) (gitignored draft during the active rewrite; will be committed once the design stabilises).
+> - **Benchmark-harness ground-truth emitter for Cosys:** segmentation-mask-based per-frame GT via `simGetSegmentationImage` + `simListSceneObjects`. Design and rationale will be captured in `docs/design/perception_v2_detailed_design.md` § 13 "Ground-truth emitter" once that doc is committed (currently a gitignored draft during the active rewrite — not yet on the branch).
 >
 > A dedicated `COSYS_SIMULATION_ARCHITECTURE.md` is a known gap — tracked in [docs/tracking/IMPROVEMENTS.md](../tracking/IMPROVEMENTS.md).
 

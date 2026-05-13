@@ -244,13 +244,22 @@ For each pass, deliverables (follow the standard severity policy defined in the 
 
 > **Note:** Rollup reviews tend to surface more P2/P3 findings than per-PR reviews (larger surface, more cross-cutting context).  Use judgement — if a P3 finding is genuinely a "would be nice but won't change correctness" comment, a one-line DR-NNN entry is appropriate.  If it's actionable in <15 minutes, fix it inline.
 
-> **Phase 4 and Phase 5 run in parallel.** Open the integration→main PR *first* (per Phase 5 below), then start the Phase 4 fix-finding work on the integration branch. Every Phase 4 commit flows into the open PR automatically and Copilot can review the rollup diff alongside the agent passes from Phase 3. This shortens wall-time considerably on multi-day rollups.
+> **Phase 4 and Phase 5 run in parallel — but with a deliberate ordering for Copilot independence.** Open the integration→main PR *first* (per Phase 5 below) so Copilot starts reviewing in the background.  Then do Phase 4 fix-finding **from your own agent reviews only** — do **not** look at Copilot's comments while resolving Phase 3 findings.  Only *after* Phase 4 is complete should you triage Copilot's comments (see Phase 4b below).  This preserves the independence of the two review streams: when Copilot and the themed-agent passes converge on the same finding, that's strong evidence; when they diverge, both perspectives are useful.
 
-#### Phase 4 — Fix findings
+#### Phase 4 — Fix findings (your agent reviews only)
 
 Address all P1 findings before merge.  Apply the same severity policy as standard PRs (see [Review Comment Handling](#review-comment-handling)) — P2/P3 should be fixed inline; any deferral must be recorded as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` per the "Critical distinction" rule under Step 7.  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
 
-Also triage Copilot review comments that have arrived on the merge-to-main PR (opened in Phase 5).  Use the same severity policy — fix inline or DR-NNN.  Copilot tends to surface different patterns from the themed-agent passes; treat its findings as a third, independent reviewer.
+**Do not read Copilot's comments yet.**  Work only from the themed-agent passes (Phase 3) and your own proactive notice.  This is the rollup's chance to compare independent reviewer streams — peeking now collapses that signal.
+
+#### Phase 4b — Triage Copilot comments (after Phase 4 is otherwise complete)
+
+Once Phase 4's agent-finding fixes have landed, switch to Copilot's review on the open PR.  Same severity policy applies — fix inline or DR-NNN.  Two outcomes are interesting to record on the rollup tracking issue:
+
+- **Overlap** (Copilot found the same issue your agents found): high confidence — typically a real bug.
+- **Divergence** (Copilot raises a concern your agents didn't, or vice versa): a different perspective — usually a code-quality / test-coverage / doc-staleness item that the themed agents underweighted.
+
+Note the overlap/divergence ratio in the Phase 4 checkpoint comment on the rollup tracking issue — it's useful calibration data for tuning the themed-review prompts in future rollups.
 
 #### Phase 5 — Open the integration→main PR
 
@@ -264,6 +273,16 @@ Also triage Copilot review comments that have arrived on the merge-to-main PR (o
   - Link to the changes-since-main doc (e.g. `tasks/INTEGRATION_BRANCH_CHANGES_SINCE_MAIN.md`)
   - Any DR-NNN entries written during the rollup
   - A `## Known limitations` section listing any P1 findings deliberately deferred post-merge (with linked issues) — these should be exceptional and explicitly green-lit by the maintainer at the Phase 2 or Phase 4 checkpoint
+
+#### Phase 5b — Agent re-review on the post-fix diff (before Phase 6)
+
+Once Phase 4 (agent findings) and Phase 4b (Copilot triage) have both landed their fixes onto the integration branch, **re-run the themed multi-agent reviews from Phase 3 one more time** against the now-updated commit range.  The point isn't to re-do every finding from scratch — it's to verify that:
+
+1. Each P1 fix actually addresses the original concern without introducing a new one (sanity check on the patches that landed).
+2. Any P2/P3 deferrals are now reflected in `docs/tracking/DESIGN_RATIONALE.md` as DR-NNN entries (the routing rule actually held).
+3. No new P1 surfaces appeared in the Phase 4 fix-commits themselves — easy to introduce a regression when refactoring under pressure.
+
+Document the re-review's findings as a brief comment on the rollup tracking issue.  If a new P1 surfaces, return to Phase 4 — do **not** proceed to Phase 6 until the re-review is clean.  Phase 6 runs Gazebo + Cosys scenarios which take real wall-clock time; you want the re-review's blessing before paying that cost.
 
 #### Phase 6 — Final pre-merge validation
 

@@ -342,7 +342,7 @@ TEST_F(ConfigValidatorTest, CustomRuleFails) {
 
 // ═══════════════════════════════════════════════════════════
 // Per-class section validation (Epic #519)
-// ���═══��══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 
 TEST_F(ConfigValidatorTest, PerClassSectionValidPasses) {
     load_json(R"({
