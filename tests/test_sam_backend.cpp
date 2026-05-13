@@ -3,45 +3,15 @@
 #include "hal/hal_factory.h"
 #include "hal/iinference_backend.h"
 #include "hal/simulated_sam_backend.h"
+#include "test_helpers.h"
 #include "util/config.h"
 
-#include <cstdio>
-#include <fstream>
-#include <vector>
-
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 using namespace drone::hal;
 
-// ── Temp config helper ──
-
-static std::vector<std::string> g_temp_files;
-
-static std::string create_temp_config(const std::string& json_content) {
-    char tmpl[] = "/tmp/test_sam_XXXXXX.json";
-    int  fd     = mkstemps(tmpl, 5);
-    if (fd < 0) {
-        std::string   path = "/tmp/test_sam_" + std::to_string(getpid()) + ".json";
-        std::ofstream ofs(path);
-        ofs << json_content;
-        g_temp_files.push_back(path);
-        return path;
-    }
-    ::close(fd);
-    std::string   path(tmpl);
-    std::ofstream ofs(path);
-    ofs << json_content;
-    g_temp_files.push_back(path);
-    return path;
-}
-
-struct TempFileCleanup {
-    ~TempFileCleanup() {
-        for (auto& f : g_temp_files) std::remove(f.c_str());
-    }
-};
-static TempFileCleanup g_cleanup;
+// Shared temp-config helper centralised in tests/test_helpers.h.
+static drone::test::TempFileCleanup g_cleanup;
 
 // ── Tests ──
 
@@ -120,7 +90,7 @@ TEST(SAMBackend, ZeroDimensionsReturnsError) {
 }
 
 TEST(SAMBackend, FactoryCreation) {
-    auto          path = create_temp_config(R"({
+    auto          path = drone::test::create_temp_config(R"({
         "perception": { "inference_backend": { "backend": "sam_simulated" } }
     })");
     drone::Config cfg;
@@ -131,7 +101,7 @@ TEST(SAMBackend, FactoryCreation) {
 }
 
 TEST(SAMBackend, ConfigDrivenMaskCount) {
-    auto          path = create_temp_config(R"({
+    auto          path = drone::test::create_temp_config(R"({
         "perception": { "inference_backend": { "backend": "sam_simulated", "num_masks": 5, "confidence": 0.85 } }
     })");
     drone::Config cfg;

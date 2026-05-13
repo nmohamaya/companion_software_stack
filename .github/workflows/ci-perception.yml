@@ -124,9 +124,16 @@ jobs:
                 body += `|--------|----------|---------|-------|--------|\n`;
                 for (const [key, val] of Object.entries(results.metrics || {})) {
                   const safeKey = key.replace(/[|`<>\n\r]/g, '_');
-                  const delta = (val.current - val.baseline).toFixed(3);
+                  // Don't coerce null → 0 (which would print a misleading 0.000 delta
+                  // when a metric is missing on either side).  Render the column cells
+                  // and the delta as 'N/A' so the reader sees the absence explicitly.
+                  const baselineCell = (val.baseline == null) ? 'N/A' : val.baseline;
+                  const currentCell  = (val.current  == null) ? 'N/A' : val.current;
+                  const delta = (val.current == null || val.baseline == null)
+                    ? 'N/A'
+                    : (val.current - val.baseline).toFixed(3);
                   const status = val.passed ? '✅' : '⚠️';
-                  body += `| ${safeKey} | ${val.baseline} | ${val.current} | ${delta} | ${status} |\n`;
+                  body += `| ${safeKey} | ${baselineCell} | ${currentCell} | ${delta} | ${status} |\n`;
                 }
                 body += `\n**Cost:** $${results.cost || 'N/A'} | **Duration:** ${results.duration_min || 'N/A'} min`;
               } catch (e) {

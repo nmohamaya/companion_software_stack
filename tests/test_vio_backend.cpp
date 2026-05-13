@@ -437,8 +437,9 @@ TEST(GazeboFullVIOTest, FactoryCreatesBackend) {
 
 TEST(GazeboFullVIOTest, ProcessFrameRunsPipeline) {
     auto backend = make_gazebo_full_vio();
-    auto frame   = make_frame(1);
-    auto imu     = make_imu_samples(13);
+    ASSERT_NE(backend, nullptr);
+    auto frame = make_frame(1);
+    auto imu   = make_imu_samples(13);
 
     auto result = backend->process_frame(frame, imu);
     ASSERT_TRUE(result.is_ok()) << result.error().to_string();
@@ -448,8 +449,9 @@ TEST(GazeboFullVIOTest, ProcessFrameRunsPipeline) {
 
 TEST(GazeboFullVIOTest, ImuSamplesConsumed) {
     auto backend = make_gazebo_full_vio();
-    auto frame   = make_frame(1);
-    auto imu     = make_imu_samples(26);
+    ASSERT_NE(backend, nullptr);
+    auto frame = make_frame(1);
+    auto imu   = make_imu_samples(26);
 
     auto result = backend->process_frame(frame, imu);
     ASSERT_TRUE(result.is_ok());
@@ -458,11 +460,13 @@ TEST(GazeboFullVIOTest, ImuSamplesConsumed) {
 
 TEST(GazeboFullVIOTest, HealthStartsInitializing) {
     auto backend = make_gazebo_full_vio();
+    ASSERT_NE(backend, nullptr);
     EXPECT_EQ(backend->health(), VIOHealth::INITIALIZING);
 }
 
 TEST(GazeboFullVIOTest, NoOdometryKeepsInitializing) {
     auto backend = make_gazebo_full_vio({}, {}, "/test/no_odom");
+    ASSERT_NE(backend, nullptr);
 
     for (int i = 0; i < 10; ++i) {
         auto frame = make_frame(static_cast<uint64_t>(i));
@@ -475,6 +479,7 @@ TEST(GazeboFullVIOTest, NoOdometryKeepsInitializing) {
 
 TEST(GazeboFullVIOTest, NameContainsTopic) {
     auto backend = make_gazebo_full_vio({}, {}, "/test/odom");
+    ASSERT_NE(backend, nullptr);
     EXPECT_NE(backend->name().find("/test/odom"), std::string::npos);
 }
 
