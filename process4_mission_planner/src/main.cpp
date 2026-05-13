@@ -28,6 +28,7 @@
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
+#include <algorithm>  // std::clamp, std::max
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -428,8 +429,34 @@ int main(int argc, char* argv[]) {
     // Issue #740 (epic #727) — ARM-gate debounce window.  Configurable so
     // headless dev / unit-test scenarios can shrink it; production Gazebo
     // and real-hardware use the 3.0 s default.
-    tick_cfg.preflight_armable_stable_s =
+    //
+    // PR #741 review (memory-safety + security + Copilot, 3 convergent):
+    // validate at the load site to defend against tampered / typo'd config.
+    // Without this clamp, `+inf` or any value > ~1.84e10 seconds produces
+    // a float→uint64_t conversion outside the destination type's range,
+    // which is UB per [conv.fpint]/1 — practical effect ranges from "gate
+    // silently disabled" (returns 0) to "drone hangs in PREFLIGHT for ages"
+    // (returns garbage uint64_t).  NaN slips past the `std::max` guard and
+    // also disables the gate.  Mirrors the `voxel_input_min_confidence`
+    // clamp pattern below (lines ~475-485) — same defensive-clamp-on-load
+    // policy.  Upper bound = 30 s: longer than that is clearly mis-config
+    // (a real drone shouldn't take 30 s for EKF2 to settle; if it does,
+    // there's a sensor problem that warrants investigation, not a longer
+    // gate).
+    constexpr float kMaxArmableStableS = 30.0f;
+    float           armable_stable_s_raw =
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S, 3.0f);
+    if (!std::isfinite(armable_stable_s_raw) || armable_stable_s_raw < 0.0f ||
+        armable_stable_s_raw > kMaxArmableStableS) {
+        DRONE_LOG_WARN("[Planner] preflight_armable_stable_s {:.2f} outside [0, {:.1f}] (or "
+                       "non-finite) — clamping.  NaN/inf would disable the gate; values > "
+                       "{:.1f}s suggest sensor mis-config rather than a tuning need.",
+                       armable_stable_s_raw, kMaxArmableStableS, kMaxArmableStableS);
+        armable_stable_s_raw = std::clamp(std::isfinite(armable_stable_s_raw) ? armable_stable_s_raw
+                                                                              : 3.0f,
+                                          0.0f, kMaxArmableStableS);
+    }
+    tick_cfg.preflight_armable_stable_s = armable_stable_s_raw;
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
