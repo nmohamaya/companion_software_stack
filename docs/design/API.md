@@ -430,6 +430,8 @@ struct SemanticVoxel {
     ObjectClass semantic_label;                      // from MaskClassAssigner
     uint8_t     _pad_label[3];
     uint64_t    timestamp_ns;                        // source-frame capture time
+    uint32_t    instance_id;                         // Issue #638 Phase 1 — per-frame cluster ID (0=noise)
+    uint32_t    _pad_instance;                       // 8-byte struct alignment
 };
 
 constexpr uint32_t MAX_VOXELS_PER_BATCH = 1024;
@@ -446,7 +448,7 @@ struct alignas(64) SemanticVoxelBatch {
 **Topic:** `/semantic_voxels` to Zenoh key `drone/perception/voxels`
 **Publisher:** P2 (perception, PATH A — added in PR wiring E5.INT / Issue #608)
 **Subscribers:** P4 (mission planner — occupancy-grid writer, added in PR 3)
-**Wire size:** `sizeof(SemanticVoxelBatch) = 32832 B` — 24 B header (incl. 4 B `_pad_hdr`) + 1024 × 32 B voxel array + 40 B `alignas(64)` tail pad. One Zenoh SHM packet.
+**Wire size:** `sizeof(SemanticVoxel) = 40 B`, `sizeof(SemanticVoxelBatch) = 41024 B` (~40 KB). Header is 24 B (incl. 4 B `_pad_hdr`); voxel array is 1024 × 40 B = 40960 B; total before `alignas(64)` is 40984 B which the alignment rounds up to 41024 B. The struct grew from 32 B to 40 B per voxel in PR #639 (Issue #638 Phase 1) when `instance_id` + 4-byte trailing pad were added — wire-size assert in `ipc_types.h` enforces this. One Zenoh SHM packet.
 **Trivially copyable / standard layout:** yes — `static_assert`ed in `ipc_types.h`, along with per-field `offsetof` and `sizeof` guards that catch silent field reorder / resize at compile time.
 **Alignment:** `alignas(64)` — matches `Pose` / `FaultOverrides` precedent so the 24 B header is cache-line-isolated from the voxel array on the subscriber side.
 
