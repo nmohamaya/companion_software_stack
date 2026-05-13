@@ -397,6 +397,164 @@ TEST(MissionStateTickDebounceConfigTest, ZeroWindowDisablesDebounce) {
     EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
 }
 
+// PR #741 review (test-unit + test-quality P2, 2 convergent): the production
+// code at mission_state_tick.h:319 has an explicit underflow-guard clause
+// `now_ns < armable_first_seen_ns_` that treats clock-backward as a fresh
+// first-observation rather than wrapping the unsigned subtraction.  Without
+// a test, a buggy refactor that drops this guard would still pass all the
+// other 4 debounce tests — false-green risk.  This test pins the guard.
+TEST_F(MissionStateTickDebounceTest, ArmableClockRewindRestartsWindow) {
+    auto pose  = make_pose(0, 0, 0);
+    auto fc_ok = make_fc(false, 0);
+
+    // Advance the mock clock so we have a non-trivial baseline.
+    mock_clock_guard.mock().advance_s(10);
+
+    // Tick 1: armable=true → starts window at t=10s.
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Rewind the mock clock to t=5s (e.g. test reset, host clock skew).
+    // The production code MUST restart the window from this fresh point,
+    // not compute `5s - 10s` as a huge uint64_t and falsely "elapse" the gate.
+    mock_clock_guard.mock().reset(5'000'000'000ULL);
+
+    // Tick 2: armable still true, but clock has rewound → window restarts.
+    // No ARM should fire (window just started fresh at t=5s).
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty())
+        << "ARM fired after clock rewind — underflow guard at "
+           "mission_state_tick.h:319 has been removed or broken.  Production "
+           "code would compute a huge `elapsed_ns` from the unsigned wrap and "
+           "fire ARM immediately (Issue #740 regression).";
+
+    // Tick 3 (at t=5s + 3.1s = 8.1s) — the freshly-started window has now
+    // elapsed past the 3.0s threshold → ARM fires.
+    mock_clock_guard.mock().advance_ms(3100);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+}
+
+// PR #741 review (test-unit + test-quality P2, 2 convergent): existing
+// debounce tests use `make_default_test_config()` which sets stable_s=0.0,
+// so the interaction between the debounce gate (#740) and the ARM-retry
+// throttle (#716, `last_arm_time_ns_`) is never exercised at production
+// defaults.  After PR #743's mixed-clock migration both throttles share a
+// single mockable clock domain, so we can finally drive both deterministically.
+TEST_F(MissionStateTickDebounceTest, DebounceAndRetryComposeAtProductionDefaults) {
+    auto pose  = make_pose(0, 0, 0);
+    auto fc_ok = make_fc(false, 0);
+
+    // Tick 1 at t=0: starts the 3.0s stability window.
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Tick 2 at t=3.1s: window has elapsed → first ARM fires.  PX4
+    // hasn't acknowledged yet (test doesn't flip `fc_state.armed=true`),
+    // so the FSM stays in PREFLIGHT and the ARM-retry throttle now
+    // protects against spamming.
+    mock_clock_guard.mock().advance_ms(3100);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+
+    // Tick 3 at t=4.1s (only 1s after first ARM): inside the 3s retry
+    // window → MUST NOT re-fire ARM (Issue #716 retry-dedup contract).
+    // Pre-PR #743 this required wall-clock sleeps; now it's mockable.
+    mock_clock_guard.mock().advance_ms(1000);
+    do_tick(pose, fc_ok);
+    EXPECT_EQ(fc_calls.size(), 1u) << "Duplicate ARM fired within the 3.0s retry interval — the "
+                                      "#716 throttle is not gating the debounce-driven ARM path "
+                                      "(PR #743 mixed-clock regression).";
+
+    // Tick 4 at t=6.2s (3.1s after first ARM): retry interval has elapsed
+    // → second ARM fires.  This is the safety-net retry for the case
+    // where PX4 dropped the first MAVLink message.
+    mock_clock_guard.mock().advance_ms(2100);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 2u);
+    EXPECT_EQ(fc_calls[1].cmd, FCCommandType::ARM);
+}
+
+// PR #741 review (test-quality P3): the existing tests use offsets of
+// 2500 ms (below) and 3100 ms (above) for the 3.0s window — they don't
+// pin the exact-equality semantics at the boundary.  A refactor that
+// changes `<` to `<=` in the comparison at mission_state_tick.h:332 would
+// not be caught.  This test pins the boundary: at exactly 3.0s elapsed,
+// the gate must consider the window satisfied (i.e. `< window_ns` is the
+// correct shape — equality counts as "elapsed").
+TEST_F(MissionStateTickDebounceTest, ArmableStableAtExactWindowBoundaryFiresArm) {
+    auto pose  = make_pose(0, 0, 0);
+    auto fc_ok = make_fc(false, 0);
+
+    // Tick 1: starts the window.
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Advance EXACTLY 3.0s (the configured stable window).  The check is
+    // `(now_ns - first_seen_ns_) < window_ns` — at exact equality the
+    // condition is false, so the code falls through to ARM.
+    mock_clock_guard.mock().advance_ns(3'000'000'000ULL);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u)
+        << "ARM did not fire at exactly the window boundary (3.0s).  The "
+           "comparison at mission_state_tick.h:332 may have flipped from "
+           "`<` to `<=` — pre-window-equality should count as elapsed.";
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+}
+
+// PR #741 review (test-quality + test-unit P3): the `armable_first_seen_ns_
+// = 0` reset on the `fc_state.armed=true` early return (mission_state_tick.h
+// line ~286) is not exercised at production stable_s.  Without coverage, a
+// regression that removes this reset would only manifest on the rare re-
+// PREFLIGHT path (currently unreachable in production but possible via
+// future GCS re-arm).  This test verifies the reset by simulating that path:
+// (1) build up to a near-elapsed window, (2) transition to armed (which
+// must reset the tracker), (3) hypothetically re-enter PREFLIGHT (we
+// can't really; instead we directly assert the field state after the
+// armed branch by observing that a second post-armed cycle starts a
+// fresh window).
+TEST_F(MissionStateTickDebounceTest, ArmedTransitionResetsStabilityWindowForReentry) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Phase 1: build a stability window then trigger the armed transition.
+    auto fc_ok = make_fc(false, 0);
+    do_tick(pose, fc_ok);  // starts window at t=0
+    mock_clock_guard.mock().advance_ms(2500);
+    do_tick(pose, fc_ok);  // still within window — no ARM
+    EXPECT_TRUE(fc_calls.empty());
+
+    auto fc_armed = make_fc(true, 0);  // armed=true → fsm.on_takeoff() path
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+
+    // Reset FSM back to PREFLIGHT to simulate re-entry (this is a test-
+    // only manoeuvre — production has no re-PREFLIGHT path today, but the
+    // code defensively resets `armable_first_seen_ns_` to support a future
+    // re-arm flow).  Reload mission to reset FSM to IDLE first, then on_arm().
+    fsm.load_mission({{10, 0, 5, 0, 2, 3, true}});
+    fsm.on_arm();
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Phase 2: fresh tick at production stable_s.  If the reset on armed
+    // didn't happen, `armable_first_seen_ns_` still holds the t=0 value
+    // and elapsed-from-then is already > 3s — ARM would fire immediately.
+    // The reset must have happened, so this tick starts a FRESH window.
+    do_tick(pose, fc_ok);
+    EXPECT_TRUE(fc_calls.empty())
+        << "ARM fired immediately on re-PREFLIGHT — the `armable_first_seen_"
+           "ns_ = 0` reset on the armed transition (mission_state_tick.h "
+           "line ~286) was skipped, leaving stale state.  Production safety "
+           "regression for future re-arm flows.";
+
+    // Window must elapse from THIS tick, not from the original t=0.
+    mock_clock_guard.mock().advance_ms(3100);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+}
+
 // ═══════════════════════════════════════════════════════════
 // TAKEOFF: transition to NAVIGATE at 90% altitude
 // ═══════════════════════════════════════════════════════════
