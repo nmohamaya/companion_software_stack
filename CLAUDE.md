@@ -113,10 +113,10 @@ Quantitative facts about the project drift the moment they are duplicated. Each 
 | Fact | Canonical source | How to read it |
 |---|---|---|
 | Test count + per-suite inventory | [`tests/TESTS.md`](tests/TESTS.md) | Live total at top of file; also derivable from `ctest -N --test-dir build` |
-| Scenario list + count | [`config/scenarios/`](config/scenarios/) | `ls config/scenarios/*.json \| wc -l` |
+| Scenario list + count | [`config/scenarios/`](config/scenarios/) | `find config/scenarios -maxdepth 1 -name '*.json' \| wc -l` |
 | HAL interface list + count | [`common/hal/include/hal/`](common/hal/include/hal/) | `ls common/hal/include/hal/i*.h` |
 | IPC wire types | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) | Authoritative struct definitions; `docs/design/API.md` documents but does not define |
-| IPC topic constants | [`common/ipc/include/ipc/topic_resolver.h`](common/ipc/include/ipc/topic_resolver.h) and `zenoh_message_bus.h` | Topic strings live in code, not docs |
+| IPC topic constants | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) (`namespace topics`) for the names; [`common/ipc/include/ipc/zenoh_message_bus.h`](common/ipc/include/ipc/zenoh_message_bus.h) for the SHM→Zenoh key-expression mapping; [`common/ipc/include/ipc/topic_resolver.h`](common/ipc/include/ipc/topic_resolver.h) for optional `vehicle_id` prefixing | Topic strings live in code, not docs |
 | Config keys | [`common/util/include/util/config_keys.h`](common/util/include/util/config_keys.h) + [`config/default.json`](config/default.json) | Code declares, JSON provides defaults; `docs/guides/config_reference.md` is reference-only |
 | ADR catalogue | [`docs/adr/`](docs/adr/) | One file per ADR; `docs/adr/README.md` (when added) indexes them |
 | Agent roster | [`.claude/agents/`](.claude/agents/) + [`docs/adr/ADR-010-multi-agent-pipeline-architecture.md`](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Agent definitions in `.claude/agents/`; pipeline architecture in ADR-010 |

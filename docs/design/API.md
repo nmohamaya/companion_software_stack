@@ -939,7 +939,7 @@ Config-driven graceful degradation engine. Evaluates system health each loop tic
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `evaluate` | `FaultState evaluate(const SystemHealth&, const FCState&, uint64_t pose_ts, uint64_t now_ns, uint32_t pose_quality = 2)` | Evaluate all fault conditions, return graduated action |
+| `evaluate` | `FaultState evaluate(const drone::ipc::SystemHealth&, const drone::ipc::FCState&, uint64_t pose_ts, uint64_t now_ns, uint32_t pose_quality = 2)` | Evaluate all fault conditions, return graduated action |
 | `reset` | `void reset()` | Clear high-water mark (after landing / new mission) |
 | `high_water_mark` | `FaultAction high_water_mark() const` | Highest action ever returned |
 | `config` | `const FaultConfig& config() const` | Current config thresholds |
@@ -981,7 +981,7 @@ FaultManager uses this field (via the `pose_quality` parameter to `evaluate()`) 
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `collect` | `SystemHealth collect()` | Collect CPU, memory, temperature, disk, battery metrics |
+| `collect` | `drone::ipc::SystemHealth collect()` | Collect CPU, memory, temperature, disk, battery metrics |
 | `name` | `std::string name() const` | Implementation name |
 
 | Implementation | Description |

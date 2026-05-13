@@ -78,7 +78,7 @@ process code changes.
 
 ## Message Types
 
-All IPC messages are defined in [`shm_types.h`](../common/ipc/include/ipc/shm_types.h).
+All IPC messages are defined in [`ipc_types.h`](../../common/ipc/include/ipc/ipc_types.h).  (Legacy name: `shm_types.h` was renamed during the Zenoh migration.)
 Every type is **trivially copyable** (no heap allocations, no virtual methods).
 
 ### Video Channels (P1 → P2, P3)
@@ -94,8 +94,8 @@ Every type is **trivially copyable** (no heap allocations, no virtual methods).
 
 | Type | Content |
 |------|---------|
-| `ShmDetectedObject` | Track ID, class (7 types), confidence, 3D position + velocity, heading, bbox, sensor flags |
-| `ShmDetectedObjectList` | Array of up to 64 `ShmDetectedObject`, timestamp, frame sequence |
+| `DetectedObject` | Track ID, class (7 types), confidence, 3D position + velocity, heading, bbox, sensor flags |
+| `DetectedObjectList` | Array of up to 64 `DetectedObject`, timestamp, frame sequence |
 
 Object classes: `PERSON`, `VEHICLE_CAR`, `TRUCK`, `DRONE`, `ANIMAL`, `BUILDING`, `TREE`.
 
@@ -103,33 +103,33 @@ Object classes: `PERSON`, `VEHICLE_CAR`, `TRUCK`, `DRONE`, `ANIMAL`, `BUILDING`,
 
 | Type | Content |
 |------|---------|
-| `ShmPose` | 3D translation, quaternion rotation, velocity, 6×6 covariance, quality (0=lost, 1=degraded, 2=good) |
+| `Pose` | 3D translation, quaternion rotation, velocity, 6×6 covariance, quality (0=lost, 1=degraded, 2=good) |
 
 ### Mission & Commands
 
 | Type | Direction | Content |
 |------|-----------|---------|
-| `ShmMissionStatus` | P4 → P5, P7 | FSM state, waypoint progress, fault action + active_faults bitmask |
-| `ShmTrajectoryCmd` | P4 → P5 | Target pose + velocity, coordinate frame |
-| `ShmFCCommand` | P4 → P5 | ARM/DISARM/TAKEOFF/SET_MODE/RTL/LAND + monotonic sequence_id |
-| `ShmGCSCommand` | P5 → P4 | ARM/DISARM/TAKEOFF/LAND/RTL/MISSION_START/PAUSE/ABORT/UPLOAD |
-| `ShmMissionUpload` | P5 → P4 | Up to 32 waypoints (x/y/z, yaw, radius, speed, payload trigger) |
-| `ShmPayloadCommand` | P4 → P6 | Gimbal pointing + camera action |
+| `MissionStatus` | P4 → P5, P7 | FSM state, waypoint progress, fault action + active_faults bitmask |
+| `TrajectoryCmd` | P4 → P5 | Target pose + velocity, coordinate frame |
+| `FCCommand` | P4 → P5 | ARM/DISARM/TAKEOFF/SET_MODE/RTL/LAND + monotonic sequence_id |
+| `GCSCommand` | P5 → P4 | ARM/DISARM/TAKEOFF/LAND/RTL/MISSION_START/PAUSE/ABORT/UPLOAD |
+| `MissionUpload` | P5 → P4 | Up to 32 waypoints (x/y/z, yaw, radius, speed, payload trigger) |
+| `PayloadCommand` | P4 → P6 | Gimbal pointing + camera action |
 
 ### State & Health
 
 | Type | Direction | Content |
 |------|-----------|---------|
-| `ShmFCState` | P5 → P4, P7 | GPS, attitude, velocity, battery, mode, armed, satellites |
-| `ShmPayloadStatus` | P6 → P4, P7 | Gimbal angles, capture count, recording flag |
-| `ShmSystemHealth` | P7 → P4 | CPU/mem/temp/disk/battery, per-process health, stack status |
-| `ShmThreadHealth` | All → P7 | Per-thread heartbeat status (name, healthy, critical, last_ns) |
+| `FCState` | P5 → P4, P7 | GPS, attitude, velocity, battery, mode, armed, satellites |
+| `PayloadStatus` | P6 → P4, P7 | Gimbal angles, capture count, recording flag |
+| `SystemHealth` | P7 → P4 | CPU/mem/temp/disk/battery, per-process health, stack status |
+| `ThreadHealth` | All → P7 | Per-thread heartbeat status (name, healthy, critical, last_ns) |
 
 ### Fault Injection
 
 | Type | Direction | Content |
 |------|-----------|---------|
-| `ShmFaultOverrides` | Test harness → P5, P7 | Battery/FC state/thermal overrides, sequence counter |
+| `FaultOverrides` | Test harness → P5, P7 | Battery/FC state/thermal overrides via sentinel values (`battery_percent < 0` = no override, etc.) plus sequence counter |
 
 ---
 
@@ -552,9 +552,9 @@ Subscribes to `drone/alive/**` wildcard. Used by P7 for process health detection
 
 - **SeqLock consistency:** 10K concurrent writes/reads with no torn reads
 - **Topic mapping round-trip:** All 12+ channels validated SHM ↔ Zenoh key mapping
-- **Zero-copy video:** 6.2 MB `ShmVideoFrame` published via Zenoh SHM path,
+- **Zero-copy video:** 6.2 MB `VideoFrame` published via Zenoh SHM path,
   verified `shm_publish_count > 0`
-- **High-rate throughput:** 400 `ShmPose` messages at 200 Hz, all received
+- **High-rate throughput:** 400 `Pose` messages at 200 Hz, all received
 - **Service channels:** Request-reply round-trip with correlation ID tracking
 - **Liveliness:** Token declare → monitor detects alive → token drop → monitor detects death
 

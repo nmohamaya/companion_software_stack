@@ -161,7 +161,7 @@ All backends selected at runtime via JSON config + factory functions:
                     │  ✅                  │     All 7 processes, no physics
                     ├──────────────────────┤
                     │  Unit Tests          │  ← x86 or Jetson (cross-compiled)
-                    │  (see TESTS.md) ✅   │     Isolated, <2 min
+                    │  (tests/TESTS.md) ✅ │     Isolated, <2 min
                     └──────────────────────┘
 ```
 
