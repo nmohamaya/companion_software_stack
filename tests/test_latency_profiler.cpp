@@ -2,6 +2,7 @@
 //
 // Unit tests for the LatencyProfiler (Issue #571, Epic #523).
 
+#include "test_helpers.h"
 #include "util/correlation.h"
 #include "util/latency_profiler.h"
 #include "util/mock_clock.h"
@@ -254,6 +255,20 @@ TEST(LatencyProfiler, ConcurrentReadersDoNotRaceWriters) {
 
     go.store(true, std::memory_order_release);
     for (auto& w : writers) w.join();
+
+    // Race-condition fix: under heavy sanitizer instrumentation (especially
+    // UBSan) the reader thread can be scheduled so late that the writers
+    // finish + stop=true is set before the reader's first iteration
+    // completes, leaving reader_iterations=0 and failing the EXPECT_GT
+    // below. Wait (bounded) until the reader has run at least once before
+    // signalling stop. Deadline is generous; typical wait is microseconds.
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (reader_iterations.load(std::memory_order_acquire) == 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+    }
     stop.store(true, std::memory_order_release);
     reader.join();
 
@@ -324,6 +339,16 @@ TEST(LatencyProfiler, ToJsonStagesAreLexicographicallyOrdered) {
 // ────────────────────────────────────────────────────────────────────────────
 
 TEST(LatencyProfiler, OverheadUnderBudget) {
+    // Pure overhead-budget test (target < 2000 ns/record). Sanitizer
+    // instrumentation overhead (TSan adds ~5-15×, ASan ~2-3×, UBSan ~20%)
+    // would defeat any meaningful ceiling without invalidating the tested
+    // behaviour. Correctness of the overhead itself is verified by the
+    // non-sanitized CI build matrix.
+    if (drone::test::is_sanitizer_build()) {
+        GTEST_SKIP() << "Latency budget incompatible with sanitizer overhead — "
+                        "non-sanitized CI build covers this assertion.";
+    }
+
     du::LatencyProfiler p(/*per_stage_capacity=*/4096, /*trace_ring_capacity=*/4096);
     constexpr int       n = 10'000;
 

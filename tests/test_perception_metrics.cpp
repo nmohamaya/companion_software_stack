@@ -3,6 +3,7 @@
 // Unit tests for the perception metrics framework (Issue #570 / Epic #523).
 
 #include "benchmark/perception_metrics.h"
+#include "test_helpers.h"
 
 #include <chrono>
 #include <random>
@@ -338,6 +339,18 @@ TEST(Tracking, UnmatchedPredIsFP) {
 // ────────────────────────────────────────────────────────────────────────────
 
 TEST(Performance, LargeFrameUnder100ms) {
+    // Pure latency-budget test (target < 100 ms for 1000 GT × 1000 pred).
+    // Sanitizer instrumentation overhead (ASan ~2-3×, TSan ~5-15×, UBSan
+    // ~20%) defeats the budget without invalidating the tested behaviour.
+    // The non-sanitized CI build matrix verifies the latency target;
+    // the correctness assertions (TP+FN==N, TP+FP==N, TP > N/2 - 50)
+    // are covered by sibling tests in this file that run on every build.
+    if (drone::test::is_sanitizer_build()) {
+        GTEST_SKIP() << "Latency budget incompatible with sanitizer overhead — "
+                        "non-sanitized CI build covers the timing assertion; "
+                        "correctness covered by sibling tests.";
+    }
+
     constexpr std::size_t N = 1000;
     db::FrameData         f;
     f.ground_truth.reserve(N);
