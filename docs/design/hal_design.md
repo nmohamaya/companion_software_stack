@@ -295,7 +295,7 @@ Per-frame dense depth estimation from a single RGB image. Consumed by P2's Perce
 
 #### Data Structures
 
-`DepthMap { width, height, std::vector<float> depths_m }` — row-major dense float depth in metres. See header for full definition.
+`DepthMap` — row-major dense float depth (metres) plus metadata (timestamp, scale, confidence, source-frame dimensions for bbox→depth coordinate mapping). See `common/hal/include/hal/idepth_estimator.h` for the canonical struct definition.
 
 #### Interface
 
@@ -309,10 +309,10 @@ Per-frame dense depth estimation from a single RGB image. Consumed by P2's Perce
 | Key | Class | Notes |
 |-----|-------|-------|
 | `"simulated"` | `SimulatedDepthEstimator` | Synthetic depth from a configurable scene model. |
-| `"depth_anything_v2"` | `DepthAnythingV2Estimator` | ONNX Runtime — monocular metric depth. |
-| `"cosys"` | `CosysDepthBackend` | Cosys-AirSim depth camera passthrough (Tier 3 sim only). |
+| `"depth_anything_v2"` | `DepthAnythingV2Estimator` | OpenCV DNN — monocular metric depth. |
+| `"cosys_airsim"` | `CosysDepthBackend` | Cosys-AirSim depth camera passthrough (Tier 3 sim only; requires `HAVE_COSYS_AIRSIM`). |
 
-**Config section:** `perception.path_a.depth`
+**Config section:** `perception.depth_estimator` (canonical keys in `common/util/include/util/config_keys.h`; factory in `common/hal/include/hal/hal_factory.h::create_depth_estimator`).
 
 ---
 
@@ -367,14 +367,20 @@ Generic inference interface for vision models (object detection, segmentation). 
 
 #### Backends
 
+Keys served by `common/hal/include/hal/hal_factory.h::create_inference_backend()`:
+
 | Key | Class | Notes |
 |-----|-------|-------|
 | `"simulated"` | `SimulatedInferenceBackend` | Synthetic detections from a configurable scene model. |
-| `"fastsam"` | `FastSamInferenceBackend` | ONNX Runtime FastSAM — class-agnostic masks (`SimulatedSAMBackend` is the dev/test variant). |
-| `"yolov8_seg"` | `YoloSegInferenceBackend` | Class-aware segmentation; pairs with `MaskClassAssigner` in PATH A. |
-| `"edge_contour"` | `EdgeContourSAMBackend` | Edge-detection fallback mask producer. |
+| `"sam_simulated"` | `SimulatedSAMBackend` | Class-agnostic SAM dev/test scaffold. |
+| `"edge_contour_sam"` | `EdgeContourSAMBackend` | OpenCV edge+contour mask producer (no ML dependency); interim fill between `sam_simulated` and a real SAM ONNX. |
+| `"fastsam"` | `FastSamInferenceBackend` | Real FastSAM via ONNX (YOLOv8-seg architecture trained on SA-1B). Requires `models/fastsam_s.onnx`. |
+| `"cosys_airsim"` | `CosysSegmentationBackend` | Sim-only ground-truth instance segmentation (requires `HAVE_COSYS_AIRSIM`); pair with `depth_estimator.backend = cosys_airsim` for GT PATH A. |
+| `"plugin"` | (dlopened) | Out-of-tree backend (requires `HAVE_PLUGINS`). |
 
-**Config section:** `perception.path_a.sam.backend` (mask producer) and `perception.detector.backend` (class-aware detector).
+> **Note:** `YoloSegInferenceBackend` is part of the perception pipeline but is **not** constructed by this HAL factory — it's wired in `process2_perception` directly. The HAL factory above is for SAM-style mask producers + the simulated detector.
+
+**Config section:** `perception.inference_backend` (canonical key path; the `MaskClassAssigner` in PATH A pairs the SAM mask producer with a class-aware detector — see `process2_perception` for how the two are composed).
 
 ---
 
@@ -402,7 +408,7 @@ Back-projects 2D masked detections into 3D voxel updates using a depth map and c
 |-----|-------|-------|
 | `"cpu"` | `CpuSemanticProjector` | Header-only CPU back-projection; samples mask at a 4×4 grid per detection. |
 
-**Config section:** `perception.path_a.projector`
+**Config section:** `perception.semantic_projector` (canonical keys in `common/util/include/util/config_keys.h`; factory in `common/hal/include/hal/hal_factory.h::create_semantic_projector`).
 
 ---
 
@@ -434,7 +440,7 @@ Back-projects 2D masked detections into 3D voxel updates using a depth map and c
 |-----|-------|-------|
 | `"simulated"` | `SimulatedVolumetricMap` | In-memory hash-map keyed by `VoxelKey`. |
 
-**Config section:** `mission_planner.avoider.voxel_map`
+**Config section:** `perception.volumetric_map` (canonical keys in `common/util/include/util/config_keys.h`; factory in `common/hal/include/hal/hal_factory.h::create_volumetric_map`).
 
 ---
 

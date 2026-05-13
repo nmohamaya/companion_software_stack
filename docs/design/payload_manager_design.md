@@ -70,9 +70,9 @@ The `ThreadWatchdog` runs its scan thread internally (1 Hz) as usual.
 
 | Channel | Topic | Type | Source | Notes |
 |---------|-------|------|--------|-------|
-| Payload commands | `/payload_commands` | `PayloadCommand` | P4 (mission_planner) | Always subscribed |
-| Detected objects | `/detected_objects` | `DetectedObjectList` | P2 (perception) | Subscribed when `gimbal.auto_track.enabled = true` |
-| SLAM pose | `/slam_pose` | `Pose` | P3 (slam_vio_nav) | Subscribed when auto-track enabled (geo-pointing) and used for observability latency tracking |
+| Payload commands | `/payload_commands` | `PayloadCommand` | P4 (mission_planner) | Read every tick |
+| Detected objects | `/detected_objects` | `DetectedObjectList` | P2 (perception) | Subscription always created; only consumed when `gimbal.auto_track.enabled = true` |
+| SLAM pose | `/slam_pose` | `Pose` | P3 (slam_vio_nav) | Subscription always created; consumed for gimbal geo-pointing when auto-track enabled, and for observability latency tracking either way |
 
 ### Publications (outputs)
 
@@ -81,7 +81,7 @@ The `ThreadWatchdog` runs its scan thread internally (1 Hz) as usual.
 | Payload status | `/payload_status` | `PayloadStatus` | P4, P7 |
 | Thread health | `/drone_thread_health_payload_manager` | `ThreadHealth` | P7 |
 
-> When `payload_manager.gimbal.auto_track.enabled` is `false`, only `/payload_commands` is subscribed; the auto-tracking inputs are wired but inactive.
+> All three subscriptions are created unconditionally at startup (see `process6_payload_manager/src/main.cpp`); `auto_track.enabled` only gates whether the detection / pose values feed the gimbal-pointing path on each tick.
 
 ---
 
@@ -338,7 +338,7 @@ detected object. When enabled, it subscribes to `/detected_objects` (from P2) an
 
 ### Manual override holdoff
 
-Operators retain ultimate authority over the gimbal. When a manual `PayloadCommand` arrives, the auto-tracker is suspended for `payload_manager.gimbal.manual_holdoff_s` seconds (default in `config/default.json`) so the operator's pointing is not immediately overridden by the next detection. The holdoff is checked each tick via the elapsed-since-manual timer; when it expires, auto-tracking resumes if still enabled.
+Operators retain ultimate authority over the gimbal. When a manual `PayloadCommand` arrives, the auto-tracker is suspended for `payload_manager.gimbal.auto_track.manual_holdoff_s` seconds (canonical key declared in `common/util/include/util/config_keys.h`; default `2.0 s` from the code, currently not overridden in `config/default.json`) so the operator's pointing is not immediately overridden by the next detection. The holdoff is checked each tick via the elapsed-since-manual timer; when it expires, auto-tracking resumes if still enabled.
 
 ### Coordinate Frame Transform
 

@@ -230,10 +230,10 @@ The `fc_tx_thread` processes two IPC streams:
 
 ## Fault Injection
 
-The `fc_rx_thread` reads `ShmFaultOverrides` to support integration testing:
+The `fc_rx_thread` reads `drone::ipc::FaultOverrides` to support integration testing. Overrides are signalled by **sentinel values** in the struct fields (no separate `override_*` flags) — e.g. `battery_percent < 0` means "no override", any `>= 0` value replaces the FC reading.
 
 ### Override: Battery Level
-- If `override_battery` is set, `battery_percent` in `FCState` is overwritten
+- If `battery_percent >= 0` in `FaultOverrides`, `battery_percent` in `FCState` is overwritten
   with the override value before publishing
 - Used to test low-battery fault escalation
 

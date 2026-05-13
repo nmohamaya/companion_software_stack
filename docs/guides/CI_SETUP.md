@@ -286,7 +286,9 @@ Three patterns codified after PR #739 caught real bugs that were being masked.
 
 ### Gate ordering — format-check must not be a hard gate before sanitizer legs
 
-The previous CI pipeline ran format-check as a **required** prerequisite of `build-and-test`. A format-check failure caused the entire build matrix to be **skipped**, and a skipped check shows up green-ish on the PR — so three sanitizer test failures (`LatencyProfiler.OverheadUnderBudget` under TSan, `LatencyProfiler.ConcurrentReadersDoNotRaceWriters` under UBSan, `Performance.LargeFrameUnder100ms` under ASan/TSan/UBSan) sat undetected for weeks. Fix: format-check still runs in parallel and must pass, but build-and-test does not depend on it. Either failure independently blocks merge.
+> **Status (2026-05-13):** `.github/workflows/ci.yml` currently still has `build-and-test: needs: format-check`. The rule below captures the lesson learned from PR #739 and the **target behaviour**; the workflow change to detach the dependency is a follow-up landing separately from this doc PR.
+
+The CI pipeline runs format-check as a **required** prerequisite of `build-and-test`. A format-check failure causes the entire build matrix to be **skipped**, and a skipped check shows up green-ish on the PR — so three sanitizer test failures (`LatencyProfiler.OverheadUnderBudget` under TSan, `LatencyProfiler.ConcurrentReadersDoNotRaceWriters` under UBSan, `Performance.LargeFrameUnder100ms` under ASan/TSan/UBSan) sat undetected for weeks before PR #739 surfaced them. The intended fix is to keep format-check as an independent required check, but stop making `build-and-test` depend on it; both then run in parallel and both independently block merge.
 
 Track this as a class: **never let one CI gate hide another's signal by being a hard dependency**.
 
