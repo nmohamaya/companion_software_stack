@@ -28,6 +28,7 @@
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
+#include <algorithm>  // std::clamp, std::max
 #include <atomic>
 #include <chrono>
 #include <cmath>
