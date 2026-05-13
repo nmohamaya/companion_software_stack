@@ -127,9 +127,10 @@ public:
     /// been seeded with at least one `set_pose()` call before it activates;
     /// the gate's own cached pose is used, so callers do not need to gate
     /// on a fresh-this-tick pose receive.
-    virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(
-        const drone::ipc::SemanticVoxel* voxels, uint32_t n, float clamp_m, float min_confidence,
-        RadarFovGate* radar_gate = nullptr) = 0;
+    virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
+                                                            uint32_t n, float clamp_m,
+                                                            float         min_confidence,
+                                                            RadarFovGate* radar_gate = nullptr) = 0;
 
     /// True if the last planning cycle could not find a search path AND
     /// there was no cached path to keep following — in that case plan()
@@ -253,8 +254,8 @@ public:
         // If any voxel landed OR was deferred / single-modality-promoted, the
         // cached path may be stale (cells changed state in dynamic OR static).
         // Invalidate so D*Lite/A* replan on the next tick.  Issue #698 Fix #1.
-        if (stats.inserted > 0 || stats.cross_veto_deferred > 0 ||
-            stats.fov_silence_promoted > 0 || stats.age_cap_evicted > 0) {
+        if (stats.inserted > 0 || stats.cross_veto_deferred > 0 || stats.fov_silence_promoted > 0 ||
+            stats.age_cap_evicted > 0) {
             snap_valid_ = false;
         }
         return stats;
@@ -398,15 +399,14 @@ public:
                 bool cached_path_clear = !cached_path_.empty();
                 if (cached_path_clear) {
                     for (size_t i = path_index_; i < cached_path_.size(); ++i) {
-                        const auto& wp = cached_path_[i];
-                        const GridCell c = grid_.world_to_grid(wp[0], wp[1], wp[2]);
+                        const auto&    wp = cached_path_[i];
+                        const GridCell c  = grid_.world_to_grid(wp[0], wp[1], wp[2]);
                         if (grid_.is_occupied(c)) {
                             cached_path_clear = false;
-                            DRONE_LOG_WARN(
-                                "[PlanBase] Cached path now blocked at idx {} "
-                                "(world ({:.1f},{:.1f},{:.1f})) — dropping cache, "
-                                "falling back to hover",
-                                i, wp[0], wp[1], wp[2]);
+                            DRONE_LOG_WARN("[PlanBase] Cached path now blocked at idx {} "
+                                           "(world ({:.1f},{:.1f},{:.1f})) — dropping cache, "
+                                           "falling back to hover",
+                                           i, wp[0], wp[1], wp[2]);
                             break;
                         }
                     }

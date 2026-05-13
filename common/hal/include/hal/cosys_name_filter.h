@@ -112,9 +112,7 @@ public:
     [[nodiscard]] bool   has_allowlist() const noexcept { return !include_.empty(); }
     [[nodiscard]] size_t include_size() const noexcept { return include_.size(); }
     [[nodiscard]] size_t exclude_size() const noexcept { return exclude_.size(); }
-    [[nodiscard]] CosysNameFilterUnknown unknown_action() const noexcept {
-        return unknown_action_;
-    }
+    [[nodiscard]] CosysNameFilterUnknown unknown_action() const noexcept { return unknown_action_; }
 
 private:
     std::vector<std::string> include_;

@@ -95,12 +95,11 @@ public:
         //     producing false-positive flight-critical hits (Copilot
         //     review on PR #704).  The vehicle name is always added to
         //     the blocklist.
-        DRONE_LOG_INFO(
-            "[CosysSegmentation] Created for {} camera='{}' vehicle='{}' "
-            "obstacle_class_id={} min_pixels={} mode={} (include={} exclude={})",
-            client_->endpoint(), camera_name_, vehicle_name_, obstacle_class_id_, min_pixels_,
-            filter_.has_allowlist() ? "allowlist" : "blocklist",
-            filter_.include_size(), filter_.exclude_size());
+        DRONE_LOG_INFO("[CosysSegmentation] Created for {} camera='{}' vehicle='{}' "
+                       "obstacle_class_id={} min_pixels={} mode={} (include={} exclude={})",
+                       client_->endpoint(), camera_name_, vehicle_name_, obstacle_class_id_,
+                       min_pixels_, filter_.has_allowlist() ? "allowlist" : "blocklist",
+                       filter_.include_size(), filter_.exclude_size());
     }
 
     // Non-copyable, non-movable (owns RPC client reference and ID cache)
@@ -118,9 +117,9 @@ public:
             return false;
         }
         try {
-            std::vector<std::string>            names;
-            std::vector<msr::airlib::Vector3r>  colors;
-            const bool got = client_->with_client([&](auto& rpc) {
+            std::vector<std::string>           names;
+            std::vector<msr::airlib::Vector3r> colors;
+            const bool                         got = client_->with_client([&](auto& rpc) {
                 names  = rpc.simListInstanceSegmentationObjects();
                 colors = rpc.simGetInstanceSegmentationColorMap();
             });
@@ -129,10 +128,9 @@ public:
                 return false;
             }
             if (names.size() != colors.size()) {
-                DRONE_LOG_WARN(
-                    "[CosysSegmentation] init() — name/color size mismatch ({} vs {}); "
-                    "table will be partial",
-                    names.size(), colors.size());
+                DRONE_LOG_WARN("[CosysSegmentation] init() — name/color size mismatch ({} vs {}); "
+                               "table will be partial",
+                               names.size(), colors.size());
             }
             const size_t n = std::min(names.size(), colors.size());
             color_to_name_.clear();
@@ -140,9 +138,9 @@ public:
             for (size_t i = 0; i < n; ++i) {
                 // Cosys returns colors as Vector3r (R, G, B in [0, 255] float).
                 // Pack to a 24-bit key; clamp to handle slight float drift.
-                const uint32_t r = clamp_u8(colors[i].x());
-                const uint32_t g = clamp_u8(colors[i].y());
-                const uint32_t b = clamp_u8(colors[i].z());
+                const uint32_t r   = clamp_u8(colors[i].x());
+                const uint32_t g   = clamp_u8(colors[i].y());
+                const uint32_t b   = clamp_u8(colors[i].z());
                 const uint32_t key = (r << 16) | (g << 8) | b;
                 color_to_name_.emplace(key, names[i]);
             }
@@ -177,10 +175,11 @@ public:
         try {
             using namespace msr::airlib;
             std::vector<ImageCaptureBase::ImageResponse> responses;
-            const bool got = client_->with_client([&](auto& rpc) {
-                std::vector<ImageCaptureBase::ImageRequest> requests = {ImageCaptureBase::ImageRequest(
-                    camera_name_, ImageCaptureBase::ImageType::Segmentation,
-                    /* pixels_as_float */ false, /* compress */ false)};
+            const bool                                   got = client_->with_client([&](auto& rpc) {
+                std::vector<ImageCaptureBase::ImageRequest> requests = {
+                    ImageCaptureBase::ImageRequest(
+                        camera_name_, ImageCaptureBase::ImageType::Segmentation,
+                        /* pixels_as_float */ false, /* compress */ false)};
                 responses = rpc.simGetImages(requests, vehicle_name_);
             });
             if (!got) return R::err("CosysSegmentation: RPC client not connected");
@@ -214,16 +213,16 @@ public:
 
             for (uint32_t y = 0; y < img_h; ++y) {
                 for (uint32_t x = 0; x < img_w; ++x) {
-                    const size_t  i   = (static_cast<size_t>(y) * img_w + x) * 3;
-                    const uint8_t r   = px[i + 0];
-                    const uint8_t g   = px[i + 1];
-                    const uint8_t b   = px[i + 2];
+                    const size_t   i   = (static_cast<size_t>(y) * img_w + x) * 3;
+                    const uint8_t  r   = px[i + 0];
+                    const uint8_t  g   = px[i + 1];
+                    const uint8_t  b   = px[i + 2];
                     const uint32_t key = (static_cast<uint32_t>(r) << 16) |
                                          (static_cast<uint32_t>(g) << 8) | b;
 
                     auto it = by_color_pool_.find(key);
                     if (it == by_color_pool_.end()) {
-                        ObjAccum acc{};
+                        ObjAccum   acc{};
                         const auto name_it = color_to_name_.find(key);
                         if (name_it != color_to_name_.end()) acc.name = name_it->second;
                         acc.excluded = filter_.is_excluded(acc.name);
@@ -249,10 +248,9 @@ public:
             // negative steady_clock readings on platforms where the rep is
             // signed.  Mirrors the radar-backend pattern (PR #704 memory-
             // safety review).
-            const auto now_ns_signed =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                    .count();
+            const auto now_ns_signed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count();
             output.timestamp_ns =
                 static_cast<uint64_t>(std::max(decltype(now_ns_signed){0}, now_ns_signed));
             output.detections.reserve(by_color_pool_.size());
@@ -283,12 +281,12 @@ public:
                     if (a.excluded) ++excluded_n;
                     if (a.name.empty()) ++unknown_n;
                 }
-                DRONE_LOG_INFO(
-                    "[CosysSegmentation] First infer: image {}x{}, {} unique colors "
-                    "(named={}, unknown={}) → {} detections kept, {} excluded "
-                    "(min_pixels gate={})",
-                    img_w, img_h, by_color_pool_.size(), by_color_pool_.size() - unknown_n, unknown_n,
-                    output.detections.size(), excluded_n, min_pixels_);
+                DRONE_LOG_INFO("[CosysSegmentation] First infer: image {}x{}, {} unique colors "
+                               "(named={}, unknown={}) → {} detections kept, {} excluded "
+                               "(min_pixels gate={})",
+                               img_w, img_h, by_color_pool_.size(),
+                               by_color_pool_.size() - unknown_n, unknown_n,
+                               output.detections.size(), excluded_n, min_pixels_);
                 // First frame: list the up-to-12 largest detections by name + pixel count
                 // so we can verify the include/exclude filtering hit the right objects.
                 std::vector<std::pair<std::string, uint32_t>> kept;
@@ -326,7 +324,7 @@ private:
     }
 
     struct ObjAccum {
-        std::vector<uint8_t> mask;          // size W*H, 255 where pixel matches
+        std::vector<uint8_t> mask;  // size W*H, 255 where pixel matches
         uint32_t             min_x = UINT32_MAX, min_y = UINT32_MAX;
         uint32_t             max_x = 0, max_y = 0;
         uint32_t             pixel_count = 0;
@@ -334,12 +332,12 @@ private:
         std::string          name;
     };
 
-    std::shared_ptr<CosysRpcClient> client_;
-    std::string                     camera_name_;
-    std::string                     vehicle_name_;
-    int                             obstacle_class_id_;
-    int                             min_pixels_;
-    CosysNameFilter                 filter_;
+    std::shared_ptr<CosysRpcClient>           client_;
+    std::string                               camera_name_;
+    std::string                               vehicle_name_;
+    int                                       obstacle_class_id_;
+    int                                       min_pixels_;
+    CosysNameFilter                           filter_;
     std::unordered_map<uint32_t, std::string> color_to_name_;  ///< RGB-key → object name
     /// Pooled across calls — clear() preserves the bucket array.
     std::unordered_map<uint32_t, ObjAccum> by_color_pool_;

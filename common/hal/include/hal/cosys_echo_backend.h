@@ -96,26 +96,26 @@ public:
         , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad",
                                             15.0f * static_cast<float>(M_PI) / 180.0f))
         , update_rate_hz_(std::max(1, cfg.get<int>(section + ".update_rate_hz", 20)))
-        , cluster_range_m_(std::max(kMinClusterBinM,
-                                    cfg.get<float>(section + ".cluster_range_m", 1.0f)))
-        , cluster_az_rad_(std::max(kMinClusterBinRad,
-                                   cfg.get<float>(section + ".cluster_az_rad",
-                                                  5.0f * static_cast<float>(M_PI) / 180.0f)))
-        , cluster_el_rad_(std::max(kMinClusterBinRad,
-                                   cfg.get<float>(section + ".cluster_el_rad",
-                                                  5.0f * static_cast<float>(M_PI) / 180.0f)))
+        , cluster_range_m_(
+              std::max(kMinClusterBinM, cfg.get<float>(section + ".cluster_range_m", 1.0f)))
+        , cluster_az_rad_(
+              std::max(kMinClusterBinRad, cfg.get<float>(section + ".cluster_az_rad",
+                                                         5.0f * static_cast<float>(M_PI) / 180.0f)))
+        , cluster_el_rad_(
+              std::max(kMinClusterBinRad, cfg.get<float>(section + ".cluster_el_rad",
+                                                         5.0f * static_cast<float>(M_PI) / 180.0f)))
         , filter_(cfg, section,
                   /*default_excludes=*/"Ground,Sky,SkyDome,Floor",
                   /*vehicle_name=*/vehicle_name_,
                   /*unknown_action=*/CosysNameFilterUnknown::Keep) {
         const float rad_to_deg = 180.0f / static_cast<float>(M_PI);
-        DRONE_LOG_INFO(
-            "[CosysEcho] Created for {} echo='{}' vehicle='{}' range=[{:.1f},{:.1f}]m "
-            "FOV=±{:.0f}°×±{:.0f}° rate={}Hz cluster={:.1f}m×{:.0f}°×{:.0f}° mode={}",
-            client_->endpoint(), echo_name_, vehicle_name_, min_range_m_, max_range_m_,
-            fov_azimuth_rad_ * rad_to_deg, fov_elevation_rad_ * rad_to_deg, update_rate_hz_,
-            cluster_range_m_, cluster_az_rad_ * rad_to_deg, cluster_el_rad_ * rad_to_deg,
-            filter_.has_allowlist() ? "allowlist" : "blocklist");
+        DRONE_LOG_INFO("[CosysEcho] Created for {} echo='{}' vehicle='{}' range=[{:.1f},{:.1f}]m "
+                       "FOV=±{:.0f}°×±{:.0f}° rate={}Hz cluster={:.1f}m×{:.0f}°×{:.0f}° mode={}",
+                       client_->endpoint(), echo_name_, vehicle_name_, min_range_m_, max_range_m_,
+                       fov_azimuth_rad_ * rad_to_deg, fov_elevation_rad_ * rad_to_deg,
+                       update_rate_hz_, cluster_range_m_, cluster_az_rad_ * rad_to_deg,
+                       cluster_el_rad_ * rad_to_deg,
+                       filter_.has_allowlist() ? "allowlist" : "blocklist");
     }
 
     ~CosysEchoBackend() override { shutdown(); }
@@ -179,8 +179,7 @@ private:
         // indefinitely with no upstream signal.  Touching the heartbeat
         // each iteration lets ThreadWatchdog detect the hang.
         drone::util::ScopedHeartbeat heartbeat("cosys_echo_poll", /*critical=*/false);
-        DRONE_LOG_INFO("[CosysEcho] Polling thread started (interval={}ms)",
-                       poll_interval.count());
+        DRONE_LOG_INFO("[CosysEcho] Polling thread started (interval={}ms)", poll_interval.count());
 
         // Per-bin accumulator for clustering.  Echo can emit hundreds of returns
         // per real obstacle (each ray that hits + each multipath reflection);
@@ -214,9 +213,8 @@ private:
             try {
                 using namespace msr::airlib;
                 EchoData data;
-                bool     got = client_->with_client([&](auto& rpc) {
-                    data = rpc.getEchoData(echo_name_, vehicle_name_);
-                });
+                bool     got = client_->with_client(
+                    [&](auto& rpc) { data = rpc.getEchoData(echo_name_, vehicle_name_); });
                 if (!got) {
                     std::this_thread::sleep_for(poll_interval);
                     continue;
@@ -245,9 +243,9 @@ private:
                 }
                 for (size_t i = 0; i < n_points; ++i) {
                     ++raw;
-                    const float x = pc[i * kFloatsPerEchoPoint + 0];
-                    const float y = -pc[i * kFloatsPerEchoPoint + 1];
-                    const float z = -pc[i * kFloatsPerEchoPoint + 2];
+                    const float x              = pc[i * kFloatsPerEchoPoint + 0];
+                    const float y              = -pc[i * kFloatsPerEchoPoint + 1];
+                    const float z              = -pc[i * kFloatsPerEchoPoint + 2];
                     const float attenuation_dB = pc[i * kFloatsPerEchoPoint + 3];
                     // pc[i*5 + 4] is total path distance (including multipath);
                     // we recompute straight-line range from xyz instead, since
@@ -286,8 +284,8 @@ private:
                     }
                     auto& acc = bins[bin_key(rb, ab, eb)];
                     acc.sum_range += range;
-                    acc.sum_az    += azimuth;
-                    acc.sum_el    += elevation;
+                    acc.sum_az += azimuth;
+                    acc.sum_el += elevation;
                     acc.sum_atten += attenuation_dB;
                     ++acc.count;
                     if (!gt_name.empty()) {
@@ -328,7 +326,7 @@ private:
                         continue;
                     }
 
-                    const float inv = 1.0f / static_cast<float>(acc.count);
+                    const float                inv = 1.0f / static_cast<float>(acc.count);
                     drone::ipc::RadarDetection det{};
                     det.timestamp_ns        = list.timestamp_ns;
                     det.range_m             = acc.sum_range * inv;
@@ -341,13 +339,12 @@ private:
                     // is belt-and-braces — per-point NaN/Inf already filters above
                     // (PR #704 security review).
                     const float mean_atten = acc.sum_atten * inv;
-                    const float snr_db     = std::isfinite(mean_atten)
-                                                 ? std::max(0.0f, -mean_atten)
-                                                 : 0.0f;
-                    det.snr_db              = snr_db;
-                    det.confidence          = std::clamp(snr_db / 30.0f, 0.0f, 1.0f);
-                    det.rcs_dbsm            = 0.0f;
-                    det.track_id            = list.num_detections + 1;
+                    const float snr_db     = std::isfinite(mean_atten) ? std::max(0.0f, -mean_atten)
+                                                                       : 0.0f;
+                    det.snr_db             = snr_db;
+                    det.confidence         = std::clamp(snr_db / 30.0f, 0.0f, 1.0f);
+                    det.rcs_dbsm           = 0.0f;
+                    det.track_id           = list.num_detections + 1;
                     list.detections[list.num_detections++] = det;
                 }
 
@@ -369,10 +366,10 @@ private:
                         raw, in_fov, dropped_range, dropped_nonfinite, bins.size(),
                         list.num_detections, skipped_filter);
                 } else if (raw > 0 && !first_nonzero_logged_) {
-                    DRONE_LOG_INFO(
-                        "[CosysEcho] First NON-ZERO scan #{}: {} raw → {} in FOV → "
-                        "{} bins → {} emitted ({} skipped)",
-                        scan, raw, in_fov, bins.size(), list.num_detections, skipped_filter);
+                    DRONE_LOG_INFO("[CosysEcho] First NON-ZERO scan #{}: {} raw → {} in FOV → "
+                                   "{} bins → {} emitted ({} skipped)",
+                                   scan, raw, in_fov, bins.size(), list.num_detections,
+                                   skipped_filter);
                     first_nonzero_logged_ = true;
                 } else if (scan % 20 == 0) {
                     DRONE_LOG_INFO(
@@ -409,10 +406,10 @@ private:
     std::atomic<bool>              active_{false};
     std::atomic<uint64_t>          scan_count_{0};
     /// poll thread only — no synchronisation needed.
-    bool                           first_nonzero_logged_ = false;
-    bool                           partial_point_warned_ = false;
-    std::thread                    poll_thread_;
-    std::once_flag                 shutdown_once_;
+    bool           first_nonzero_logged_ = false;
+    bool           partial_point_warned_ = false;
+    std::thread    poll_thread_;
+    std::once_flag shutdown_once_;
 };
 
 }  // namespace drone::hal
