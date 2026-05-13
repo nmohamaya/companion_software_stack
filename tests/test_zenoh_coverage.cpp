@@ -570,7 +570,8 @@ TEST(LivelinessBranch, MonitorDuplicatePutIsNotNewCallback) {
 namespace {
 
 // Helper: spin-poll until receive() succeeds or timeout.  Used by all
-// three tests below.  Returns true if a message was received.
+// four ZenohStaleMessageFilter tests below.  Returns true if a message
+// was received.
 template<typename T>
 bool poll_until_received(ZenohSubscriber<T>& sub, T& out, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -589,30 +590,60 @@ bool poll_until_received(ZenohSubscriber<T>& sub, T& out, std::chrono::milliseco
 // at the call site for the pose topic — Issue #722 lifts it to the
 // wrapper level so every timestamped IPC topic benefits.
 TEST(ZenohStaleMessageFilter, DropsPreBirthMessagesWhenFilterEnabled) {
-    // Publisher writes a clearly historic timestamp (1 second past epoch).
-    // The subscriber, constructed below, will record a `steady_clock` birth
-    // that's many orders of magnitude larger — comparison must classify
-    // this as pre-birth and drop it.
-    ZenohPublisher<Pose> pub("drone/test/stale_filter_pre");
+    // PR #750 Copilot review: the original test used a literal
+    // `timestamp_ns = 1'000'000'000ULL` (1 second on the steady_clock
+    // epoch) and assumed the subscriber's birth would always be
+    // "orders of magnitude larger".  On a freshly-booted host with low
+    // CLOCK_MONOTONIC uptime, that assumption fails and the test could
+    // false-pass.  Robust pattern: capture `now_ns()` *before*
+    // constructing the subscriber, sleep > kBirthSlackNs (100 ms), then
+    // publish using the captured pre-birth value.  The gap between
+    // captured-stamp and subscriber-birth is guaranteed to exceed slack
+    // regardless of absolute clock epoch.
+    const uint64_t pre_birth_ns = drone::util::get_clock().now_ns();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // > 100ms slack
 
+    ZenohPublisher<Pose> pub("drone/test/stale_filter_pre");
     // filter_pre_birth_messages defaults to true.
     ZenohSubscriber<Pose> sub("drone/test/stale_filter_pre");
 
+    // Brief settle for Zenoh discovery.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
+    // Publish the historic message — should be dropped by the filter.
     Pose stale{};
-    stale.timestamp_ns   = 1'000'000'000ULL;  // 1 second past epoch — definitely stale
+    stale.timestamp_ns   = pre_birth_ns;  // captured pre-birth, deterministically stale
     stale.translation[0] = 7.0;
     stale.quality        = 2;
     pub.publish(stale);
 
-    // Filter should drop this message — `receive()` returns false.
+    // Wait long enough for delivery to definitely have completed if it
+    // were going to happen — then assert it didn't.
     Pose received{};
     EXPECT_FALSE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
         << "Pre-birth message was NOT dropped (Issue #722 regression).  "
            "Zenoh's last-value cache would deliver multi-minute-old poses "
            "to a freshly-restarted P4, which previously triggered "
            "FAULT_POSE_STALE → LOITER mid-takeoff.";
+
+    // Positive delivery control: prove the subscriber+publisher pair is
+    // actually wired up by sending a FRESH message and verifying delivery.
+    // Without this control, the negative assertion above could false-
+    // green if Zenoh discovery never completed (e.g. session contention
+    // under `ctest -j` even with RESOURCE_LOCK).
+    Pose fresh{};
+    fresh.timestamp_ns   = drone::util::get_clock().now_ns();
+    fresh.translation[0] = 7.5;
+    fresh.quality        = 2;
+    pub.publish(fresh);
+
+    ASSERT_TRUE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
+        << "Positive delivery control failed — subscriber never received the "
+           "fresh follow-up message.  Negative `EXPECT_FALSE` above is therefore "
+           "untrustworthy (false-green on a broken subscription).";
+    EXPECT_DOUBLE_EQ(received.translation[0], 7.5);
+    EXPECT_NE(received.timestamp_ns, pre_birth_ns)
+        << "Subscriber received the STALE message after all — filter is broken.";
 }
 
 // With the filter explicitly disabled (test mode), the same stale message
