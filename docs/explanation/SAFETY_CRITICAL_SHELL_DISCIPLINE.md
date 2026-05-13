@@ -196,8 +196,8 @@ The mitigation is to evolve the checklist when a new failure pattern emerges, no
 
 - [`tasks/lessons.md`](../../tasks/lessons.md) — running operational log of session-by-session lessons; this guide is the abstraction layer above
 - [`CLAUDE.md`](../../CLAUDE.md) "Known Pitfalls" section — quick-reference cautions for AI agents working in this repo
-- [`docs/guides/DEVELOPMENT_WORKFLOW.md`](DEVELOPMENT_WORKFLOW.md) — the broader development workflow that this discipline sits inside
-- [`docs/guides/CPP_PATTERNS_GUIDE.md`](CPP_PATTERNS_GUIDE.md) — the codebase's safety-critical patterns at the language level (`Result<T,E>`, `[[nodiscard]]`, RAII) — same discipline, applied to code instead of shell
+- [`docs/how-to/DEVELOPMENT_WORKFLOW.md`](../how-to/DEVELOPMENT_WORKFLOW.md) — the broader development workflow that this discipline sits inside
+- [`docs/reference/CPP_PATTERNS_GUIDE.md`](../reference/CPP_PATTERNS_GUIDE.md) — the codebase's safety-critical patterns at the language level (`Result<T,E>`, `[[nodiscard]]`, RAII) — same discipline, applied to code instead of shell
 - [`docs/tracking/IMPROVEMENTS.md`](../tracking/IMPROVEMENTS.md) — the backlog of CI/process improvements that would enforce parts of this discipline automatically
 
 ---

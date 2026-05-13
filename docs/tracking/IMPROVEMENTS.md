@@ -315,7 +315,7 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 - **Priority:** P3
 - **Category:** docs (architecture reference)
 - **Noticed while:** filing issue #594 (GT emitter) — the existing `docs/architecture/SIMULATION_ARCHITECTURE.md` is Gazebo-only despite Cosys now being comparable in complexity (HAL backends, segmentation, `simSpawnObject` scene population, scenarios #29/#30, GT emitter).
-- **Current state:** Cosys architecture is scattered across ADR-011 (the "why"), `docs/guides/COSYS_SETUP.md` (the "how-to-install"), and inline comments in `common/hal/src/cosys_*.cpp`. No single reference doc for the runtime architecture.
+- **Current state:** Cosys architecture is scattered across ADR-011 (the "why"), `docs/how-to/COSYS_SETUP.md` (the "how-to-install"), and inline comments in `common/hal/src/cosys_*.cpp`. No single reference doc for the runtime architecture.
 - **Proposed fix:** create `docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md` mirroring the Gazebo doc's structure — HAL-mapping, RPC-surface inventory, scenario population via `simSpawnObject`, segmentation pipeline, GT-emitter integration, known limitations. Cross-link from the Gazebo doc and from COSYS_SETUP.md.
 - **When worth doing:** after the #594 (GT emitter) + #573 (baseline capture) work stabilises the Cosys-side patterns — then we document what actually shipped rather than chasing a moving target.
 
@@ -393,7 +393,7 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 - **Fix options:**
   1. Pin the generator explicitly in `deploy/build.sh` (e.g. `cmake .. -G Ninja`) so every invocation matches.
   2. Pass `-G ${CMAKE_GENERATOR}` through to the `ExternalProject_Add` call for `airsim_external` in `cmake/FindAirSim.cmake` so the sub-project always mirrors the parent.
-  3. Document the workaround near `FindAirSim.cmake` and in `docs/guides/DEV_MACHINE_SETUP.md`.
+  3. Document the workaround near `FindAirSim.cmake` and in `docs/tutorials/DEV_MACHINE_SETUP.md`.
 - **Recommendation:** option 2 — it's the root cause; options 1 and 3 are palliatives.
 
 #### 2. `.gitignore` hides `perception_v2_detailed_design.md` from PR diffs

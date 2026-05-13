@@ -117,10 +117,10 @@ Quantitative facts about the project drift the moment they are duplicated. Each 
 | HAL interface list + count | [`common/hal/include/hal/`](common/hal/include/hal/) | `ls common/hal/include/hal/i*.h` |
 | IPC wire types | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) | Authoritative struct definitions; `docs/design/API.md` documents but does not define |
 | IPC topic constants | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) (`namespace topics`) for the names; [`common/ipc/include/ipc/zenoh_message_bus.h`](common/ipc/include/ipc/zenoh_message_bus.h) for the SHM→Zenoh key-expression mapping; [`common/ipc/include/ipc/topic_resolver.h`](common/ipc/include/ipc/topic_resolver.h) for optional `vehicle_id` prefixing | Topic strings live in code, not docs |
-| Config keys | [`common/util/include/util/config_keys.h`](common/util/include/util/config_keys.h) + [`config/default.json`](config/default.json) | Code declares, JSON provides defaults; `docs/guides/config_reference.md` is reference-only |
+| Config keys | [`common/util/include/util/config_keys.h`](common/util/include/util/config_keys.h) + [`config/default.json`](config/default.json) | Code declares, JSON provides defaults; `docs/reference/config_reference.md` is reference-only |
 | ADR catalogue | [`docs/adr/`](docs/adr/) | One file per ADR; `docs/adr/README.md` (when added) indexes them |
 | Agent roster | [`.claude/agents/`](.claude/agents/) + [`docs/adr/ADR-010-multi-agent-pipeline-architecture.md`](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Agent definitions in `.claude/agents/`; pipeline architecture in ADR-010 |
-| Dependency versions (per-OS) | [`docs/guides/INSTALL.md`](docs/guides/INSTALL.md) | Single matrix; do not restate versions elsewhere |
+| Dependency versions (per-OS) | [`docs/how-to/INSTALL.md`](docs/how-to/INSTALL.md) | Single matrix; do not restate versions elsewhere |
 | systemd units + service deps | [`deploy/systemd/`](deploy/systemd/) | Unit files are authoritative |
 | Process/thread map | This file (CLAUDE.md §Process Map) | Hand-maintained; update when process or thread count changes |
 
@@ -212,7 +212,7 @@ int w = cfg.get<int>("video_capture.mission_cam.width", 1920);
 auto section = cfg.section("mission_planner");
 ```
 
-## Development Workflow (from `docs/guides/DEVELOPMENT_WORKFLOW.md`)
+## Development Workflow (from `docs/how-to/DEVELOPMENT_WORKFLOW.md`)
 
 ### Branch & Commit Conventions
 - Branch naming: `feature/issue-XX-description`, `fix/issue-XX-description`, `refactor/issue-XX-description`, `docs/issue-XX-description`
@@ -410,7 +410,7 @@ Before any push to the public repo, scan `git diff origin/<base>..HEAD` for: str
 - `docs/tracking/PROGRESS.md` / `docs/tracking/ROADMAP.md` — Improvement history and planned work
 - `docs/design/perception_design.md` — P2 pipeline detail
 - `docs/design/hardening-design.md` — Watchdog and systemd integration
-- `docs/guides/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
+- `docs/reference/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
 - `docs/tracking/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
 - `docs/tracking/BUG_FIXES.md` — 29 documented bugs fixed (good reference for common pitfalls)
 - `docs/adr/` — Architecture Decision Records
@@ -514,7 +514,7 @@ Test Quality, API Contract, Code Quality, Performance
 - `tasks/active-work.md` — Live work tracker (read at session start)
 - `tasks/agent-changelog.md` — Completed work log (append at session end)
 - `.claude/shared-context/domain-knowledge.md` — Non-obvious pitfalls all agents should know
-- `docs/guides/AGENT_HANDOFF.md` — Cross-domain handoff protocol
+- `docs/explanation/AGENT_HANDOFF.md` — Cross-domain handoff protocol
 
 ## graphify
 

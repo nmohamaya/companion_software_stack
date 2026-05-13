@@ -4,7 +4,7 @@
 > and how to modify it. Aimed at DevOps newcomers and contributors adding
 > new CI jobs.
 
-**Workflow file:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+**Workflow file:** [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
 **Runner:** `ubuntu-24.04` (GitHub-hosted)
 **Trigger:** push to `main`/`develop`, pull requests to `main`
 
@@ -90,7 +90,7 @@ The CI pipeline has **3 jobs** totalling **6 parallel runners** at peak:
 - Uses `-print0 | xargs -0` for safe handling of paths with spaces.
 - The `build-and-test` matrix has `needs: format-check`, so formatting failures short-circuit the entire pipeline.
 
-**Config file:** [`.clang-format`](../.clang-format) (4-space indent, K&R braces, 100-col limit, left pointer alignment).
+**Config file:** [`.clang-format`](../../.clang-format) (4-space indent, K&R braces, 100-col limit, left pointer alignment).
 
 **Fixing a format failure locally:**
 ```bash
@@ -127,7 +127,7 @@ The plain and sanitizer legs build in different modes and catch **different clas
 
 **Why the difference matters:**
 
-1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](CI_ISSUES.md)).
+1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](../tracking/CI_ISSUES.md)).
 
 2. **Release and Debug builds produce different binaries.** `NDEBUG` is defined in Release, disabling `assert()`. Code behind `#ifndef NDEBUG` (debug logging, extra validation) only compiles in Debug. Both paths need testing.
 
@@ -219,8 +219,8 @@ genhtml coverage.info --output-directory coverage-report
 Zenoh is not available via `apt`, so the CI installs it from GitHub releases:
 
 1. **zenohc** (C library) — Pre-built `.deb` packages from [eclipse-zenoh/zenoh-c releases](https://github.com/eclipse-zenoh/zenoh-c/releases). Currently pinned to **v1.7.2**.
-   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](CI_ISSUES.md).
-   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](CI_ISSUES.md).
+   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](../tracking/CI_ISSUES.md).
+   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](../tracking/CI_ISSUES.md).
 
 2. **zenoh-cpp** (header-only C++ bindings) — Cloned from GitHub at the matching version tag, installed via `cmake --install`.
 
@@ -266,7 +266,7 @@ Test locally first — Zenoh API breaking changes are common between minor versi
 
 ## Known Issues & Workarounds
 
-These are summarized here for quick reference. Full details are in [CI_ISSUES.md](CI_ISSUES.md).
+These are summarized here for quick reference. Full details are in [CI_ISSUES.md](../tracking/CI_ISSUES.md).
 
 | ID | Issue | Workaround | Ref |
 |----|-------|-----------|-----|

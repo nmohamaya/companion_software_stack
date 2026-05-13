@@ -180,7 +180,7 @@ TEST_F(MyFixture, DebounceFiresAfterWindow) {
 
 - `common/util/include/util/iclock.h` — `drone::util::get_clock()` contract and `IClock` interface.
 - `common/util/include/util/mock_clock.h` — `ScopedMockClock` RAII + `MockClock::advance_*()` API.
-- CLAUDE.md > Mockable time mandatory; `docs/guides/CPP_PATTERNS_GUIDE.md` — section names are stable references, but if the section doesn't appear by name in either doc on the branch under review, fall back to the `iclock.h` / `mock_clock.h` headers as authoritative.
+- CLAUDE.md > Mockable time mandatory; `docs/reference/CPP_PATTERNS_GUIDE.md` — section names are stable references, but if the section doesn't appear by name in either doc on the branch under review, fall back to the `iclock.h` / `mock_clock.h` headers as authoritative.
 
 ### Testing Result<T,E>
 ```cpp

@@ -7,7 +7,7 @@
 | **Author**      | Team                                                                                                                                                                                                        |
 | **Deciders**    | Project leads                                                                                                                                                                                               |
 | **Supersedes**  | —                                                                                                                                                                                                           |
-| **Related**     | PR #724 (introduced the 8-phase rollup checklist), Issue #723 (first rollup tracked end-to-end — `feature/perception-v2-integration`), [ADR-005](ADR-005-parallel-agent-git-worktree.md), [ADR-010](ADR-010-multi-agent-pipeline-architecture.md), [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/INTEGRATION_ROLLUP_WORKFLOW.md) |
+| **Related**     | PR #724 (introduced the 8-phase rollup checklist), Issue #723 (first rollup tracked end-to-end — `feature/perception-v2-integration`), [ADR-005](ADR-005-parallel-agent-git-worktree.md), [ADR-010](ADR-010-multi-agent-pipeline-architecture.md), [`docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](../how-to/INTEGRATION_ROLLUP_WORKFLOW.md) |
 
 ---
 
@@ -31,7 +31,7 @@ This ADR records the strategy so future epics use it by default rather than re-d
 
 For multi-issue features with **two or more of**: (a) ≥10 PRs expected, (b) shared interfaces/HAL changes, (c) coordinated multi-agent work, (d) duration >2 weeks — use a **long-lived integration branch** plus the **8-phase rollup checklist** when merging back to `main`.
 
-**Phases** (full text in [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/INTEGRATION_ROLLUP_WORKFLOW.md)):
+**Phases** (full text in [`docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](../how-to/INTEGRATION_ROLLUP_WORKFLOW.md)):
 
 1. Pre-review cleanup (docs, tests, CI baseline)
 2. Scenario sweep on integration HEAD (2–3 consecutive passes per scenario)
@@ -100,7 +100,7 @@ Land everything behind a runtime flag; flip the flag when done.
 
 **Accepted** 2026-05-13. The 8-phase checklist was first applied to Issue #723 (rollup tracking issue) and merged via PR #729 — `feature/perception-v2-integration`, 87 commits, 3 weeks, perception PATH A end-to-end. Outcome: every cross-cutting finding from the rollup reviews was actionable and caught before main merge; no regressions surfaced on main in the week following the rollup.
 
-The checklist lives in [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/INTEGRATION_ROLLUP_WORKFLOW.md) and is the canonical reference. `DEVELOPMENT_WORKFLOW.md` retains a brief pointer to that doc.
+The checklist lives in [`docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](../how-to/INTEGRATION_ROLLUP_WORKFLOW.md) and is the canonical reference. `DEVELOPMENT_WORKFLOW.md` retains a brief pointer to that doc.
 
 ---
 
@@ -111,4 +111,4 @@ The checklist lives in [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/
 - PR #729 — The integration→main merge for #723
 - [ADR-005](ADR-005-parallel-agent-git-worktree.md) — Parallel agent git-worktree model
 - [ADR-010](ADR-010-multi-agent-pipeline-architecture.md) — Multi-agent review pipeline (Phase 3 / 5b reviews depend on this)
-- [`docs/guides/INTEGRATION_ROLLUP_WORKFLOW.md`](../guides/INTEGRATION_ROLLUP_WORKFLOW.md) — The phase-by-phase how-to
+- [`docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](../how-to/INTEGRATION_ROLLUP_WORKFLOW.md) — The phase-by-phase how-to

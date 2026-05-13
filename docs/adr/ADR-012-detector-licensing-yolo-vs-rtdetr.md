@@ -151,7 +151,7 @@ Tied to the perception rewrite phasing (see `perception_architecture.md`).
 - **Implement `OpenCvRtDetrDetector`** — mirror the YOLO class structure.
 - **`models/download_rtdetr.sh`** — ONNX export pipeline (Hugging Face `transformers` → ONNX with onnxsim).
 - **Add RT-DETR to scenarios #21 and #29** as a secondary variant — validate functionality, benchmark accuracy and latency.
-- **Document RT-DETR fine-tuning recipe** in `docs/guides/PERCEPTION_TRAINING.md`.
+- **Document RT-DETR fine-tuning recipe** in `docs/how-to/PERCEPTION_TRAINING.md` (file not yet created).
 
 ### At the commercial gate
 

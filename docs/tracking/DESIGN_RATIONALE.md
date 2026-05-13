@@ -809,7 +809,7 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 
 ## DR-033: `PathATrace` JSONL Writer on Flight-Critical `mask_projection_thread`
 
-**Question:** PR #614 review (review-concurrency, P1): `PathATrace::record_batch()` performs `std::ofstream` I/O directly on `mask_projection_thread`, which is one of P2's flight-critical perception threads. Glibc's `std::ofstream` takes a streambuf sentry / write lock internally; this is the same class of hazard the "observability on flight-critical threads" rule in `docs/guides/CPP_PATTERNS_GUIDE.md` and CLAUDE.md is built to prevent. Should the diagnostic writer be reworked to buffer through an SPSC ring + dedicated IO thread before it ships?
+**Question:** PR #614 review (review-concurrency, P1): `PathATrace::record_batch()` performs `std::ofstream` I/O directly on `mask_projection_thread`, which is one of P2's flight-critical perception threads. Glibc's `std::ofstream` takes a streambuf sentry / write lock internally; this is the same class of hazard the "observability on flight-critical threads" rule in `docs/reference/CPP_PATTERNS_GUIDE.md` and CLAUDE.md is built to prevent. Should the diagnostic writer be reworked to buffer through an SPSC ring + dedicated IO thread before it ships?
 
 **For the SPSC-ring approach:**
 
