@@ -244,11 +244,17 @@ For each pass, deliverables (follow the standard severity policy defined in the 
 
 > **Note:** Rollup reviews tend to surface more P2/P3 findings than per-PR reviews (larger surface, more cross-cutting context).  Use judgement — if a P3 finding is genuinely a "would be nice but won't change correctness" comment, a one-line DR-NNN entry is appropriate.  If it's actionable in <15 minutes, fix it inline.
 
+> **Phase 4 and Phase 5 run in parallel.** Open the integration→main PR *first* (per Phase 5 below), then start the Phase 4 fix-finding work on the integration branch. Every Phase 4 commit flows into the open PR automatically and Copilot can review the rollup diff alongside the agent passes from Phase 3. This shortens wall-time considerably on multi-day rollups.
+
 #### Phase 4 — Fix findings
 
 Address all P1 findings before merge.  Apply the same severity policy as standard PRs (see [Review Comment Handling](#review-comment-handling)) — P2/P3 should be fixed inline; any deferral must be recorded as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` per the "Critical distinction" rule under Step 7.  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
 
+Also triage Copilot review comments that have arrived on the merge-to-main PR (opened in Phase 5).  Use the same severity policy — fix inline or DR-NNN.  Copilot tends to surface different patterns from the themed-agent passes; treat its findings as a third, independent reviewer.
+
 #### Phase 5 — Open the integration→main PR
+
+**Open this PR as soon as Phase 3 completes (i.e. before starting Phase 4 fix-finding).**  The PR's diff updates automatically as Phase 4 commits land on the integration branch, so Copilot reviews the evolving rollup in parallel with the human/agent fix-finding.  This is a meaningful wall-time savings on a multi-day rollup.
 
 - Title: `feat: merge feature/<name> into main (<duration> of work)`
 - Body must include:
@@ -257,6 +263,7 @@ Address all P1 findings before merge.  Apply the same severity policy as standar
   - List of every merged PR with one-line description
   - Link to the changes-since-main doc (e.g. `tasks/INTEGRATION_BRANCH_CHANGES_SINCE_MAIN.md`)
   - Any DR-NNN entries written during the rollup
+  - A `## Known limitations` section listing any P1 findings deliberately deferred post-merge (with linked issues) — these should be exceptional and explicitly green-lit by the maintainer at the Phase 2 or Phase 4 checkpoint
 
 #### Phase 6 — Final pre-merge validation
 

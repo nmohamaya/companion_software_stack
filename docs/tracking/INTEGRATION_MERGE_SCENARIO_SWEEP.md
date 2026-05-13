@@ -52,37 +52,40 @@ Legend: ✅ PASS · ❌ FAIL · ⏳ pending · 🟡 flaky (mixed across runs)
 
 ## Per-run detail
 
-(populated as runs complete — captures check count, PX4 `Arming denied` count, stale-pose filter activations, mission-complete state, any unusual log lines)
+Captured below as each scenario completed.  Full per-process logs in `drone_logs/scenarios_gazebo/<scenario>/<timestamp>_{PASS,FAIL}/` and `drone_logs/scenarios_cosys/...`.
 
 ### Scenario 02 — obstacle_avoidance
 
-#### Run 1
-_pending_
+- **Run 1** — ✅ `2026-05-12_174701_PASS`, 161 s, 19/19 checks.  TAKEOFF → NAVIGATE → 5/5 waypoints reached → RTL → LAND.
+- **Run 2** — ❌ `2026-05-12_175008_FAIL`, 161 s, 16/19 checks.  PREFLIGHT cleared, ARM accepted, but VIO pose staleness fault escalated during TAKEOFF.  Drone never lifted.  Auto-report: *"Mission did not complete — VIO pose staleness triggered fault escalation. This is typically a Gazebo SITL timing artifact, not a code defect. Recommend re-running."*
+- **Run 3** — ❌ `2026-05-12_175350_FAIL`, 162 s, 18/19 checks.  Drone took off and entered NAVIGATE but reported pose was `(-27.8, 29.5, 3.9)` then drifted to `(-25.8, 51.3, 4.0)` over ~50 s — 25 m west, 7-30 m north of the nearest waypoint at `(-4, 22, 4)`.  4× stuck-recover events (cap is 3) → FSM escalated to LOITER.  Filed as the symptom evidence on [#727](https://github.com/nmohamaya/companion_software_stack/issues/727).
 
 ### Scenario 17 — radar_gazebo
 
-#### Run 1
-_pending_
+- **Run 1** — ❌ `2026-05-12_180208_FAIL`, 161 s, 20/21 checks.  Two log-assertions failed: `GazeboRadar.*Subscribed to scan` and `GazeboRadar.*First scan` — gz-transport topic discovery race meant the radar plugin never came up.  VIO pose staleness fault also escalated.
+- **Run 2** — ✅ `2026-05-12_180532_PASS`, 162 s, 21/21 checks.  Clean.
+- **Run 3** — ✅ `2026-05-12_180915_PASS`, 162 s, 21/21 checks.  Clean (two consecutive PASS bar met).
 
 ### Scenario 18 — perception_avoidance
 
-#### Run 1
-_pending_
+- **Run 1** — ❌ `2026-05-12_181640_FAIL`, 171 s, 18/19 checks.  PX4 cold-start reported `Preflight Fail: High Gyro Bias / High Accelerometer Bias / Compass 0 fault` for several seconds before clearing.  User observed asymmetric rotor spin-up: front rotors started ~1 s before back rotors (PX4 mixer correcting non-existent attitude error from bad EKF2 bias).  Drone took off but Survey ran at the *wrong* pose `(-75, 93, 4)` — 75 m off — and promoted **267 phantom static obstacles** into the planner grid.  Subsequent NAVIGATE was unable to make sense of the grid.
+- **Run 2** — ✅ `2026-05-12_182118_PASS`, 172 s, 19/19 checks.  Clean.
+- **Run 3** — ❌ `2026-05-12_182433_FAIL`, 172 s, 18/19 checks.  Same flake family — Mission complete check failed.
 
 ### Scenario 25 — flight_recorder_replay
 
-#### Run 1
-_pending_
+- **Run 1** — ✅ `2026-05-12_183417_PASS`, 132 s, 15/15 checks.  Replay-driven (no live takeoff), dodges the cold-start race.
+- **Run 2** — ✅ `2026-05-12_183704_PASS`, 132 s, 15/15 checks.
 
 ### Scenario 26 — gazebo_full_vio
 
-#### Run 1
-_pending_
+- **Run 1** — ✅ `2026-05-12_201031_PASS`, 132 s, 18/18 checks.
+- **Run 2** — ✅ `2026-05-12_204900_PASS`, 132 s, 18/18 checks.  Note: despite the "full_vio" name, `slam.vio.backend=gazebo` (ground-truth passthrough — see `config/gazebo_sitl.json` comment).
 
 ### Scenario 33 — non_coco_obstacles (Cosys)
 
-#### Run 1
-_pending_
+- **Run 1** — ✅ `2026-05-13_091539_PASS`, 271 s, 26/26 checks.  Live UE5 + Cosys-AirSim Blocks scene at commit `7a47374`.  Zero cube collisions, mission complete → RTL → LAND.
+- **Run 2** — ✅ `2026-05-13_092555_PASS`, 267 s, 26/26 checks.  Two consecutive PASS bar met on the live Cosys path.
 
 ---
 
