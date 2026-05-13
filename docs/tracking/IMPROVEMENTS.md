@@ -16,6 +16,34 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-13 (PR #752 review-fix follow-ups)
+
+#### Decide whether VIO `LOST` state should also withhold pose publication
+
+- **P2** — `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread`.  PR #752 added a guard that suppresses `pose_buffer.write()` while `output.health == VIOHealth::INITIALIZING`.  The other unhealthy state — `VIOHealth::LOST` ("tracking lost — need re-initialization") — currently still publishes the (now-stale) pose.  Downstream the planner's `FaultManager` checks pose age (`stale_pose_ns`) but does NOT check `Pose::quality`, so a backend that keeps emitting fresh-stamped LOST poses with `quality=0` does not trigger `FAULT_POSE_STALE` and the consumer has no signal that pose is unreliable.
+  - **Pros of expanding the guard to LOST:**
+    - Semantically equivalent to INITIALIZING — consumer can't trust the pose.
+    - Cleaner FAULT_POSE_STALE triggering at the planner.
+  - **Cons:**
+    - Behaviour change beyond PR #752's stated scope ("INITIALIZING pose-publish guard").
+    - Consumers that DID look at `Pose::quality` would lose visibility.
+  - **Suggested fix:** open a follow-up issue + DR-NNN evaluating both options.  If we expand to LOST, the guard becomes `output.health == INITIALIZING || output.health == LOST` and the constant becomes a small enum / named bool.
+  - **When to do it:** when fault-response semantics next change, or when a scenario reproduces VIO-LOST mid-flight and exhibits the missing FAULT_POSE_STALE.
+  - **Source:** PR #752 Copilot review — `process3_slam_vio_nav/src/main.cpp:198/214` comment-vs-code mismatch.  PR #752 addressed the immediate concern by tightening the comment + log to say "INITIALIZING only" rather than "until DEGRADED/NOMINAL".
+
+---
+
+### 2026-05-13 (PR #752 implementation — proactive findings)
+
+#### Refactor `vio_pipeline_thread` for unit testability
+
+- **P3** — `test-infra` — `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread` is currently a 100+ line free function that captures `pose_buffer`, calls `backend.process_frame()`, and writes to the buffer.  No unit test directly exercises this function — coverage is via scenario integration tests only.  PR #752 (this PR) added an `output.health == INITIALIZING` guard inside the function but couldn't add a focused unit test for the new branch because the function isn't structured for testability (depends on a thread-local `PoseDoubleBuffer` reference + `Diagnostics` + ambient running flag).
+  - **Suggested fix:** extract the per-frame decision logic (the "should I publish this output?" call) into a free function `should_publish_vio_output(const VIOOutput&) -> bool` or a thin method on a struct.  The pipeline thread calls the helper and acts on the result.  Unit tests then cover the helper directly with synthetic `VIOOutput` instances spanning all health states (INITIALIZING, DEGRADED, NOMINAL, LOST).  The thread function becomes a thin glue layer that doesn't need its own unit test.
+  - **When to do it:** opportunistic — when next touching `vio_pipeline_thread` for another reason, or when adding the next per-output gating rule (likely Layer 4 RTF-aware logic from #746 if it lands here).
+  - **Affected:** test coverage gap for P3 publish-thread logic.  Today the contract "don't publish during INITIALIZING" is enforced inline but only exercised by scenario tests.  Cheap-to-add unit test would catch a regression at PR time instead of scenario-sweep time.
+
+---
+
 ### 2026-05-13 (PR #750 review-fix follow-ups)
 
 #### `ZenohSubscriber` SFINAE-branch test coverage gap
