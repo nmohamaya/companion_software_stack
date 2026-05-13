@@ -66,7 +66,7 @@ All executables land in `build/bin/`.
 
 **After any clean rebuild (`rm -rf build/*`):**
 1. Reconfigure with the canonical command above
-2. Verify test count: `ctest -N --test-dir build | grep "Total Tests:"` matches the current baseline in [tests/TESTS.md](tests/TESTS.md) (single source of truth — do not hardcode the number here)
+2. Verify test count: from the repo root, run `ctest -N --test-dir build | grep "Total Tests:"` (or `ctest -N` from inside `build/`). It must match the current baseline in [tests/TESTS.md](tests/TESTS.md) (single source of truth — do not hardcode the number here).
 
 ## Test Commands
 
