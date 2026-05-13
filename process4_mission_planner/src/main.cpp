@@ -69,30 +69,18 @@ int main(int argc, char* argv[]) {
     if (!ctx_result.is_ok()) return ctx_result.error();
     auto& ctx = ctx_result.value();
 
-    // Issue #720 — subscriber-side stale-message filter for Pose.
+    // Issue #720 / #722 — stale-message filter is now applied at the
+    // ZenohSubscriber wrapper level (default-on, applies to every
+    // timestamped IPC topic, not just pose).  The per-site filter that
+    // used to live here (PR #721) is subsumed by the wrapper.  See
+    // `common/ipc/include/ipc/zenoh_subscriber.h::on_sample` for the
+    // implementation and DR-NNN entry (in PR #745 review fixes if any)
+    // for the design rationale.
     //
-    // Zenoh's IPC layer can deliver the last-published pose from a previous
-    // P3 session before the fresh publisher emits its first new message
-    // (e.g. on session-restart with a gap > a few seconds).  Treating that
-    // historic pose as fresh causes FaultManager to compute a multi-minute
-    // staleness and raise FAULT_POSE_STALE → LOITER before the drone has
-    // even ascended.  Drop any pose whose publisher timestamp predates this
-    // planner process.
-    //
-    // Provably correct because P3 sets `p.timestamp` via the project
-    // mockable clock (see ivio_backend.h::on_odom + simulated backend +
-    // Cosys backend — all read steady_clock under the hood).  A pose with
-    // `timestamp_ns < planner_birth_ns` cannot have been published by the
-    // current P3 process.  Allow a 100 ms backwards slack for the rare case
-    // where P3 booted slightly before P4 and published its first pose
-    // during P4's MessageBus init.
-    //
-    // Uses `drone::util::get_clock().now_ns()` per the project convention
-    // documented in util/iclock.h:24-37 — keeps the clock domain mockable
-    // for tests and consistent with FaultManager's `now_ns` reads.
-    const uint64_t     planner_birth_ns  = drone::util::get_clock().now_ns();
-    constexpr uint64_t kPoseBirthSlackNs = 100'000'000ULL;  // 100 ms
-    bool               stale_pose_logged = false;
+    // Effect: this planner subscribes to `drone/slam/pose` with the
+    // default `filter_pre_birth_messages = true` — any pose stamped
+    // before this process's `get_clock().now_ns()` birth (minus 100 ms
+    // slack) is dropped at the wrapper, never reaches `pose_sub->receive()`.
 
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
@@ -669,32 +657,11 @@ int main(int argc, char* argv[]) {
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
-        bool             got_pose = pose_sub->receive(pose);
-        // Issue #720 — drop poses published before this planner process
-        // started.  Zenoh's last-value cache can deliver a stale pose from
-        // a previous P3 session before the fresh publisher emits its first
-        // message; treating it as fresh would let FaultManager compute a
-        // multi-minute staleness and escalate to LOITER mid-takeoff.  See
-        // `planner_birth_ns` declaration for the full rationale.
-        //
-        // PR #721 Copilot review — overflow-safe subtraction form: avoids
-        // the uint64_t addition `timestamp_ns + slack` which could wrap
-        // for `timestamp_ns` near UINT64_MAX.  The guarded subtraction
-        // `(planner_birth_ns - pose.timestamp_ns)` only runs when
-        // `pose.timestamp_ns < planner_birth_ns`, so the subtraction
-        // is well-defined.
-        if (got_pose && pose.timestamp_ns > 0 && pose.timestamp_ns < planner_birth_ns &&
-            (planner_birth_ns - pose.timestamp_ns) > kPoseBirthSlackNs) {
-            if (!stale_pose_logged) {
-                DRONE_LOG_WARN("[Planner] Discarded stale pose from previous publisher "
-                               "session (age vs planner_start: {} ms) — waiting for fresh "
-                               "pose from current P3 SLAM/VIO (Issue #720)",
-                               (planner_birth_ns - pose.timestamp_ns) / 1'000'000ULL);
-                stale_pose_logged = true;
-            }
-            got_pose = false;
-            pose     = drone::ipc::Pose{};  // clear so downstream sees no-pose-this-tick
-        }
+        // Issue #720 / #722 — the stale-message filter is now applied at the
+        // ZenohSubscriber wrapper level (default-on).  The pose subscriber
+        // above uses default `filter_pre_birth_messages = true`, so pre-birth
+        // poses from a previous P3 session never reach this `receive()` call.
+        bool got_pose = pose_sub->receive(pose);
         if (got_pose) {
             // Issue #698 Fix #1 — keep the cross-veto gate's pose cache fresh.
             // Cheap (vector + quaternion conjugate); safe to call every tick

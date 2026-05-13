@@ -3607,4 +3607,49 @@ Two-part fix (per #714):
 
 ---
 
-*Last updated after Improvement #94 (PR #725). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #98 — Wrapper-Level Zenoh Stale-Message Filter (closes #722, PR #745)
+
+**Date:** 2026-05-13
+**Category:** Hardening — IPC defense-in-depth
+**Issue:** [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) (closed by this PR) / part of epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Wave 2
+**PR:** #745 (open against `feature/cold-start-hardening`)
+**Numbering note:** depends on PRs #743, #744 landing first; renumber if order changes.
+
+**What:**
+
+Lifts PR #721's per-site stale-pose filter (in `process4_mission_planner/src/main.cpp`) to the `ZenohSubscriber<T>` wrapper level.  Every IPC topic with a `timestamp_ns` field now gets the protection automatically, not just pose.  Closes the class-of-bugs hole that #722 identified: Zenoh's last-value cache delivers historic messages from previous publisher sessions to any newly-connected subscriber.
+
+**How it works:**
+
+1. New SFINAE `has_timestamp_ns<T>` detector at compile time (mirrors `has_validate<T>`).
+2. `ZenohSubscriber<T>` records `subscriber_birth_ns_` from `drone::util::get_clock().now_ns()` at construction.
+3. In `on_sample()`, after `deserialize` + `validate()`, drops messages where `temp->timestamp_ns + kBirthSlackNs < subscriber_birth_ns_` (100 ms slack matches PR #721).
+4. Log-once per subscriber via atomic compare-exchange — no spam if Zenoh replays many cached messages.
+5. Configurable opt-out (`filter_pre_birth_messages = false`) for tests that use synthetic timestamps.
+
+**Two-commit pattern (per #722 plan):**
+
+- **Commit 1** — Adds the wrapper-level filter + 4 new unit tests + threads opt-out parameter through `MessageBus::subscribe<T>` API + migrates 22 existing IPC tests to opt out (they use synthetic `timestamp_ns` for wire-format coverage, not staleness semantics).
+- **Commit 2** — Reverts the per-site filter in `process4_mission_planner/src/main.cpp` (PR #721) which is now subsumed.  Demonstrates the relationship in git log and shrinks P4 main.cpp.
+
+**Files modified:**
+
+- `common/ipc/include/ipc/zenoh_subscriber.h` — new `has_timestamp_ns` SFINAE, `subscriber_birth_ns_`, `kBirthSlackNs`, `log_stale_once`, filter logic in `on_sample()`, new constructor parameter.
+- `common/ipc/include/ipc/zenoh_message_bus.h` — `filter_pre_birth` parameter threaded through `subscribe<T>` + `subscribe_lazy<T>`.
+- `common/ipc/include/ipc/message_bus.h` — `filter_pre_birth` parameter threaded through `subscribe<T>` + `subscribe_optional<T>`.
+- `tests/test_zenoh_coverage.cpp` — 4 new `ZenohStaleMessageFilter` tests + 8 existing direct-constructor sites migrated.
+- `tests/test_zenoh_ipc.cpp` — 19 subscribe sites + 14 direct-constructor sites migrated.
+- `tests/test_message_bus.cpp` — 3 subscribe sites migrated.
+- `process4_mission_planner/src/main.cpp` — commit 2 removes the per-site filter declarations (`planner_birth_ns`, `kPoseBirthSlackNs`, `stale_pose_logged`) and the per-tick check; both replaced by a comment pointing to the wrapper.
+
+**Test count:** +4 (`test_zenoh_coverage.cpp`).  Full `ctest -N`: **2062** (was 2058 on `feature/cold-start-hardening` integration HEAD).  All 2062 tests pass; format clean.
+
+**Why:**
+
+Wave 2 of the cold-start hardening epic (#740).  Layer 1 (PR #741) catches RTF-independent ARM-gate failures.  This wave catches a different failure family — Zenoh last-value cache delivering historic data from previous sessions — that's also RTF-independent but distinct from the EKF2-flicker mechanism.  Composes with PR-D (forthcoming) which closes the third leg: P3 publishing `INITIALIZING` pose with fresh timestamps.
+
+After this PR + PR-D land, every safety-critical IPC topic has automatic defense-in-depth against the three known cold-start IPC hazards.
+
+---
+
+*Last updated after Improvement #98 (PR #745). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
