@@ -213,7 +213,7 @@ Before kicking off agent reviews, get the branch into a clean baseline state:
 
 #### Phase 2 — Scenario sweep on integration HEAD
 
-Run all Gazebo scenarios (and Cosys-AirSim scenarios if applicable) on the integration branch's HEAD.  Capture results in a tracking doc (`docs/tracking/INTEGRATION_MERGE_SCENARIO_SWEEP.md` or similar):
+Run all Gazebo scenarios (and Cosys-AirSim scenarios if applicable) on the integration branch's HEAD.  Capture results in a rollup-scoped tracking doc (e.g. `docs/tracking/INTEGRATION_MERGE_SCENARIO_SWEEP-YYYY-MM-<rollup-name>.md`):
 
 - [ ] Each scenario: PASS / FAIL + key metrics (PX4 denies count, hover-fallback events, mission-complete state)
 - [ ] **2-3 consecutive PASS runs per scenario before declaring it clean** — single-run PASSes are insufficient given Gazebo physics seeding + EKF2 cold-start variance.  Same-binary-opposite-result outcomes are run-to-run noise, not code-level signal.  Re-runs at the same commit are the only way to separate the two.
