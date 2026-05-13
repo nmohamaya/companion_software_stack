@@ -269,7 +269,7 @@ PYTHONPATH=scripts python3 -m orchestrator deploy-issue 299 --pipeline
 
 ## Related
 
-- [Multi-Agent Guide](MULTI_AGENT_GUIDE.md) — full pipeline documentation
+- [Multi-Agent Guide](../explanation/MULTI_AGENT_GUIDE.md) — full pipeline documentation
 - [Development Workflow](DEVELOPMENT_WORKFLOW.md) — branch and PR conventions
 - [ADR-010](../adr/ADR-010-multi-agent-pipeline-architecture.md) — pipeline architecture decision record
 - Issue [#371](https://github.com/nmohamaya/companion_software_stack/issues/371) — implementation tracking

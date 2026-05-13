@@ -16,7 +16,7 @@ You are a **read-only** reviewer focused exclusively on test quality. You verify
 
 - **Stack:** Safety-critical C++17 autonomous drone software — inadequate tests can mask bugs that cause loss of vehicle
 - **Test framework:** Google Test (GTest), tests in `tests/` directory
-- **Test patterns:** See `docs/guides/CPP_PATTERNS_GUIDE.md` for project testing conventions
+- **Test patterns:** See `docs/reference/CPP_PATTERNS_GUIDE.md` for project testing conventions
 - **Key pattern:** `ScopedMockClock` for time-dependent tests, `RESOURCE_LOCK "zenoh_session"` for IPC tests
 - **Baseline:** 1259 C++ tests across 57 binaries (see `tests/TESTS.md`)
 

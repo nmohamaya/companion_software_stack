@@ -269,5 +269,5 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 - `.claude/agents/` — All 17 role definitions
 - `.claude/shared-context/` — Project status and domain knowledge
 - `scripts/` — Orchestration scripts
-- `docs/guides/MULTI_AGENT_GUIDE.md` — Full usage guide with setup, walkthrough, and examples
-- `docs/guides/AGENT_HANDOFF.md` — Cross-domain handoff protocol
+- `docs/explanation/MULTI_AGENT_GUIDE.md` — Full usage guide with setup, walkthrough, and examples
+- `docs/explanation/AGENT_HANDOFF.md` — Cross-domain handoff protocol

@@ -16,7 +16,7 @@ This directory contains **non-obvious domain knowledge that ALL agents should kn
 
 ## What does NOT belong here
 
-- **Code patterns** -- read the code itself or `docs/guides/CPP_PATTERNS_GUIDE.md`
+- **Code patterns** -- read the code itself or `docs/reference/CPP_PATTERNS_GUIDE.md`
 - **Git history** -- use `git log` and `git blame`
 - **Debugging recipes** -- the fix should be in the code; if it keeps recurring, fix the root cause
 - **Anything already in CLAUDE.md** -- that file is the single source of truth for build commands, architecture, and workflow

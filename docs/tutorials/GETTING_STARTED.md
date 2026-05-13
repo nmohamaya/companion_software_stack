@@ -13,7 +13,7 @@ This guide takes you from a **fresh clone to a working build** in under 10 minut
 - **Resources:** 4 GB RAM (minimum), 8+ GB disk space, 2 cores (minimum)
 - **User:** Can be any user; `sudo` access required for real-time scheduling (optional)
 
-> **Conda/Anaconda Warning:** If you have Conda installed, run `conda deactivate` before building. Conda ships its own `libfmt`, `libstdc++`, and `GTest` that conflict with system libraries and cause linker errors. See [INSTALL.md](INSTALL.md) for details.
+> **Conda/Anaconda Warning:** If you have Conda installed, run `conda deactivate` before building. Conda ships its own `libfmt`, `libstdc++`, and `GTest` that conflict with system libraries and cause linker errors. See [INSTALL.md](../how-to/INSTALL.md) for details.
 
 ### Check Your System
 
@@ -83,7 +83,7 @@ sudo apt-get install -y \
 **Zenoh IPC (required):**
 ```bash
 # Zenoh is the sole IPC backend — not available via apt
-# See docs/guides/INSTALL.md Section 3 for full instructions
+# See docs/how-to/INSTALL.md Section 3 for full instructions
 ZENOH_VERSION="1.7.2"
 wget "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip"
 unzip libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip
@@ -98,7 +98,7 @@ rm -f libzenohc-*.zip libzenohc_*.deb libzenohc-dev_*.deb
 sudo apt-get install -y libopencv-dev
 
 # MAVSDK (for PX4 MAVLink communication)
-# Build from source — see docs/guides/INSTALL.md Section 5
+# Build from source — see docs/how-to/INSTALL.md Section 5
 
 # Gazebo (for SITL simulation)
 sudo apt-get install -y gz-harmonic libgz-transport13-dev libgz-msgs10-dev
@@ -236,7 +236,7 @@ Each run generates a timestamped report with mission summary, timing, and any fa
 ### ✅ Everything Works? Great! Now:
 
 1. **Read the main README.md** for architecture deep-dive
-2. **Check [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md)** if you want to contribute
+2. **Check [DEVELOPMENT_WORKFLOW.md](../how-to/DEVELOPMENT_WORKFLOW.md)** if you want to contribute
 3. **Explore the config file** — all tunables in `config/default.json`
    ```bash
    # Modify parameters (e.g., camera resolution, detect confidence, planner speed)
@@ -257,7 +257,7 @@ Each run generates a timestamped report with mission summary, timing, and any fa
    bash deploy/view_coverage.sh  # Generates HTML report, opens in browser
    ```
 
-6. **Real hardware?** See [docs/HARDWARE_SETUP.md](HARDWARE_SETUP.md) for Jetson Orin setup
+6. **Real hardware?** See [docs/HARDWARE_SETUP.md](../how-to/HARDWARE_SETUP.md) for Jetson Orin setup
 
 ---
 
@@ -405,9 +405,9 @@ bash deploy/launch_gazebo.sh --gui
 
 ## Questions?
 
-- **How do I contribute?** → [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) (Steps 1-9)
+- **How do I contribute?** → [DEVELOPMENT_WORKFLOW.md](../how-to/DEVELOPMENT_WORKFLOW.md) (Steps 1-9)
 - **What's the architecture?** → [README.md](../../README.md#architecture)
-- **Detailed installation/troubleshooting?** → [INSTALL.md](INSTALL.md)
+- **Detailed installation/troubleshooting?** → [INSTALL.md](../how-to/INSTALL.md)
 - **Real hardware setup?** → [README.md](../../README.md#launch-on-real-hardware)
 - **IPC message types?** → [API.md](../design/API.md)
 

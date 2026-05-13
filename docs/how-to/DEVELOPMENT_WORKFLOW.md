@@ -962,7 +962,7 @@ When two features must touch the same file (e.g., `result.h`), coordinate:
 | [tests/TESTS.md](../../tests/TESTS.md)                   | Test suite index & per-test docs      | When adding or modifying tests            |
 | [docs/CI_SETUP.md](CI_SETUP.md)               | CI pipeline architecture & DevOps     | When CI jobs/matrix change                |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices             | When new practices are discovered         |
-| [DESIGN_RATIONALE.md](DESIGN_RATIONALE.md)         | Gray-area design decisions (DR-NNN)   | When a judgment call is not black-or-white |
+| [DESIGN_RATIONALE.md](../tracking/DESIGN_RATIONALE.md)         | Gray-area design decisions (DR-NNN)   | When a judgment call is not black-or-white |
 
 ---
 
@@ -1117,7 +1117,7 @@ Agents coordinate through shared files:
 | `tasks/active-work.md` | Live work assignments | Tech lead, deploy scripts |
 | `tasks/agent-changelog.md` | Completed work log | All agents (append-only) |
 | `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls | Any agent that discovers one |
-| `docs/guides/AGENT_HANDOFF.md` | Cross-domain protocol | Tech lead |
+| `docs/explanation/AGENT_HANDOFF.md` | Cross-domain protocol | Tech lead |
 
 **Session start checklist** (performed by `run-session.sh`):
 1. Read `tasks/active-work.md` for current assignments
