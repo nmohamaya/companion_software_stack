@@ -94,11 +94,11 @@ At the end, provide a summary:
 
 ## #740-era patterns to inspect specifically
 
-The cold-start hardening epic (Issue #740, Wave 1/2 PRs #741/#743/#744/#745/#751) introduced new code-shape categories that overlap directly with the integer-conversion sub-patterns above.  When reviewing any PR that touches these areas, apply the sub-patterns to the specific lines listed:
+The cold-start hardening epic (Issue #740, Wave 1/2 PRs #741/#743/#744/#750/#752) introduced new code-shape categories that overlap directly with the integer-conversion sub-patterns above.  When reviewing any PR that touches these areas, apply the sub-patterns to the specific lines listed:
 
-### Subscriber-side first-observation filters ([Issue #722](https://github.com/nmohamaya/companion_software_stack/issues/722) cold-start data hygiene — wrapper-level handling lands via PR #745, currently open on `feature/cold-start-hardening`)
+### Subscriber-side first-observation filters ([Issue #722](https://github.com/nmohamaya/companion_software_stack/issues/722) cold-start data hygiene — wrapper-level handling lands via PR #750, currently open on `feature/cold-start-hardening`)
 
-Wrapper-level implementation lands via PR #745 ([closes #722](https://github.com/nmohamaya/companion_software_stack/issues/722), currently open against `feature/cold-start-hardening`).  Until then, the per-site form lives at `process4_mission_planner/src/main.cpp` (`planner_birth_ns` + slack-guarded subtraction, PR #721 merged).  When reviewing additions that record a `_birth_ns` and compare incoming `timestamp_ns` against it, grep for and apply sub-pattern (e) "Timestamp arithmetic overflow":
+Wrapper-level implementation lands via PR #750 ([closes #722](https://github.com/nmohamaya/companion_software_stack/issues/722), currently open against `feature/cold-start-hardening`).  Until then, the per-site form lives at `process4_mission_planner/src/main.cpp` (`planner_birth_ns` + slack-guarded subtraction, PR #721 merged).  When reviewing additions that record a `_birth_ns` and compare incoming `timestamp_ns` against it, grep for and apply sub-pattern (e) "Timestamp arithmetic overflow":
 
 ```cpp
 // HAZARD: temp->timestamp_ns + kSlackNs < birth_ns  — addition wraps if timestamp_ns near UINT64_MAX
@@ -141,7 +141,7 @@ Canonical implementation lands via PR #743 (open on `feature/cold-start-hardenin
 
 ### IPC message default values (CLAUDE.md > No uninitialized variables)
 
-When reviewing `VIOOutput` / `Pose` / similar struct returns from backend `process_frame`, verify the default-constructed instance has all numeric fields zero-initialised (sub-pattern: uninitialised float in flight-critical path).  The publisher-side guard (PR #751) skips publishing when `output.health == INITIALIZING`, which masks zero-pose-with-fresh-timestamp; if a future backend defeats this guard, the consumer sees garbage.  Flag any change to backend `process_frame` that breaks the "INITIALIZING → default-zero Pose" contract.
+When reviewing `VIOOutput` / `Pose` / similar struct returns from backend `process_frame`, verify the default-constructed instance has all numeric fields zero-initialised (sub-pattern: uninitialised float in flight-critical path).  The publisher-side guard (PR #752) skips publishing when `output.health == INITIALIZING`, which masks zero-pose-with-fresh-timestamp; if a future backend defeats this guard, the consumer sees garbage.  Flag any change to backend `process_frame` that breaks the "INITIALIZING → default-zero Pose" contract.
 
 ## Anti-Hallucination Rules
 
