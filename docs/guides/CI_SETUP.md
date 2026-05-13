@@ -276,6 +276,45 @@ These are summarized here for quick reference. Full details are in [CI_ISSUES.md
 | CI-005 | TSan + GCC 13 `-Wtsan` warning | `-Wno-tsan` in ENABLE_TSAN block | CI_ISSUES.md |
 | — | TSan crash on kernel >=6.17 (`FATAL: unexpected memory mapping`) | `sudo sysctl vm.mmap_rnd_bits=28` | BUG_FIXES.md #11 |
 | — | TSan false positives with Zenoh/MAVSDK/OpenCV | Exclude those tests via `ctest -E` regex | ci.yml |
+| — | Sanitizer overhead breaks latency-budget tests | `GTEST_SKIP()` when `drone::test::is_sanitizer_build()` is true | PR #739 |
+
+---
+
+## Sanitizer discipline (PR #739 lessons)
+
+Three patterns codified after PR #739 caught real bugs that were being masked.
+
+### Gate ordering — format-check must not be a hard gate before sanitizer legs
+
+> **Status (2026-05-13):** `.github/workflows/ci.yml` currently still has `build-and-test: needs: format-check`. The rule below captures the lesson learned from PR #739 and the **target behaviour**; the workflow change to detach the dependency is a follow-up landing separately from this doc PR.
+
+The CI pipeline runs format-check as a **required** prerequisite of `build-and-test`. A format-check failure causes the entire build matrix to be **skipped**, and a skipped check shows up green-ish on the PR — so three sanitizer test failures (`LatencyProfiler.OverheadUnderBudget` under TSan, `LatencyProfiler.ConcurrentReadersDoNotRaceWriters` under UBSan, `Performance.LargeFrameUnder100ms` under ASan/TSan/UBSan) sat undetected for weeks before PR #739 surfaced them. The intended fix is to keep format-check as an independent required check, but stop making `build-and-test` depend on it; both then run in parallel and both independently block merge.
+
+Track this as a class: **never let one CI gate hide another's signal by being a hard dependency**.
+
+### `DRONE_UBSAN_BUILD` for GCC
+
+`__has_feature(undefined_behavior_sanitizer)` only works on Clang. GCC defines `__SANITIZE_ADDRESS__` / `__SANITIZE_THREAD__` but has **no portable macro for UBSan**. To detect UBSan builds on the Ubuntu-default GCC used in CI, `CMakeLists.txt` defines `DRONE_UBSAN_BUILD=1` when `ENABLE_UBSAN=ON`. The helper in `tests/test_helpers.h` (`drone::test::is_sanitizer_build()`) layers three detection mechanisms: Clang `__has_feature`, GCC `__SANITIZE_*`, and `DRONE_UBSAN_BUILD`.
+
+### `GTEST_SKIP()` for latency budgets, never for correctness
+
+Some tests assert "this code path completes in under N microseconds". Sanitizer instrumentation (especially TSan) imposes 5–20× overhead, which defeats those budgets without invalidating the tested behaviour. The pattern is:
+
+```cpp
+TEST(LatencyProfiler, OverheadUnderBudget) {
+    if (drone::test::is_sanitizer_build()) {
+        GTEST_SKIP() << "Latency budget incompatible with sanitizer overhead — "
+                        "non-sanitized CI build covers the timing assertion.";
+    }
+    // ... real test ...
+}
+```
+
+**Correctness tests must never `GTEST_SKIP()` on sanitizer builds.** Only the timing assertion gets skipped; the same test logic runs in the non-sanitized CI build, which catches behavioural regressions there.
+
+### `reader_ready` race-test pattern
+
+When a race test wants to verify "writer and reader overlap in time", the naive design — start both threads and join — can lose the overlap under sanitizer overhead, because the reader gets scheduled after the writer has already finished. The fix is a `std::atomic<bool> reader_ready` flag: writers wait for the reader to enter its read loop **before** writing. This preserves the overlap intent regardless of scheduler noise. See `tests/test_latency_profiler.cpp::ConcurrentReadersDoNotRaceWriters` for the canonical pattern.
 
 ---
 

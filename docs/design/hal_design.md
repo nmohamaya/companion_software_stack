@@ -14,9 +14,11 @@ the concrete backend (simulated, Gazebo, real hardware) is selected at
 runtime via the `"backend"` key in `config/default.json` and wired up
 through a factory function.
 
-**Current totals:** 6 HAL interfaces (ICamera, IFCLink, IGCSLink, IGimbal,
-IIMUSource, IRadar) with 10 concrete backends (6 simulated + 3 Gazebo +
-MavlinkFCLink).
+**Current interfaces:** see `common/hal/include/hal/` for the authoritative list
+(every `i*.h` is an interface; non-prefixed headers are concrete backends or
+support types).  Newer interfaces (`IDepthEstimator`, `IEventCamera`,
+`IInferenceBackend`, `ISemanticProjector`, `IVolumetricMap`) were added by
+Epics E1/E5 to support the Perception v2 PATH A pipeline.
 
 ```
 ┌──────────────────────────────────────┐
@@ -282,6 +284,163 @@ See `common/ipc/include/ipc/ipc_types.h` for `RadarDetection` and `RadarDetectio
 | `"gazebo"` | `GazeboRadarBackend` | gpu_lidar + odometry via gz-transport; noise injected in HAL (requires `HAVE_GAZEBO`). |
 
 **Config section:** `perception.radar`
+
+---
+
+### 2.7 IDepthEstimator
+
+**Header:** `common/hal/include/hal/idepth_estimator.h`
+
+Per-frame dense depth estimation from a single RGB image. Consumed by P2's Perception v2 PATH A pipeline to back-project segmentation masks into 3D voxel updates.
+
+#### Data Structures
+
+`DepthMap` — row-major dense float depth (metres) plus metadata (timestamp, scale, confidence, source-frame dimensions for bbox→depth coordinate mapping). See `common/hal/include/hal/idepth_estimator.h` for the canonical struct definition.
+
+#### Interface
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `estimate` | `[[nodiscard]] Result<DepthMap, std::string> estimate(const uint8_t* frame, w, h, channels, stride=0)` | Estimate depth from one RGB frame. `stride=0` means tightly packed. |
+| `name` | `std::string name() const` | Backend identifier. |
+
+#### Backends
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"simulated"` | `SimulatedDepthEstimator` | Synthetic depth from a configurable scene model. |
+| `"depth_anything_v2"` | `DepthAnythingV2Estimator` | OpenCV DNN — monocular metric depth. |
+| `"cosys_airsim"` | `CosysDepthBackend` | Cosys-AirSim depth camera passthrough (Tier 3 sim only; requires `HAVE_COSYS_AIRSIM`). |
+
+**Config section:** `perception.depth_estimator` (canonical keys in `common/util/include/util/config_keys.h`; factory in `common/hal/include/hal/hal_factory.h::create_depth_estimator`).
+
+---
+
+### 2.8 IEventCamera
+
+**Header:** `common/hal/include/hal/ievent_camera.h`
+
+Event-based (DVS) camera interface — produces `EventCD` (x, y, polarity, timestamp) streams instead of dense frames. Forward-looking interface for low-latency motion-only perception; not yet on the flight-critical path.
+
+#### Data Structures
+
+`EventCD` and `EventBatch` — see header.
+
+#### Interface
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `open` | `bool open(uint32_t width, uint32_t height)` | Open the sensor at the given resolution. |
+| `close` | `void close()` | Release resources. |
+| `read_events` | `EventBatch read_events()` | Read the next batch. Check `EventBatch::valid`. |
+| `is_open` | `bool is_open() const` | Sensor state. |
+| `pixel_format` | `PixelFormat pixel_format() const` | Reported by the backend. |
+| `name` | `std::string name() const` | Backend identifier. |
+
+#### Backends
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"simulated"` | `SimulatedEventCamera` | Synthetic events generated from a moving scene. |
+
+**Config section:** `perception.event_camera` (reserved; consumers TBD).
+
+---
+
+### 2.9 IInferenceBackend
+
+**Header:** `common/hal/include/hal/iinference_backend.h`
+
+Generic inference interface for vision models (object detection, segmentation). Returns `InferenceOutput` containing `InferenceDetection`s with optional mask data — used by both YOLO-style detectors and SAM-style mask producers.
+
+#### Data Structures
+
+`BoundingBox2D`, `InferenceDetection`, `InferenceOutput` — see header.
+
+#### Interface
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `init` | `bool init(const std::string& model_path, int input_size)` | Load model; `input_size` is the model's square input dimension (e.g. 640 for YOLOv8). |
+| `infer` | `[[nodiscard]] Result<InferenceOutput, std::string> infer(const uint8_t* frame, w, h, channels, stride=0)` | Run inference on one frame. |
+| `name` | `std::string name() const` | Backend identifier. |
+
+#### Backends
+
+Keys served by `common/hal/include/hal/hal_factory.h::create_inference_backend()`:
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"simulated"` | `SimulatedInferenceBackend` | Synthetic detections from a configurable scene model. |
+| `"sam_simulated"` | `SimulatedSAMBackend` | Class-agnostic SAM dev/test scaffold. |
+| `"edge_contour_sam"` | `EdgeContourSAMBackend` | OpenCV edge+contour mask producer (no ML dependency); interim fill between `sam_simulated` and a real SAM ONNX. |
+| `"fastsam"` | `FastSamInferenceBackend` | Real FastSAM via ONNX (YOLOv8-seg architecture trained on SA-1B). Requires `models/fastsam_s.onnx`. |
+| `"cosys_airsim"` | `CosysSegmentationBackend` | Sim-only ground-truth instance segmentation (requires `HAVE_COSYS_AIRSIM`); pair with `depth_estimator.backend = cosys_airsim` for GT PATH A. |
+| `"plugin"` | (dlopened) | Out-of-tree backend (requires `HAVE_PLUGINS`). |
+
+> **Note:** `YoloSegInferenceBackend` is part of the perception pipeline but is **not** constructed by this HAL factory — it's wired in `process2_perception` directly. The HAL factory above is for SAM-style mask producers + the simulated detector.
+
+**Config section:** `perception.inference_backend` (canonical key path; the `MaskClassAssigner` in PATH A pairs the SAM mask producer with a class-aware detector — see `process2_perception` for how the two are composed).
+
+---
+
+### 2.10 ISemanticProjector
+
+**Header:** `common/hal/include/hal/isemantic_projector.h`
+
+Back-projects 2D masked detections into 3D voxel updates using a depth map and camera pose. Consumed by P2's PATH A orchestrator (`MaskDepthProjector`); output flows to P4's volumetric map via `/semantic_voxels`.
+
+#### Data Structures
+
+`CameraIntrinsics`, `VoxelUpdate` (from `ivolumetric_map.h`).
+
+#### Interface
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `init` | `bool init(const CameraIntrinsics&)` | Configure intrinsics. |
+| `project` | `[[nodiscard]] Result<std::vector<VoxelUpdate>, std::string> project(const std::vector<InferenceDetection>&, const DepthMap&, const Eigen::Affine3f& camera_pose)` | Produce voxel updates for a single frame. |
+| `name` | `std::string name() const` | Backend identifier. |
+
+#### Backends
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"cpu"` | `CpuSemanticProjector` | Header-only CPU back-projection; samples mask at a 4×4 grid per detection. |
+
+**Config section:** `perception.semantic_projector` (canonical keys in `common/util/include/util/config_keys.h`; factory in `common/hal/include/hal/hal_factory.h::create_semantic_projector`).
+
+---
+
+### 2.11 IVolumetricMap
+
+**Header:** `common/hal/include/hal/ivolumetric_map.h`
+
+3D voxel map abstraction consumed by P4's obstacle avoider. `VoxelUpdate`s come from PATH A (P2 → `/semantic_voxels` → P4) and from depth-only inputs.
+
+#### Data Structures
+
+`VoxelKey`, `VoxelData`, `VoxelUpdate` (with `semantic_label`).
+
+#### Interface
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `init` | `bool init(float resolution_m)` | Initialise with voxel side length in metres. |
+| `insert` | `bool insert(const std::vector<VoxelUpdate>&)` | Insert updates. |
+| `query` | `std::optional<VoxelData> query(const Eigen::Vector3f& position_m)` | Lookup at a world-frame position. |
+| `size` | `size_t size() const` | Number of occupied voxels. |
+| `clear` | `void clear()` | Empty the map. |
+| `resolution` | `float resolution() const` | Voxel size in metres. |
+| `name` | `std::string name() const` | Backend identifier. |
+
+#### Backends
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"simulated"` | `SimulatedVolumetricMap` | In-memory hash-map keyed by `VoxelKey`. |
+
+**Config section:** `perception.volumetric_map` (canonical keys in `common/util/include/util/config_keys.h`; factory in `common/hal/include/hal/hal_factory.h::create_volumetric_map`).
 
 ---
 

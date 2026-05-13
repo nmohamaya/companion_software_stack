@@ -118,8 +118,8 @@ concurrency bugs at the cost of requiring each step to complete within the 100 m
 
 ## Component: MissionFSM
 
-- **Header:** [`mission_fsm.h`](../process4_mission_planner/include/planner/mission_fsm.h)
-- **Tests:** [`test_mission_fsm.cpp`](../tests/test_mission_fsm.cpp) (7 tests)
+- **Header:** [`mission_fsm.h`](../../process4_mission_planner/include/planner/mission_fsm.h)
+- **Tests:** [`test_mission_fsm.cpp`](../../tests/test_mission_fsm.cpp) (see [`tests/TESTS.md`](../../tests/TESTS.md) for count)
 - **Namespace:** `drone::planner`
 
 ### State Machine
@@ -169,7 +169,7 @@ Post-takeoff obstacle survey: the drone hovers at takeoff position while perform
 ### COLLISION_RECOVERY State (Issue #226)
 
 Emergency evasive state entered when a dynamic obstacle is predicted to collide within
-`collision_time_threshold_s`. Implemented in [`collision_recovery.h`](../process4_mission_planner/include/planner/collision_recovery.h) (PR #270).
+`collision_time_threshold_s`. Implemented in [`collision_recovery.h`](../../process4_mission_planner/include/planner/collision_recovery.h) (PR #270).
 
 **Behaviour:**
 1. **Entry:** Triggered from NAVIGATE when dynamic obstacle prediction (see [Dynamic Obstacle Prediction](#dynamic-obstacle-prediction)) detects imminent collision
@@ -231,13 +231,13 @@ Selected via `mission_planner.path_planner.backend` config key.
 
 ### IPathPlanner Interface
 
-- **Header:** [`ipath_planner.h`](../process4_mission_planner/include/planner/ipath_planner.h)
+- **Header:** [`ipath_planner.h`](../../process4_mission_planner/include/planner/ipath_planner.h)
 - **Factory:** `create_path_planner(backend_name) → unique_ptr<IPathPlanner>`
 
 ### DStarLitePlanner (`"dstar_lite"`) — the only path planner
 
-- **Header:** [`dstar_lite_planner.h`](../process4_mission_planner/include/planner/dstar_lite_planner.h)
-- **Tests:** [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) (33 tests)
+- **Header:** [`dstar_lite_planner.h`](../../process4_mission_planner/include/planner/dstar_lite_planner.h)
+- **Tests:** [`test_dstar_lite_planner.cpp`](../../tests/test_dstar_lite_planner.cpp) (see [`tests/TESTS.md`](../../tests/TESTS.md) for count)
 
 #### OccupancyGrid3D
 
@@ -264,7 +264,7 @@ Two promotion paths convert dynamic cells to permanent static cells:
 
 **Promotion suppression:** Cells within Chebyshev distance ≤ 1 of an existing static cell (`near_static_cell_()`) are not promoted. This prevents parallax-induced wall growth from multi-track artefacts.
 
-**Depth confidence gating:** The `min_promotion_depth_confidence` parameter (in [`occupancy_grid_3d.h`](../process4_mission_planner/include/planner/occupancy_grid_3d.h)) controls which detections can promote temporary grid cells to permanent static cells. Default is 0.3; scenario configs override to 0.8 to block camera-only detections (depth confidence 0.01--0.7) while allowing radar-confirmed detections (confidence 1.0) through. This prevents false cell promotion from camera-only monocular depth estimates.
+**Depth confidence gating:** The `min_promotion_depth_confidence` parameter (in [`occupancy_grid_3d.h`](../../process4_mission_planner/include/planner/occupancy_grid_3d.h)) controls which detections can promote temporary grid cells to permanent static cells. Default is 0.3; scenario configs override to 0.8 to block camera-only detections (depth confidence 0.01--0.7) while allowing radar-confirmed detections (confidence 1.0) through. This prevents false cell promotion from camera-only monocular depth estimates.
 
 **2D disk inflation:** Obstacles are inflated only in XY at their Z level (not vertically). Per-object inflation uses `estimated_radius_m` when available (from radar-confirmed detections), otherwise the default `inflation_radius_m`.
 
@@ -369,13 +369,13 @@ PotentialFieldAvoider (2D) removed in Issue #207 — ObstacleAvoider3D is the on
 
 ### IObstacleAvoider Interface
 
-- **Header:** [`iobstacle_avoider.h`](../process4_mission_planner/include/planner/iobstacle_avoider.h)
+- **Header:** [`iobstacle_avoider.h`](../../process4_mission_planner/include/planner/iobstacle_avoider.h)
 - **Factory:** `create_obstacle_avoider(backend, influence_radius, repulsive_gain)`
 
 ### ObstacleAvoider3D (`"3d"` / `"obstacle_avoider_3d"` / `"potential_field_3d"`)
 
-- **Header:** [`obstacle_avoider_3d.h`](../process4_mission_planner/include/planner/obstacle_avoider_3d.h)
-- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (35 tests)
+- **Header:** [`obstacle_avoider_3d.h`](../../process4_mission_planner/include/planner/obstacle_avoider_3d.h)
+- **Tests:** [`test_obstacle_avoider_3d.cpp`](../../tests/test_obstacle_avoider_3d.cpp) (see [`tests/TESTS.md`](../../tests/TESTS.md) for count)
 - Full 3D repulsive field (includes Z component via configurable `vertical_gain`)
 - Predictive avoidance: uses object velocities for 0.5 s look-ahead
 - Inverse-square force decay with configurable repulsive gain
@@ -451,7 +451,7 @@ When `path_aware = true` (default), the avoider prevents reactive repulsion from
 ### Dynamic Obstacle Prediction (Issue #226)
 
 UKF velocity vectors from tracked objects are used to predict future positions and
-proactively detect collisions. Implemented in [`mission_state_tick.h`](../process4_mission_planner/include/planner/mission_state_tick.h).
+proactively detect collisions. Implemented in [`mission_state_tick.h`](../../process4_mission_planner/include/planner/mission_state_tick.h).
 
 **Algorithm:**
 1. For each tracked object with a UKF velocity estimate, predict its position over `prediction_horizon_s` (default 3.0 s)
@@ -468,7 +468,7 @@ proactively detect collisions. Implemented in [`mission_state_tick.h`](../proces
 
 ## Component: Geofence
 
-- **Header:** [`geofence.h`](../process4_mission_planner/include/planner/geofence.h)
+- **Header:** [`geofence.h`](../../process4_mission_planner/include/planner/geofence.h)
 - **Tests:** [`test_geofence.cpp`](../tests/test_geofence.cpp) (21 tests)
 - **Namespace:** `drone::planner`
 
@@ -499,7 +499,7 @@ proactively detect collisions. Implemented in [`mission_state_tick.h`](../proces
 
 ## Component: FaultManager
 
-- **Header:** [`fault_manager.h`](../process4_mission_planner/include/planner/fault_manager.h)
+- **Header:** [`fault_manager.h`](../../process4_mission_planner/include/planner/fault_manager.h)
 - **Tests:** [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) (31 tests)
 - **Namespace:** `drone::planner`
 
@@ -583,7 +583,7 @@ PR #346 added review fixes to `gcs_command_handler.h`, `fault_response_executor.
 
 ### `FaultResponseExecutor`
 
-**Header:** [`planner/fault_response_executor.h`](../process4_mission_planner/include/planner/fault_response_executor.h)
+**Header:** [`planner/fault_response_executor.h`](../../process4_mission_planner/include/planner/fault_response_executor.h)
 
 Executes fault responses (WARN → LOITER → RTL → EMERGENCY_LAND) based on the
 current `FaultAction` from `FaultManager`. Enforces the **escalation-only policy**
@@ -596,7 +596,7 @@ current `FaultAction` from `FaultManager`. Enforces the **escalation-only policy
 
 ### `GcsCommandHandler`
 
-**Header:** [`planner/gcs_command_handler.h`](../process4_mission_planner/include/planner/gcs_command_handler.h)
+**Header:** [`planner/gcs_command_handler.h`](../../process4_mission_planner/include/planner/gcs_command_handler.h)
 
 Dispatches GCS commands (RTL / LAND / MISSION_UPLOAD) from `/gcs_commands`.
 Deduplicates by command timestamp to prevent double-execution on resubscription.
@@ -609,7 +609,7 @@ Deduplicates by command timestamp to prevent double-execution on resubscription.
 
 ### `MissionStateTick`
 
-**Header:** [`planner/mission_state_tick.h`](../process4_mission_planner/include/planner/mission_state_tick.h)
+**Header:** [`planner/mission_state_tick.h`](../../process4_mission_planner/include/planner/mission_state_tick.h)
 
 Contains all per-tick FSM transition logic (PREFLIGHT / TAKEOFF / SURVEY / NAVIGATE / RTL / LAND / IDLE).
 Previously inlined inside the main planning loop; extraction makes each state independently testable.
@@ -620,7 +620,7 @@ Previously inlined inside the main planning loop; extraction makes each state in
 
 ### `StaticObstacleLayer`
 
-**Header:** [`planner/static_obstacle_layer.h`](../process4_mission_planner/include/planner/static_obstacle_layer.h)
+**Header:** [`planner/static_obstacle_layer.h`](../../process4_mission_planner/include/planner/static_obstacle_layer.h)
 
 Loads HD-map static obstacles from config, performs camera cross-validation
 (2-hit confirmation), and provides collision proximity checks.
@@ -744,18 +744,32 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 
 ## Testing
 
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| [`test_mission_fsm.cpp`](../tests/test_mission_fsm.cpp) | 15 | FSM transitions, waypoint loading, radius check, overshoot detection |
-| [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) | 55 | Grid, D* Lite search, incremental replan, goal-snap, Z-band, km reinit, carrot smoothing, backward rejection, factory |
-| [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) | 21 | 3D repulsion, predictive, NaN, path-aware mode, vertical_gain, factory |
-| [`test_geofence.cpp`](../tests/test_geofence.cpp) | 24 | Polygon, altitude, margin, NaN/Inf |
-| [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 41 | All 10 faults, escalation, loiter timeout, FC contingency, VIO health |
-| [`test_static_obstacle_layer.cpp`](../tests/test_static_obstacle_layer.cpp) | 12 | Load empty/single/multi HD-map entries, cross-check 2-hit confirmation, low-quality pose skip, collision/no-collision, cooldown throttle, height check |
-| [`test_gcs_command_handler.cpp`](../tests/test_gcs_command_handler.cpp) | 20 | RTL/LAND/MISSION_UPLOAD/PAUSE/RESUME dispatch, dedup by timestamp, unknown command ignored |
-| [`test_fault_response_executor.cpp`](../tests/test_fault_response_executor.cpp) | 7 | WARN (no FC cmd), LOITER, RTL, EMERGENCY_LAND, escalation-only policy, non-airborne skip, reset clears state |
-| [`test_mission_state_tick.cpp`](../tests/test_mission_state_tick.cpp) | 14 | PREFLIGHT ARM retry, TAKEOFF altitude threshold, SURVEY yaw sweep, waypoint reached + payload trigger, mission complete → RTL, RTL disarm → IDLE, landed → IDLE + fault reset |
-| **Total** | **209** | |
+Per-suite test counts and total drift over time — see [`tests/TESTS.md`](../../tests/TESTS.md) (single source of truth).
+
+| Test File | Coverage |
+|-----------|----------|
+| [`test_mission_fsm.cpp`](../../tests/test_mission_fsm.cpp) | FSM transitions, waypoint loading, radius check, overshoot detection |
+| [`test_dstar_lite_planner.cpp`](../../tests/test_dstar_lite_planner.cpp) | Grid, D* Lite search, incremental replan, goal-snap, Z-band, km reinit, carrot smoothing, backward rejection, corner-cutting fix (#258), factory |
+| [`test_obstacle_avoider_3d.cpp`](../../tests/test_obstacle_avoider_3d.cpp) | 3D repulsion, predictive, NaN, path-aware mode, AABB-aware distance (#657), drone-inside-AABB defence-in-depth (#685), vertical_gain, factory |
+| [`test_geofence.cpp`](../../tests/test_geofence.cpp) | Polygon, altitude, margin, NaN/Inf |
+| [`test_fault_manager.cpp`](../../tests/test_fault_manager.cpp) | All 10 faults, escalation, loiter timeout, FC contingency, VIO health |
+| [`test_static_obstacle_layer.cpp`](../../tests/test_static_obstacle_layer.cpp) | Load empty/single/multi HD-map entries, cross-check 2-hit confirmation, low-quality pose skip, collision/no-collision, cooldown throttle, height check |
+| [`test_gcs_command_handler.cpp`](../../tests/test_gcs_command_handler.cpp) | RTL/LAND/MISSION_UPLOAD/PAUSE/RESUME dispatch, dedup by timestamp, unknown command ignored |
+| [`test_fault_response_executor.cpp`](../../tests/test_fault_response_executor.cpp) | WARN (no FC cmd), LOITER, RTL, EMERGENCY_LAND, escalation-only policy, non-airborne skip, reset clears state |
+| [`test_mission_state_tick.cpp`](../../tests/test_mission_state_tick.cpp) | PREFLIGHT ARM-readiness gate (#717), TAKEOFF altitude threshold, SURVEY yaw sweep, waypoint reached + payload trigger, mission complete → RTL, RTL disarm → IDLE, landed → IDLE + fault reset, trajectory sentinel reset on ARM (#666); fallback-behaviour coverage (cached-path validation after replan, search-failure keeps last-good path, #698 / #704 / #714 / #725) also lives in this suite |
+
+### Recent changes worth knowing about
+
+- **#258** D* Lite corner-cutting fix
+- **#643** tracker double-precision age + NaN guard (cross-process)
+- **#657, #685, #710, #711, #712** AABB-aware avoidance + drone-inside-AABB defence-in-depth + flipping `aabb_aware_distance` default
+- **#666** trajectory sentinel reset on ARM (prevents stale heartbeat at takeoff)
+- **#671** atomic pause flags in `OccupancyGrid3D` for cross-thread safety
+- **#698, #704, #714, #725** cached-path validation after replan; search-failure keeps last-good path
+- **#717** ARM-gate preflight readiness (`FCState.armable`) — see [`comms_design.md`](./comms_design.md)
+- **#651, #684** comms heartbeat resend + stale-bound — see [`comms_design.md`](./comms_design.md)
+
+For the canonical list of PRs touching P4, see `git log -- process4_mission_planner/`.
 
 Integration coverage via scenario tests in `config/scenarios/`:
 - `01_nominal_mission.json` — 4-WP rectangular flight, no faults

@@ -41,7 +41,7 @@ Key responsibilities:
 | Thread | Rate | Direction | Description |
 |--------|------|-----------|-------------|
 | `fc_rx_thread` | 10 Hz | FC → Bus | Polls `IFCLink::receive_state()`, publishes `drone::ipc::FCState`, applies fault overrides |
-| `fc_tx_thread` | 20 Hz | Bus → FC | Subscribes to trajectory + FC commands, deduplicates, sends to FC |
+| `fc_tx_thread` | 40 Hz (25 ms loop) | Bus → FC | Subscribes to trajectory + FC commands, deduplicates, sends to FC.  Heartbeat-resends last velocity at `kHeartbeatPeriod = 40 ms` to beat SimpleFlight's 60 ms control timeout (#651). Suppresses + WARNs after `kMaxHeartbeatStaleMs = 5 s` of planner silence to avoid replaying a stale velocity into a void (#684). |
 | `gcs_rx_thread` | 2 Hz | GCS → Bus | Polls `IGCSLink::poll_command()`, publishes `drone::ipc::GCSCommand` / `drone::ipc::MissionUpload` |
 | `gcs_tx_thread` | 2 Hz | Bus → GCS | Subscribes to pose + mission status + FC state, sends telemetry to GCS |
 | Main thread | 1 Hz | — | Health log + `ThreadHealthPublisher` + systemd watchdog notify |
@@ -64,7 +64,7 @@ Key responsibilities:
 │  │          │                                                       │
 │  │          │  send_*     ┌────────┐       ┌──────────┐ send_telem │
 │  │          │◄──commands──│fc_tx   │       │gcs_tx    │───────────►│
-│  │          │◄──traj──────│(20 Hz) │       │(2 Hz)    │  IGCSLink  │
+│  │          │◄──traj──────│(40 Hz) │       │(2 Hz)    │  IGCSLink  │
 │  └──────────┘             └───┬────┘       └───┬──────┘            │
 │                               │                 │                   │
 │                         drone::ipc::TrajectoryCmd   drone::ipc::Pose                  │
@@ -133,8 +133,12 @@ struct FCState {
     uint8_t  satellites;           // GPS satellite count
     uint8_t  flight_mode;          // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
     bool     armed;
+    bool     armable;              // FC reports preflight checks passed (#717)
+    // ... see common/ipc/include/ipc/ipc_types.h for the full struct
 };
 ```
+
+**Why `armable`:** P4's PREFLIGHT FSM gate (#717) refuses to issue an ARM command until the FC self-reports preflight readiness (e.g. EKF2 converged, GPS lock).  Treating `armable == false` as "wait" prevents the silent ARM-during-init failure mode that bit us in scenario 33 before the gate landed.
 
 ### Backends
 
@@ -226,10 +230,10 @@ The `fc_tx_thread` processes two IPC streams:
 
 ## Fault Injection
 
-The `fc_rx_thread` reads `ShmFaultOverrides` to support integration testing:
+The `fc_rx_thread` reads `drone::ipc::FaultOverrides` to support integration testing. Overrides are signalled by **sentinel values** in the struct fields (no separate `override_*` flags) — e.g. `battery_percent < 0` means "no override", any `>= 0` value replaces the FC reading.
 
 ### Override: Battery Level
-- If `override_battery` is set, `battery_percent` in `ShmFCState` is overwritten
+- If `battery_percent >= 0` in `FaultOverrides`, `battery_percent` in `FCState` is overwritten
   with the override value before publishing
 - Used to test low-battery fault escalation
 
