@@ -106,7 +106,7 @@ Each scenario JSON includes:
 - Fault injection settings (when applicable)
 - Expected outcomes (success criteria)
 - Timeout settings
-- **Flight-quality gates** (planned for [Issue #740](https://github.com/nmohamaya/companion_software_stack/issues/740) Layer 3, landing via PR #744 — currently open against `feature/cold-start-hardening`) — `flight_quality_gates.*` keys will gate runtime physical-quality checks against the existing log-content `pass_criteria`.  Closes the false-PASS observability gap surfaced by [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (scenarios 25/26 reported PASS while drone visibly hit objects).  Planned keys (verify against the actual scenario JSON schema once PR #744 merges before applying to a review):
+- **Flight-quality gates** (Issue [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Layer 3) — `flight_quality_gates.*` keys gate runtime physical-quality checks against the existing log-content `pass_criteria`.  Closes the false-PASS observability gap surfaced by [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (scenarios 25/26 reported PASS while drone visibly hit objects).  When reviewing a scenario JSON, verify the schema below matches the runner implementation in `tests/run_scenario_gazebo.sh` and the parser in `tests/lib_check_contacts.py` — the keys are subject to change as Gates 2 and 3 land:
   - `contact_sensor_enabled` (bool, default `true`) — subscribe to Gazebo `/world/<name>/contacts` and FAIL on any drone-vs-non-allowlisted contact.
   - `contact_allowlist` (array of strings, default `[]`) — extra acceptable collider substrings beyond the built-in `ground_plane`.
   - `contact_drone_pattern` (string, default `"x500_companion"`) — drone-model substring matcher.
@@ -115,7 +115,7 @@ Each scenario JSON includes:
 ## When reviewing scenario tests / runner changes (Issue #740 lessons)
 
 - **False-PASS catches** — scenarios that report PASS while flight is visibly broken (drone hits objects, wrong-pose-at-waypoint, asymmetric rotor spin-up) indicate the existing pass-criteria are insufficient.  Recommend adding the relevant `flight_quality_gates.*` key, not relaxing the symptom.
-- **`json_get` default-value bug** (lessons from PR #744 review) — `tests/run_scenario_gazebo.sh::json_get` takes exactly 2 args (file + query); calls like `json_get FILE KEY "true"` silently ignore the third arg and return `''` for absent keys.  Use `[[ "$val" != "false" ]]` (treats absent ⇒ enabled) OR explicitly post-default `[[ -z "$val" ]] && val=default`, OR extend `json_get` to accept a default arg.
+- **`json_get` default-value trap** — `tests/run_scenario_gazebo.sh::json_get` takes exactly 2 args (file + query); calls like `json_get FILE KEY "true"` silently ignore the third arg and return `''` for absent keys.  When reviewing additions to the runner, flag any `json_get FILE KEY DEFAULT` form as broken.  Use `[[ "$val" != "false" ]]` (treats absent ⇒ enabled) OR explicitly post-default `[[ -z "$val" ]] && val=default`, OR extend `json_get` to accept a default arg.
 - **`gz topic` subscription timing race** — capture of `/world/<name>/contacts` starts after STARTUP_OK + settle window.  Rotor-asymmetry contact at the moment of arming may occur before the subscription is live.  Document the gap at the call site if not yet mitigated.
 - **SDF-derived `WORLD_NAME` sanitization** — extract via `grep -oP`, sanitize via `tr -cd 'A-Za-z0-9_-'` before interpolation into shell args (see `review-security.md` checklist).
 

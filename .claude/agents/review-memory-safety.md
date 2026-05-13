@@ -92,18 +92,18 @@ At the end, provide a summary:
 - **Root cause:** When you find a violation, check if the same pattern appears elsewhere in the changed files.
 - **Report safety issues immediately** (CLAUDE.md > Safety issues are critical) — when you spot a memory safety violation, surface it at the top of your report with severity, file:line, and proposed fix.  Do NOT bury safety findings inside a long list — operators and authors must see them at first glance.
 
-## #740-era patterns to inspect specifically
+## Cold-start hardening patterns to inspect specifically
 
-The cold-start hardening epic (Issue #740, Wave 1/2 PRs #741/#743/#744/#750/#752) introduced new code-shape categories that overlap directly with the integer-conversion sub-patterns above.  When reviewing any PR that touches these areas, apply the sub-patterns to the specific lines listed:
+The cold-start hardening epic ([#740](https://github.com/nmohamaya/companion_software_stack/issues/740) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) / [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) / [#720](https://github.com/nmohamaya/companion_software_stack/issues/720) / [#716](https://github.com/nmohamaya/companion_software_stack/issues/716)) introduces new code-shape categories that overlap directly with the integer-conversion sub-patterns above.  When reviewing any PR that touches these areas, apply the sub-patterns to the specific lines listed:
 
-### Subscriber-side first-observation filters ([Issue #722](https://github.com/nmohamaya/companion_software_stack/issues/722) cold-start data hygiene — wrapper-level handling lands via PR #750, currently open on `feature/cold-start-hardening`)
+### Subscriber-side first-observation filters (Issue [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) cold-start data hygiene)
 
-Wrapper-level implementation lands via PR #750 ([closes #722](https://github.com/nmohamaya/companion_software_stack/issues/722), currently open against `feature/cold-start-hardening`).  Until then, the per-site form lives at `process4_mission_planner/src/main.cpp` (`planner_birth_ns` + slack-guarded subtraction, PR #721 merged).  When reviewing additions that record a `_birth_ns` and compare incoming `timestamp_ns` against it, grep for and apply sub-pattern (e) "Timestamp arithmetic overflow":
+Wrapper-level implementation: `common/ipc/include/ipc/zenoh_subscriber.h::on_sample`.  Per-site fallback: `process4_mission_planner/src/main.cpp` (`planner_birth_ns` + slack-guarded subtraction).  When reviewing additions that record a `_birth_ns` and compare incoming `timestamp_ns` against it, grep for and apply sub-pattern (e) "Timestamp arithmetic overflow":
 
 ```cpp
-// HAZARD: temp->timestamp_ns + kSlackNs < birth_ns  — addition wraps if timestamp_ns near UINT64_MAX
-// PR #750 review caught this at P3; the agent's checklist sub-pattern (e) covers it, but the
-// agent must explicitly grep for `timestamp_ns +` / `+ kSlackNs` and call it out.
+// HAZARD: temp->timestamp_ns + kSlackNs < birth_ns  — addition wraps if timestamp_ns near UINT64_MAX.
+// Pattern initially missed during early review of this same code shape — agents must explicitly
+// grep for `timestamp_ns +` / `+ kSlackNs` and call out the overflow path.
 
 // SAFE FORM:
 //   birth_ns > kSlackNs &&
@@ -111,9 +111,9 @@ Wrapper-level implementation lands via PR #750 ([closes #722](https://github.com
 // — subtraction is guarded by the leading `birth_ns > kSlackNs` check; comparison is exact.
 ```
 
-### FSM debounce gates with mockable time ([Issue #740](https://github.com/nmohamaya/companion_software_stack/issues/740) — canonical implementation lands via PRs #741 + #743, currently open / merged on `feature/cold-start-hardening`)
+### FSM debounce gates with mockable time (Issue [#740](https://github.com/nmohamaya/companion_software_stack/issues/740))
 
-Canonical implementation lands via PR #741 (merged on `feature/cold-start-hardening`) + #743 (open) — file location once merged: `process4_mission_planner/include/planner/mission_state_tick.h::tick_preflight`.  When reviewing additions that maintain `_first_seen_ns_` / `_last_*_ns_` `uint64_t` members and compare `(now_ns - last_ns) >= window_ns`, apply sub-patterns (b) "Unsigned subtraction underflow" and (e) "Timestamp arithmetic overflow":
+Canonical implementation: `process4_mission_planner/include/planner/mission_state_tick.h::tick_preflight`.  When reviewing additions that maintain `_first_seen_ns_` / `_last_*_ns_` `uint64_t` members and compare `(now_ns - last_ns) >= window_ns`, apply sub-patterns (b) "Unsigned subtraction underflow" and (e) "Timestamp arithmetic overflow":
 
 ```cpp
 // HAZARD: `(now_ns - last_ns) >= window` — underflows if now_ns < last_ns
@@ -125,7 +125,7 @@ Canonical implementation lands via PR #741 (merged on `feature/cold-start-harden
 
 ### Config-driven duration clamps (CLAUDE.md > Unguarded signed→unsigned casts)
 
-Canonical implementation lands via PR #743 (open on `feature/cold-start-hardening`) — file location once merged: `process4_mission_planner/src/main.cpp` `preflight_armable_stable_s` clamp.  When reviewing `cfg.get<float>(key, default)` reads that feed into `static_cast<uint64_t>(... * 1e9)`, apply sub-patterns (a), (d), (f):
+Canonical implementation: `process4_mission_planner/src/main.cpp` `preflight_armable_stable_s` clamp.  When reviewing `cfg.get<float>(key, default)` reads that feed into `static_cast<uint64_t>(... * 1e9)`, apply sub-patterns (a), (d), (f):
 
 ```cpp
 // HAZARD: static_cast<uint64_t>(std::max(0.0, raw * 1e9))
@@ -141,7 +141,7 @@ Canonical implementation lands via PR #743 (open on `feature/cold-start-hardenin
 
 ### IPC message default values (CLAUDE.md > No uninitialized variables)
 
-When reviewing `VIOOutput` / `Pose` / similar struct returns from backend `process_frame`, verify the default-constructed instance has all numeric fields zero-initialised (sub-pattern: uninitialised float in flight-critical path).  The publisher-side guard (PR #752) skips publishing when `output.health == INITIALIZING`, which masks zero-pose-with-fresh-timestamp; if a future backend defeats this guard, the consumer sees garbage.  Flag any change to backend `process_frame` that breaks the "INITIALIZING → default-zero Pose" contract.
+When reviewing `VIOOutput` / `Pose` / similar struct returns from backend `process_frame`, verify the default-constructed instance has all numeric fields zero-initialised (sub-pattern: uninitialised float in flight-critical path).  The publisher-side guard in `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread` skips publishing when `output.health == INITIALIZING`, which masks zero-pose-with-fresh-timestamp; if a future backend defeats this guard, the consumer sees garbage.  Flag any change to backend `process_frame` that breaks the "INITIALIZING → default-zero Pose" contract.
 
 ## Anti-Hallucination Rules
 
