@@ -310,15 +310,6 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 
 ### 2026-04-20
 
-#### 10. `COSYS_SIMULATION_ARCHITECTURE.md` — parallel to the existing Gazebo doc
-
-- **Priority:** P3
-- **Category:** docs (architecture reference)
-- **Noticed while:** filing issue #594 (GT emitter) — the existing `docs/architecture/SIMULATION_ARCHITECTURE.md` is Gazebo-only despite Cosys now being comparable in complexity (HAL backends, segmentation, `simSpawnObject` scene population, scenarios #29/#30, GT emitter).
-- **Current state:** Cosys architecture is scattered across ADR-011 (the "why"), `docs/how-to/COSYS_SETUP.md` (the "how-to-install"), and inline comments in `common/hal/src/cosys_*.cpp`. No single reference doc for the runtime architecture.
-- **Proposed fix:** create `docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md` mirroring the Gazebo doc's structure — HAL-mapping, RPC-surface inventory, scenario population via `simSpawnObject`, segmentation pipeline, GT-emitter integration, known limitations. Cross-link from the Gazebo doc and from COSYS_SETUP.md.
-- **When worth doing:** after the #594 (GT emitter) + #573 (baseline capture) work stabilises the Cosys-side patterns — then we document what actually shipped rather than chasing a moving target.
-
 #### 5. Stage-name constants (eliminate magic-string drift across P2/P4/tests)
 
 - **Priority:** P3
@@ -410,6 +401,10 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 ---
 
 ## Resolved
+
+### 2026-05-13
+
+- **P3** — `COSYS_SIMULATION_ARCHITECTURE.md` (Cosys-specific Tier 3 runtime arch doc, sibling to the Gazebo `SIMULATION_ARCHITECTURE.md`) created. Resolved by #745 Phase F. Covers HAL backend mapping, scenarios #29/#30/#33, Tier 2 vs Tier 3 differences, build gating. The ground-truth-emitter section that pairs with the perception pipeline is intentionally deferred to the (currently gitignored) `perception_v2_detailed_design.md` and cross-linked.
 
 ### 2026-04-30
 

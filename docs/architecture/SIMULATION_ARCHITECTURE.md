@@ -8,7 +8,7 @@
 > - **Cosys scenarios:** `#29 cosys_perception` (mixed dynamic) and `#30 cosys_static` (static proving ground). See `config/scenarios/29_*.json` / `30_*.json` and `tests/run_scenario_cosys.sh`.
 > - **Benchmark-harness ground-truth emitter for Cosys:** segmentation-mask-based per-frame GT via `simGetSegmentationImage` + `simListSceneObjects`. Design and rationale will be captured in `docs/design/perception_v2_detailed_design.md` § 13 "Ground-truth emitter" once that doc is committed (currently a gitignored draft during the active rewrite — not yet on the branch).
 >
-> A dedicated `COSYS_SIMULATION_ARCHITECTURE.md` is a known gap — tracked in [docs/tracking/IMPROVEMENTS.md](../tracking/IMPROVEMENTS.md).
+> For the dedicated Tier 3 runtime architecture, see [`COSYS_SIMULATION_ARCHITECTURE.md`](COSYS_SIMULATION_ARCHITECTURE.md).
 
 ## Table of Contents
 

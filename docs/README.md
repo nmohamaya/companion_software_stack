@@ -6,7 +6,7 @@ Routing by goal — pick the row that matches what you're trying to do. `docs/` 
 |---|---|
 | **Install + run the stack locally** | [`how-to/INSTALL.md`](how-to/INSTALL.md) · [`tutorials/GETTING_STARTED.md`](tutorials/GETTING_STARTED.md) · [`tutorials/DEV_MACHINE_SETUP.md`](tutorials/DEV_MACHINE_SETUP.md) |
 | **Run scenarios in Gazebo SITL** | [`architecture/SIMULATION_ARCHITECTURE.md`](architecture/SIMULATION_ARCHITECTURE.md) (Tier 1/2) · `config/scenarios/*.json` (canonical list) |
-| **Run scenarios in Cosys-AirSim (Tier 3)** | [`how-to/COSYS_SETUP.md`](how-to/COSYS_SETUP.md) · [ADR-011](adr/ADR-011-cosys-airsim-photorealistic-simulation.md) |
+| **Run scenarios in Cosys-AirSim (Tier 3)** | [`how-to/COSYS_SETUP.md`](how-to/COSYS_SETUP.md) · [`architecture/COSYS_SIMULATION_ARCHITECTURE.md`](architecture/COSYS_SIMULATION_ARCHITECTURE.md) · [ADR-011](adr/ADR-011-cosys-airsim-photorealistic-simulation.md) |
 | **Understand the per-process design** | [`design/`](design/) — one doc per process (`video_capture`, `perception`, `slam_vio_nav`, `mission_planner`, `comms`, `payload_manager`, `system_monitor`) |
 | **Understand the IPC wire format** | [`design/ipc_design.md`](design/ipc_design.md) · [`design/API.md`](design/API.md) · [`architecture/ipc-key-expressions.md`](architecture/ipc-key-expressions.md) · `common/ipc/include/ipc/ipc_types.h` (authoritative source) |
 | **Understand the HAL** | [`design/hal_design.md`](design/hal_design.md) · [ADR-006](adr/ADR-006-hal-hardware-abstraction-strategy.md) · `common/hal/include/hal/` (authoritative source) |
@@ -21,6 +21,7 @@ Routing by goal — pick the row that matches what you're trying to do. `docs/` 
 | **Understand C++ patterns used here** | [`reference/CPP_PATTERNS_GUIDE.md`](reference/CPP_PATTERNS_GUIDE.md) — `Result<T,E>`, RAII, concurrency tiering · [ADR-007](adr/ADR-007-error-handling.md) |
 | **Understand CI / sanitizers** | [`how-to/CI_SETUP.md`](how-to/CI_SETUP.md) — gate ordering, sanitizer discipline, `GTEST_SKIP` patterns · [`tracking/CI_ISSUES.md`](tracking/CI_ISSUES.md) |
 | **Avoid bash/git footguns** | [`explanation/SAFETY_CRITICAL_SHELL_DISCIPLINE.md`](explanation/SAFETY_CRITICAL_SHELL_DISCIPLINE.md) |
+| **Understand the AI/ML training opt-out** | [`explanation/ai-training-opt-out.md`](explanation/ai-training-opt-out.md) · [`../NOTICE`](../NOTICE) |
 | **See what's in flight / shipped** | [`tracking/ROADMAP.md`](tracking/ROADMAP.md) · [`tracking/PROGRESS.md`](tracking/PROGRESS.md) — `git log` is the deepest source |
 | **Understand a past bug** | [`tracking/BUG_FIXES.md`](tracking/BUG_FIXES.md) |
 | **Read a design rationale (DR-NNN)** | [`tracking/DESIGN_RATIONALE.md`](tracking/DESIGN_RATIONALE.md) — judgement calls on review comments |
@@ -52,12 +53,14 @@ docs/
 ├── explanation/                   # Diátaxis: understanding-oriented (why / discussion)
 │   ├── SAFETY_CRITICAL_SHELL_DISCIPLINE.md
 │   ├── MULTI_AGENT_GUIDE.md
-│   └── AGENT_HANDOFF.md
+│   ├── AGENT_HANDOFF.md
+│   └── ai-training-opt-out.md           # AI/ML training reservation of rights
 ├── adr/                           # Architecture Decision Records (immutable)
 │   ├── README.md                  # ADR index with status badges
 │   └── ADR-NNN-*.md               # One file per ADR
 ├── architecture/                  # Cross-cutting architecture notes
-│   ├── SIMULATION_ARCHITECTURE.md
+│   ├── SIMULATION_ARCHITECTURE.md       # Tier 1 / Tier 2 (pure-sim + Gazebo)
+│   ├── COSYS_SIMULATION_ARCHITECTURE.md # Tier 3 (Cosys-AirSim / UE5)
 │   ├── MAKE_OR_BUY.md
 │   ├── STRATEGIC_PLAN.md
 │   ├── PRODUCTION_READINESS.md
