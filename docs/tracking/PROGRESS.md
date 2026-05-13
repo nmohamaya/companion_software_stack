@@ -3693,4 +3693,65 @@ Changes by category:
 
 ---
 
-*Last updated after Improvement #96 (PR #743). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #97 — Scenario Flight-Quality Gate: Contact-Sensor Detection (Epic #740 Layer 3 Gate 1, PR #744)
+
+**Date:** 2026-05-13
+**Category:** Test Infrastructure — Observability gate
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (cold-start hardening), Layer 3 Gate 1; related to [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (cold-start root-cause investigation)
+**PR:** #744 (open against `feature/cold-start-hardening`)
+**Numbering note:** depends on PR #743 (Improvements #95, #96) landing first; if PR-C lands earlier, renumber to #97.
+
+**What:**
+
+Adds a runtime flight-quality gate to `tests/run_scenario_gazebo.sh` that captures Gazebo's `/world/<name>/contacts` topic during the scenario run and asserts no drone-vs-obstacle physical contact occurred.  Closes the **observability gap** surfaced by [#727 evidence](https://github.com/nmohamaya/companion_software_stack/issues/727#issuecomment-4432892812): scenario 26 (Tier 2 / Gazebo) and sometimes 18 were reporting PASS while the drone visibly collided with cylinders / objects in the Gazebo GUI.  (Scenario 25 also exhibited false-PASS in #727 evidence, but it is Tier 1 / `requires_gazebo: false` and runs under `run_scenario.sh` — not this runner — so this gate does not cover it; a separate Tier-1 gate is a follow-up.)  Pass criteria today validate log content and FSM transitions, not physical flight quality — this gate is the canary that tells us whether Layer 1 (PR #741 ARM-gate debounce) and Layers 2/4 (forthcoming) actually fixed the cold-start failure mode.
+
+**How it works:**
+
+1. After the companion stack startup phase, the runner extracts the world name from `$GZ_WORLD` SDF (`<world name="...">`) and starts a background `gz topic -e -t /world/<name>/contacts` capture redirected to `${SCENARIO_LOG_DIR}/gz_contacts.log`.
+2. At Phase 5 (Verification), the capture is stopped and `tests/lib_check_contacts.py` parses the gz-topic-text-format log for `contact { ... }` blocks where one collider matches the drone-model substring (default `x500_companion`) and the other is NOT allowlisted (default `ground_plane`; configurable via scenario JSON).
+3. Any drone-vs-non-ground contact → FAIL the scenario run, printed as a deduplicated list of `(drone_collider, other_collider)` pairs.
+
+**What this catches (per #727 evidence):**
+
+- Scenario 26 (and any other Tier-2 Gazebo scenario) false-PASS — drone hitting objects during NAVIGATE / RTL phases.
+- Future regressions where path-planning produces collisions the existing log-pattern checks miss, on any Gazebo-tier scenario.
+
+**What this does NOT catch (scope of this gate):**
+
+- Tier-1 / Cosys-AirSim scenarios (e.g. 25) — they run under `tests/run_scenario.sh`, not `tests/run_scenario_gazebo.sh`, so the gate's `gz topic -e` capture is never started.  An equivalent Tier-1 gate is a separate follow-up.
+
+**What this does NOT catch (out of scope for MVP):**
+
+- Drone-vs-ground crashes during takeoff (rotor-asymmetry failure mode) — requires altitude / attitude correlation; deferred to `max_attitude_error_during_arming` gate (#740 Layer 3 follow-up).  Layer 1 (PR #741) prevents this failure mode at the source, so this gate doesn't need to catch it.
+- Pose-consistency mismatches between published `slam/pose` and PX4's `LOCAL_POSITION_NED` — separate gate (#740 Layer 3 follow-up).
+
+**Files modified:**
+
+- `tests/run_scenario_gazebo.sh` — adds `WORLD_NAME` extraction, `CONTACT_CAPTURE_PID` lifecycle, contact-sensor verification step in Phase 5, cleanup in `cleanup_scenario` trap.
+- `tests/lib_check_contacts.py` — new Python helper.  Header-only-style state machine that parses gz-topic text format without needing a `gz-msgs` Python dependency.  Supports `--drone-pattern`, `--allowlist`, `--max-events` CLI flags.  4 verification paths tested with synthetic input: clean PASS (only ground contact), FAIL on cylinder collision, empty file PASS, missing file rc=2.
+- `tests/TESTS.md` — documents the new `flight_quality_gates.*` JSON config keys.
+
+**Configuration (scenario JSON):**
+
+```json
+{
+  "flight_quality_gates": {
+    "contact_sensor_enabled": true,
+    "contact_allowlist": ["landing_pad"],
+    "contact_drone_pattern": "x500_companion"
+  }
+}
+```
+
+All three keys are optional; sensible defaults match the cold-start hardening epic's intent.  To opt-out per scenario (e.g. tests that intentionally land on objects), set `contact_sensor_enabled: false`.
+
+**Why:**
+
+Layer 3 of the cold-start hardening epic.  Without this gate, we can't tell whether Layer 1's debounce (PR #741) actually fixed the cold-start failures or just got lucky on physics seed — the existing pass criteria mask physical flight problems.  After Wave 1 (PRs #741, #743, #744) lands on the integration branch, a cold-start sweep with this gate enabled becomes the authoritative measurement of whether the fix worked.
+
+**Empirical validation pending:** cold-start sweep on integration branch.  Per #727 evidence, success criterion = <5% rotor-asymmetry rate AND zero drone-vs-obstacle contact events across 20 cold-starts of Tier-2 Gazebo scenarios 02, 17, 18, 26.  (Scenario 25 is Tier 1 and runs separately — covered by the Tier-1 follow-up gate, not this PR.)
+
+
+---
+
+*Last updated after Improvement #97 (PR #744). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

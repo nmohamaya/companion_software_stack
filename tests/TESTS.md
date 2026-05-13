@@ -1466,6 +1466,7 @@ via `fault_injector`, and verifies pass criteria against actual process logs.
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
 - `shm_segments_exist` — SHM segments that must be present at verification time (legacy; skipped when `EFFECTIVE_IPC == zenoh`, which is the sole backend)
+- **`flight_quality_gates.contact_sensor_enabled`** (Issue #740 Layer 3 Gate 1, PR #744) — when `true` (default), the runner subscribes to Gazebo's `/world/<name>/contacts` topic during the scenario and asserts no drone-vs-obstacle physical contact occurred.  `flight_quality_gates.contact_allowlist` (array, default `[]`) adds extra acceptable colliders alongside the built-in `ground_plane`; `flight_quality_gates.contact_drone_pattern` (string, default `"x500_companion"`) sets the drone-model substring matcher.  Closes the observability gap surfaced by #727 (scenarios 25 / 26 reported PASS while the drone visibly collided with cylinders in the Gazebo GUI).  Parser implementation in `tests/lib_check_contacts.py`.
 
 All 18 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
 to catch unexpected collisions (Fix #40).
