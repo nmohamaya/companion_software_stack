@@ -17,7 +17,9 @@ using drone::planner::decide_promotion;
 
 namespace {
 
-constexpr uint64_t kS(uint64_t s) { return s * 1'000'000'000ULL; }
+constexpr uint64_t kS(uint64_t s) {
+    return s * 1'000'000'000ULL;
+}
 
 CrossVetoPolicy default_policy() {
     return CrossVetoPolicy{};  // 10 m, 100 ms, 2 s residency, 30 s age cap
@@ -44,20 +46,16 @@ RadarQuery q_at(float range_m, bool in_fov, bool radar_present, bool radar_stale
 
 TEST(CrossVetoDecision, ShortRange_PromoteRegardlessOfRadar) {
     const auto p = default_policy();
-    EXPECT_EQ(decide_promotion(q_at(2.0f, false, false, true), p),
-              PromotionDecision::Promote);
-    EXPECT_EQ(decide_promotion(q_at(5.0f, true, true, false), p),
-              PromotionDecision::Promote);
-    EXPECT_EQ(decide_promotion(q_at(9.99f, false, false, false), p),
-              PromotionDecision::Promote);
+    EXPECT_EQ(decide_promotion(q_at(2.0f, false, false, true), p), PromotionDecision::Promote);
+    EXPECT_EQ(decide_promotion(q_at(5.0f, true, true, false), p), PromotionDecision::Promote);
+    EXPECT_EQ(decide_promotion(q_at(9.99f, false, false, false), p), PromotionDecision::Promote);
 }
 
 // ── Row 2 — long range, in FOV ───────────────────────────────
 
 TEST(CrossVetoDecision, LongRangeInFov_BothAgree_Promote) {
     const auto p = default_policy();
-    EXPECT_EQ(decide_promotion(q_at(15.0f, true, true, false), p),
-              PromotionDecision::Promote);
+    EXPECT_EQ(decide_promotion(q_at(15.0f, true, true, false), p), PromotionDecision::Promote);
 }
 
 TEST(CrossVetoDecision, LongRangeInFov_RadarAbsent_Defer) {
@@ -96,25 +94,26 @@ TEST(CrossVetoDecision, LongRangeOutsideFov_AtResidencyThreshold_PromoteFovSilen
 TEST(CrossVetoDecision, LongRangeOutsideFov_OneNsBelowResidency_Defer) {
     const auto p = default_policy();
     // Boundary: residency exactly at threshold-1 must NOT trip the >= check.
-    EXPECT_EQ(decide_promotion(q_at(15.0f, false, false, true,
-                                    p.fov_residency_promote_ns - 1, 0), p),
-              PromotionDecision::DeferToDynamic);
+    EXPECT_EQ(
+        decide_promotion(q_at(15.0f, false, false, true, p.fov_residency_promote_ns - 1, 0), p),
+        PromotionDecision::DeferToDynamic);
 }
 
 TEST(CrossVetoDecision, LongRangeOutsideFov_AgeCapDistinctFromResidency) {
-    auto p              = default_policy();
+    auto p               = default_policy();
     p.dynamic_age_cap_ns = kS(30);  // explicit
     // Cell with no residency but past the age cap → age-cap eviction.
     // This is the case our previous bug-fix targets: cells permanently
     // outside the FOV cone will never accrue residency, only age.
     EXPECT_EQ(decide_promotion(q_at(15.0f, false, false, true,
                                     /*residency_ns=*/0,
-                                    /*cell_age_ns=*/kS(31)), p),
+                                    /*cell_age_ns=*/kS(31)),
+                               p),
               PromotionDecision::PromoteAgeCapEviction);
 }
 
 TEST(CrossVetoDecision, LongRangeOutsideFov_AtAgeCapBoundary_Promote) {
-    auto p             = default_policy();
+    auto p               = default_policy();
     p.dynamic_age_cap_ns = kS(30);
     // Exactly at the age cap (>=) — must promote.
     EXPECT_EQ(decide_promotion(q_at(15.0f, false, false, true, 0, kS(30)), p),
@@ -142,8 +141,7 @@ TEST(CrossVetoDecision, AtExactShortRangeBoundary_LongRangeRules) {
     // range == 10.0 m: NOT < 10.0, falls to long-range rules.
     EXPECT_EQ(decide_promotion(q_at(10.0f, false, false, true), p),
               PromotionDecision::DeferToDynamic);
-    EXPECT_EQ(decide_promotion(q_at(10.0f, true, true, false), p),
-              PromotionDecision::Promote);
+    EXPECT_EQ(decide_promotion(q_at(10.0f, true, true, false), p), PromotionDecision::Promote);
 }
 
 // ── Custom policy ────────────────────────────────────────────
@@ -151,8 +149,7 @@ TEST(CrossVetoDecision, AtExactShortRangeBoundary_LongRangeRules) {
 TEST(CrossVetoDecision, CustomShortRange_RuleScales) {
     CrossVetoPolicy p = default_policy();
     p.short_range_m   = 5.0f;
-    EXPECT_EQ(decide_promotion(q_at(4.99f, false, false, true), p),
-              PromotionDecision::Promote);
+    EXPECT_EQ(decide_promotion(q_at(4.99f, false, false, true), p), PromotionDecision::Promote);
     EXPECT_EQ(decide_promotion(q_at(5.0f, false, false, true), p),
               PromotionDecision::DeferToDynamic);
 }

@@ -913,9 +913,8 @@ private:
 #endif
 
     if (backend == "simulated") {
-        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(
-            std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps,
-                                                  good_trace_max, degraded_trace_max));
+        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(std::make_unique<SimulatedVIOBackend>(
+            calib, imu_params, 5, sim_speed_mps, good_trace_max, degraded_trace_max));
     }
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
@@ -925,9 +924,8 @@ private:
             std::make_unique<GazeboVIOBackend>(gz_topic));
     }
     if (backend == "gazebo_full_vio") {
-        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(
-            std::make_unique<GazeboFullVIOBackend>(calib, imu_params, gz_topic, 5,
-                                                   good_trace_max, degraded_trace_max));
+        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(std::make_unique<GazeboFullVIOBackend>(
+            calib, imu_params, gz_topic, 5, good_trace_max, degraded_trace_max));
     }
 #endif
 #ifdef HAVE_COSYS_AIRSIM

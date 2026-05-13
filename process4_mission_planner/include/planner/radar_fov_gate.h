@@ -39,8 +39,6 @@
 #include "util/config.h"
 #include "util/config_keys.h"
 
-#include <Eigen/Geometry>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -48,6 +46,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+
+#include <Eigen/Geometry>
 
 namespace drone::planner {
 
@@ -70,16 +70,14 @@ struct RadarFovConfig {
     /// section.
     [[nodiscard]] static RadarFovConfig from_cfg(const drone::Config& cfg,
                                                  std::string_view     section) {
-        RadarFovConfig c;
+        RadarFovConfig    c;
         const std::string s(section);
         c.fov_azimuth_rad   = cfg.get<float>(s + drone::cfg_key::hal::FOV_AZIMUTH_RAD,
                                              c.fov_azimuth_rad);
         c.fov_elevation_rad = cfg.get<float>(s + drone::cfg_key::hal::FOV_ELEVATION_RAD,
                                              c.fov_elevation_rad);
-        c.min_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MIN_RANGE_M,
-                                             c.min_range_m);
-        c.max_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MAX_RANGE_M,
-                                             c.max_range_m);
+        c.min_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MIN_RANGE_M, c.min_range_m);
+        c.max_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MAX_RANGE_M, c.max_range_m);
         return c;
     }
 };
@@ -134,26 +132,20 @@ struct CrossVetoPolicy {
                                                   std::string_view /*section*/) {
         namespace ck = drone::cfg_key::mission_planner::occupancy_grid::cross_veto;
         CrossVetoPolicy p;
-        p.short_range_m = cfg.get<float>(ck::SHORT_RANGE_M, p.short_range_m);
+        p.short_range_m     = cfg.get<float>(ck::SHORT_RANGE_M, p.short_range_m);
         p.min_gate_radius_m = cfg.get<float>(ck::GATE_MIN_RADIUS_M, p.min_gate_radius_m);
 
         const auto staleness_ms = cfg.get<int>(
-            ck::RADAR_MAX_STALENESS_MS,
-            static_cast<int>(p.radar_max_staleness_ns / 1'000'000ULL));
-        p.radar_max_staleness_ns =
-            static_cast<uint64_t>(std::max(0, staleness_ms)) * 1'000'000ULL;
+            ck::RADAR_MAX_STALENESS_MS, static_cast<int>(p.radar_max_staleness_ns / 1'000'000ULL));
+        p.radar_max_staleness_ns = static_cast<uint64_t>(std::max(0, staleness_ms)) * 1'000'000ULL;
 
         const auto residency_s = cfg.get<float>(
-            ck::FOV_RESIDENCY_PROMOTE_S,
-            static_cast<float>(p.fov_residency_promote_ns) / 1.0e9f);
-        p.fov_residency_promote_ns =
-            static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
+            ck::FOV_RESIDENCY_PROMOTE_S, static_cast<float>(p.fov_residency_promote_ns) / 1.0e9f);
+        p.fov_residency_promote_ns = static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
 
-        const auto cap_s = cfg.get<float>(
-            ck::DYNAMIC_AGE_CAP_S,
-            static_cast<float>(p.dynamic_age_cap_ns) / 1.0e9f);
-        p.dynamic_age_cap_ns =
-            static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
+        const auto cap_s     = cfg.get<float>(ck::DYNAMIC_AGE_CAP_S,
+                                              static_cast<float>(p.dynamic_age_cap_ns) / 1.0e9f);
+        p.dynamic_age_cap_ns = static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
 
         return p;
     }
@@ -162,11 +154,11 @@ struct CrossVetoPolicy {
 /// Result of a per-cell radar query.  Used by decide_promotion() and the
 /// disagreement telemetry to make + audit the gating decision.
 struct RadarQuery {
-    bool     in_fov{false};
-    bool     radar_present{false};
-    bool     radar_stale{false};
-    float    gate_radius_m{0.0f};
-    float    range_to_drone_m{0.0f};
+    bool  in_fov{false};
+    bool  radar_present{false};
+    bool  radar_stale{false};
+    float gate_radius_m{0.0f};
+    float range_to_drone_m{0.0f};
     /// Cumulative time the cell has been observed *inside* the radar FOV
     /// with no return.  Drives `PromoteFovSilence`.  Reset whenever the
     /// cell leaves FOV.  0 if the cell is untracked.
@@ -193,10 +185,9 @@ public:
                                        static_cast<float>(p.translation[2]));
         // Quaternion is (w, x, y, z) per IPC convention — see PoseDoubleBuffer
         // in process3_slam_vio_nav/src/main.cpp for the canonical mapping.
-        const Eigen::Quaternionf q(static_cast<float>(p.quaternion[0]),
-                                   static_cast<float>(p.quaternion[1]),
-                                   static_cast<float>(p.quaternion[2]),
-                                   static_cast<float>(p.quaternion[3]));
+        const Eigen::Quaternionf q(
+            static_cast<float>(p.quaternion[0]), static_cast<float>(p.quaternion[1]),
+            static_cast<float>(p.quaternion[2]), static_cast<float>(p.quaternion[3]));
         // Body-from-world rotation = conjugate of body→world.
         R_body_from_world_ = q.conjugate().toRotationMatrix();
         pose_valid_        = true;
@@ -210,9 +201,9 @@ public:
     /// check is "did the gate see this recently?" not "when was it sampled?"
     void set_radar_detections(const drone::ipc::RadarDetectionList& dets,
                               uint64_t                              now_ns) noexcept {
-        radar_dets_         = dets;
-        last_radar_t_ns_    = now_ns;
-        radar_initialized_  = true;
+        radar_dets_        = dets;
+        last_radar_t_ns_   = now_ns;
+        radar_initialized_ = true;
     }
 
     /// Query the gate for a world-frame point (typically a grid cell centre).
@@ -237,7 +228,7 @@ public:
         // +Z up (ENU body frame, matching the pose channel's world frame).
         // Azimuth: angle in body XY plane from +X, positive toward +Y.
         // Elevation: angle from XY plane toward +Z.
-        const float range = p_body.norm();
+        const float range  = p_body.norm();
         q.range_to_drone_m = range;
 
         if (range < 1e-6f) {
@@ -247,16 +238,14 @@ public:
         } else {
             const float azimuth_rad   = std::atan2(p_body.y(), p_body.x());
             const float elevation_rad = std::asin(std::clamp(p_body.z() / range, -1.0f, 1.0f));
-            q.in_fov                  = (range >= fov_.min_range_m &&
-                        range <= fov_.max_range_m &&
+            q.in_fov                  = (range >= fov_.min_range_m && range <= fov_.max_range_m &&
                         std::abs(azimuth_rad) <= fov_.fov_azimuth_rad &&
                         std::abs(elevation_rad) <= fov_.fov_elevation_rad);
         }
 
         // Staleness: if no radar message within the policy window, treat as stale.
-        if (!radar_initialized_ ||
-            (now_ns >= last_radar_t_ns_ &&
-             (now_ns - last_radar_t_ns_) > policy_.radar_max_staleness_ns)) {
+        if (!radar_initialized_ || (now_ns >= last_radar_t_ns_ &&
+                                    (now_ns - last_radar_t_ns_) > policy_.radar_max_staleness_ns)) {
             q.radar_stale = true;
         }
 
@@ -391,7 +380,7 @@ public:
     /// without it, `decide_promotion()` cannot reach the escape-hatch rows.
     [[nodiscard]] RadarQuery query_cell(const GridCell& c, float resolution_m,
                                         uint64_t now_ns) const noexcept {
-        RadarQuery q = query(c.x * resolution_m, c.y * resolution_m, c.z * resolution_m, now_ns);
+        RadarQuery q   = query(c.x * resolution_m, c.y * resolution_m, c.z * resolution_m, now_ns);
         q.residency_ns = residency_ns(c);
         q.cell_age_ns  = cell_age_ns(c, now_ns);
         return q;
@@ -407,31 +396,28 @@ public:
     [[nodiscard]] const RadarFovConfig&  fov_config() const noexcept { return fov_; }
     [[nodiscard]] const CrossVetoPolicy& policy() const noexcept { return policy_; }
     [[nodiscard]] bool                   has_pose() const noexcept { return pose_valid_; }
-    [[nodiscard]] uint64_t               last_radar_t_ns() const noexcept {
-        return last_radar_t_ns_;
-    }
+    [[nodiscard]] uint64_t last_radar_t_ns() const noexcept { return last_radar_t_ns_; }
 
     /// Diagnostic — number of cells currently in the residency tracker.
     /// Useful for end-of-run reports + scenario telemetry.
     [[nodiscard]] size_t tracked_cell_count() const noexcept { return residency_.size(); }
 
 private:
-    RadarFovConfig                                              fov_;
-    CrossVetoPolicy                                             policy_;
-    Eigen::Vector3f                                             drone_pos_w_{Eigen::Vector3f::Zero()};
-    Eigen::Matrix3f                                             R_body_from_world_{
-        Eigen::Matrix3f::Identity()};
-    bool                                                        pose_valid_{false};
-    drone::ipc::RadarDetectionList                              radar_dets_{};
-    uint64_t                                                    last_radar_t_ns_{0};
-    bool                                                        radar_initialized_{false};
-    uint64_t                                                    last_tick_ns_{0};
-    bool                                                        tick_initialized_{false};
+    RadarFovConfig                 fov_;
+    CrossVetoPolicy                policy_;
+    Eigen::Vector3f                drone_pos_w_{Eigen::Vector3f::Zero()};
+    Eigen::Matrix3f                R_body_from_world_{Eigen::Matrix3f::Identity()};
+    bool                           pose_valid_{false};
+    drone::ipc::RadarDetectionList radar_dets_{};
+    uint64_t                       last_radar_t_ns_{0};
+    bool                           radar_initialized_{false};
+    uint64_t                       last_tick_ns_{0};
+    bool                           tick_initialized_{false};
     /// Cumulative time spent in-FOV with no radar return.  Reset on FOV exit.
-    std::unordered_map<GridCell, uint64_t, GridCellHash>        residency_;
+    std::unordered_map<GridCell, uint64_t, GridCellHash> residency_;
     /// Wall time of first observation in the dynamic layer.  Never reset by
     /// FOV transitions — only cleared when the cell promotes or TTL-decays.
-    std::unordered_map<GridCell, uint64_t, GridCellHash>        first_seen_ns_;
+    std::unordered_map<GridCell, uint64_t, GridCellHash> first_seen_ns_;
 };
 
 }  // namespace drone::planner

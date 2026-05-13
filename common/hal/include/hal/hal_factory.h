@@ -55,13 +55,13 @@
 #ifdef HAVE_COSYS_AIRSIM
 #include "hal/cosys_camera.h"
 #include "hal/cosys_depth.h"
-#include "hal/cosys_segmentation_backend.h"
-#include "hal/cosys_fc_link.h"
-#include "hal/cosys_imu.h"
 #include "hal/cosys_echo_backend.h"
+#include "hal/cosys_fc_link.h"
 #include "hal/cosys_groundtruth_radar.h"
+#include "hal/cosys_imu.h"
 #include "hal/cosys_radar.h"
 #include "hal/cosys_rpc_client.h"
+#include "hal/cosys_segmentation_backend.h"
 #endif
 
 #ifdef HAS_OPENCV
@@ -305,8 +305,8 @@ template<typename Interface>
     // sensor noise.  Pair with depth_estimator.backend=cosys_airsim and
     // path_a.sam.backend=cosys_airsim for end-to-end ground-truth perception.
     if (backend == "cosys_airsim_groundtruth") {
-        return std::make_unique<CosysGroundTruthRadarBackend>(
-            detail::get_shared_cosys_client(cfg), cfg, section);
+        return std::make_unique<CosysGroundTruthRadarBackend>(detail::get_shared_cosys_client(cfg),
+                                                              cfg, section);
     }
     // Issue #705 — Cosys-Lab Echo sensor (sensor type 7) — physical FMCW-
     // style radar simulator with beam pattern, multipath reflections, and
@@ -315,7 +315,7 @@ template<typename Interface>
     // available as a validation oracle.
     if (backend == "cosys_echo") {
         return std::make_unique<CosysEchoBackend>(detail::get_shared_cosys_client(cfg), cfg,
-                                                   section);
+                                                  section);
     }
 #endif
 
