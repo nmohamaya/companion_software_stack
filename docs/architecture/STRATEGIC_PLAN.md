@@ -15,7 +15,7 @@
 
 ## Current State Assessment
 
-**What we have**: A ~3500 LOC C++17 autonomous drone stack with 7 processes, 21 virtual interface classes, Zenoh IPC (sole backend), 1259 unit tests (see [tests/TESTS.md](../../tests/TESTS.md)), 25 scenarios (20 Tier 1 + 5 Tier 2), 75% coverage, full Gazebo SITL closed-loop flight, and a 3-layer watchdog. The architecture uses strategy pattern everywhere, config-driven backend selection, zero recompilation to swap implementations.
+**What we have**: A C++17 autonomous drone stack with 7 processes, Zenoh IPC (sole backend), full Gazebo SITL closed-loop flight, a Cosys-AirSim Tier 3 photorealistic sim, and a 3-layer watchdog. The architecture uses strategy pattern everywhere, config-driven backend selection, zero recompilation to swap implementations.  See [tests/TESTS.md](../../tests/TESTS.md) for the current test inventory and counts; `config/scenarios/*.json` for the current scenario list.
 
 ### Simulation vs. Real Hardware Maturity
 
@@ -154,14 +154,14 @@ All backends selected at runtime via JSON config + factory functions:
                     │  (New)               │     Real code, simulated physics
                     ├──────────────────────┤
                     │  Gazebo SITL         │  ← x86 or Jetson
-                    │  (8 scenarios, 80    │     PX4 + Gazebo + full stack
-                    │   checks) ✅         │
+                    │  (see config/        │     PX4 + Gazebo + full stack
+                    │   scenarios/) ✅     │
                     ├──────────────────────┤
                     │  E2E Smoke           │  ← x86 or Jetson
-                    │  (42 checks) ✅      │     All 7 processes, no physics
+                    │  ✅                  │     All 7 processes, no physics
                     ├──────────────────────┤
                     │  Unit Tests          │  ← x86 or Jetson (cross-compiled)
-                    │  (1259 tests) ✅     │     Isolated, <2 min
+                    │  (tests/TESTS.md) ✅ │     Isolated, <2 min
                     └──────────────────────┘
 ```
 

@@ -112,9 +112,9 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|------|--------------------|--------------------|----------|--------|-------|
-| 7.1 | ASan coverage | All 880 tests pass under ASan | All tests pass under ASan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,asan` + `zenoh,asan` |
-| 7.2 | UBSan coverage | All 880 tests pass under UBSan | All tests pass under UBSan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,ubsan` + `zenoh,ubsan` |
-| 7.3 | TSan coverage — own code | 560/560 own-code tests pass under TSan | All own-code tests pass under TSan | P1 | 🟢 | SPSC, seqlock, watchdog, process manager all clean |
+| 7.1 | ASan coverage | Full suite passes under ASan (see `tests/TESTS.md` for count) | All tests pass under ASan | P1 | 🟢 | CI leg `asan` runs on every PR (post-PR #739 gate order) |
+| 7.2 | UBSan coverage | Full suite passes under UBSan (see `tests/TESTS.md` for count) | All tests pass under UBSan | P1 | 🟢 | CI leg `ubsan`; project-defined `DRONE_UBSAN_BUILD` macro (set whenever `ENABLE_UBSAN=ON`; needed for GCC UBSan detection — GCC has no portable `__SANITIZE_UNDEFINED__`) |
+| 7.3 | TSan coverage — own code | All own-code tests pass under TSan (see `tests/TESTS.md` for count) | All own-code tests pass under TSan | P1 | 🟢 | SPSC, seqlock, watchdog, process manager all clean |
 | 7.4 | TSan coverage — third-party libs | 157 tests excluded (Zenoh/MAVSDK/OpenCV/Liveliness) — pre-built libs not TSan-instrumented | Run all tests under TSan with instrumented libs or targeted suppressions | P1 | 🔴 | See details below |
 | 7.5 | Valgrind / Helgrind soak tests | Not implemented | Multi-hour soak runs under Valgrind + Helgrind for leak/race detection | P2 | 🔴 | Catches different bug classes than sanitizers |
 | 7.6 | Fault injection testing | `fault_injector` CLI with sideband `/fault_overrides` channel; **8/8 Tier 1 scenarios on Gazebo SITL + Zenoh (89/89 checks)** | Kill/restart processes mid-flight, saturate IPC queues, simulate sensor dropouts | P1 | 🟡 | Fault injection done (PR #123); process-kill + IPC saturation TBD |
