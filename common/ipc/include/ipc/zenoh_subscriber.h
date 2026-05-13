@@ -48,12 +48,30 @@ public:
     ///                        shared_ptr because MessageBus may share one
     ///                        instance across multiple subscribers for the
     ///                        same type.
+    /// @param filter_pre_birth_messages  Issue #722 — when `true` (default),
+    ///                                   drop incoming messages whose
+    ///                                   `T::timestamp_ns` predates this
+    ///                                   subscriber's construction by more
+    ///                                   than `kBirthSlackNs`.  Defends
+    ///                                   every timestamped IPC topic against
+    ///                                   Zenoh's last-value cache delivering
+    ///                                   historic messages from a previous
+    ///                                   publisher session (root cause of
+    ///                                   #720 / PR #721).  Only fires for
+    ///                                   types with both `timestamp_ns` and
+    ///                                   `validate()` (covers every safety-
+    ///                                   critical IPC type today).  Tests
+    ///                                   that legitimately replay historic
+    ///                                   messages should pass `false`.
     explicit ZenohSubscriber(
         const std::string& key_expr, bool track_latency = true,
-        std::shared_ptr<const ISerializer<T>> serializer = std::make_shared<RawSerializer<T>>())
+        std::shared_ptr<const ISerializer<T>> serializer = std::make_shared<RawSerializer<T>>(),
+        bool                                  filter_pre_birth_messages = true)
         : key_expr_(key_expr)
         , track_latency_(track_latency)
-        , serializer_(serializer ? std::move(serializer) : std::make_shared<RawSerializer<T>>()) {
+        , serializer_(serializer ? std::move(serializer) : std::make_shared<RawSerializer<T>>())
+        , filter_pre_birth_messages_(filter_pre_birth_messages)
+        , subscriber_birth_ns_(drone::util::get_clock().now_ns()) {
         try {
             auto& session = ZenohSession::instance().session();
             subscriber_.emplace(session.declare_subscriber(
@@ -182,6 +200,33 @@ private:
                                key_expr_);
                 return;
             }
+            // Issue #722 — wrapper-level stale-message filter.  Drops messages
+            // whose publisher timestamp predates this subscriber's birth (with
+            // slack) — defends every timestamped IPC topic against Zenoh's
+            // last-value cache delivering historic messages from a previous
+            // publisher session.  Replaces the bespoke per-site filter PR #721
+            // installed in process4_mission_planner/src/main.cpp:93 for the
+            // pose topic specifically.
+            //
+            // Only fires for types with BOTH validate() AND timestamp_ns.  All
+            // safety-critical IPC types today satisfy both (Pose, FCState,
+            // DetectedObjectList, TrajectoryCmd, RadarDetectionList, etc.).
+            // Types like raw configuration uploads that don't have a publisher
+            // timestamp pass through unfiltered.
+            //
+            // `timestamp_ns == 0` is the documented sentinel for "publisher
+            // didn't stamp" / "default-constructed"; we let those through so
+            // downstream code can apply its own staleness logic.  The pre-birth
+            // check only fires for messages with a real, positive timestamp
+            // that predates us — i.e. unambiguous historical-cache replays.
+            if constexpr (has_timestamp_ns<T>::value) {
+                if (filter_pre_birth_messages_ && temp->timestamp_ns > 0 &&
+                    subscriber_birth_ns_ > 0 &&
+                    temp->timestamp_ns + kBirthSlackNs < subscriber_birth_ns_) {
+                    log_stale_once(temp->timestamp_ns);
+                    return;
+                }
+            }
             std::lock_guard<std::mutex> lock(data_mutex_);
             latest_msg_   = *temp;
             timestamp_ns_ = drone::util::get_clock().now_ns();
@@ -214,10 +259,52 @@ private:
     struct has_validate<U, std::void_t<decltype(std::declval<const U&>().validate())>>
         : std::true_type {};
 
+    /// SFINAE helper to detect T::timestamp_ns at compile time (Issue #722).
+    /// Used to gate the wrapper-level stale-message filter — only types with
+    /// a publisher-stamped `timestamp_ns` field can be checked against
+    /// `subscriber_birth_ns_`.  Mirrors the `has_validate<T>` pattern above.
+    template<typename U, typename = void>
+    struct has_timestamp_ns : std::false_type {};
+
+    template<typename U>
+    struct has_timestamp_ns<U, std::void_t<decltype(std::declval<const U&>().timestamp_ns)>>
+        : std::true_type {};
+
+    /// Issue #722 — slack allowed when comparing publisher timestamps against
+    /// `subscriber_birth_ns_`.  Covers the rare case where the publisher
+    /// (e.g. P3) booted slightly before this subscriber's process (e.g. P4)
+    /// and emitted its first valid message during our MessageBus init —
+    /// without slack, that "almost-fresh" message would be misclassified as
+    /// stale.  100 ms is the same value PR #721 used at the per-site filter
+    /// it now replaces.
+    static constexpr uint64_t kBirthSlackNs = 100'000'000ULL;
+
+    /// Issue #722 — emit the stale-drop log line exactly once per subscriber
+    /// to avoid log spam if Zenoh's cache replays many historic messages in
+    /// quick succession at boot.
+    void log_stale_once(uint64_t msg_ts_ns) const {
+        bool expected = false;
+        if (stale_logged_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            const uint64_t age_s = (subscriber_birth_ns_ > msg_ts_ns)
+                                       ? (subscriber_birth_ns_ - msg_ts_ns) / 1'000'000'000ULL
+                                       : 0ULL;
+            DRONE_LOG_WARN("[ZenohSubscriber] Dropping pre-birth message on '{}' "
+                           "(publisher timestamp ~{}s older than subscriber birth) — "
+                           "Zenoh last-value cache from a previous publisher session. "
+                           "Further pre-birth drops on this topic will be silent.",
+                           key_expr_, age_s);
+        }
+    }
+
     std::string                            key_expr_;
     bool                                   track_latency_ = true;
     std::shared_ptr<const ISerializer<T>>  serializer_;
     std::optional<zenoh::Subscriber<void>> subscriber_;
+
+    // Issue #722 — wrapper-level stale-message filter state.
+    bool                      filter_pre_birth_messages_ = true;
+    uint64_t                  subscriber_birth_ns_       = 0;
+    mutable std::atomic<bool> stale_logged_{false};
 
     // Latest-value cache (protected by data_mutex_ + atomics)
     mutable std::mutex                  data_mutex_;

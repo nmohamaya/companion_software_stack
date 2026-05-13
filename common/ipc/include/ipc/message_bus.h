@@ -94,26 +94,37 @@ public:
 
     /// Create a subscriber for the given topic.
     /// @tparam T  Trivially-copyable message type.
-    /// @param topic        Topic name.
-    /// @param max_retries  Legacy (ignored by Zenoh).
-    /// @param retry_ms     Legacy (ignored by Zenoh).
+    /// @param topic             Topic name.
+    /// @param max_retries       Legacy (ignored by Zenoh).
+    /// @param retry_ms          Legacy (ignored by Zenoh).
+    /// @param filter_pre_birth  Issue #722 — when `true` (default), drop
+    ///                          messages whose `timestamp_ns` predates this
+    ///                          subscriber's birth.  Defense-in-depth
+    ///                          against Zenoh's last-value cache delivering
+    ///                          historic messages from a previous publisher
+    ///                          session.  Tests with synthetic timestamps
+    ///                          (e.g. `timestamp_ns = 42`) should pass
+    ///                          `false`.
     template<typename T>
     [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe(const std::string& topic,
                                                             int                max_retries = 50,
-                                                            int                retry_ms    = 200) {
+                                                            int                retry_ms    = 200,
+                                                            bool filter_pre_birth          = true) {
         const auto resolved = resolver_.resolve(topic);
         return std::visit(
             [&](auto& b) -> std::unique_ptr<ISubscriber<T>> {
-                return b->template subscribe<T>(resolved, max_retries, retry_ms);
+                return b->template subscribe<T>(resolved, max_retries, retry_ms, filter_pre_birth);
             },
             impl_);
     }
 
     /// Create an optional subscriber (single attempt, no retries).
     /// Use for channels where it's OK if the publisher doesn't exist yet.
+    /// @param filter_pre_birth  See `subscribe()` above (Issue #722).
     template<typename T>
-    [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe_optional(const std::string& topic) {
-        return subscribe<T>(topic, 0, 0);
+    [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe_optional(const std::string& topic,
+                                                                     bool filter_pre_birth = true) {
+        return subscribe<T>(topic, 0, 0, filter_pre_birth);
     }
 
     // ─── Service Channels ────────────────────────────────────
