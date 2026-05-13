@@ -3693,6 +3693,110 @@ Changes by category:
 
 ---
 
+### Improvement #97 — Scenario Flight-Quality Gate: Contact-Sensor Detection (Epic #740 Layer 3 Gate 1, PR #744)
+
+**Date:** 2026-05-13
+**Category:** Test Infrastructure — Observability gate
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (cold-start hardening), Layer 3 Gate 1; related to [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (cold-start root-cause investigation)
+**PR:** #744 (open against `feature/cold-start-hardening`)
+**Numbering note:** depends on PR #743 (Improvements #95, #96) landing first; if PR-C lands earlier, renumber to #97.
+
+**What:**
+
+Adds a runtime flight-quality gate to `tests/run_scenario_gazebo.sh` that captures Gazebo's `/world/<name>/contacts` topic during the scenario run and asserts no drone-vs-obstacle physical contact occurred.  Closes the **observability gap** surfaced by [#727 evidence](https://github.com/nmohamaya/companion_software_stack/issues/727#issuecomment-4432892812): scenario 26 (Tier 2 / Gazebo) and sometimes 18 were reporting PASS while the drone visibly collided with cylinders / objects in the Gazebo GUI.  (Scenario 25 also exhibited false-PASS in #727 evidence, but it is Tier 1 / `requires_gazebo: false` and runs under `run_scenario.sh` — not this runner — so this gate does not cover it; a separate Tier-1 gate is a follow-up.)  Pass criteria today validate log content and FSM transitions, not physical flight quality — this gate is the canary that tells us whether Layer 1 (PR #741 ARM-gate debounce) and Layers 2/4 (forthcoming) actually fixed the cold-start failure mode.
+
+**How it works:**
+
+1. After the companion stack startup phase, the runner extracts the world name from `$GZ_WORLD` SDF (`<world name="...">`) and starts a background `gz topic -e -t /world/<name>/contacts` capture redirected to `${SCENARIO_LOG_DIR}/gz_contacts.log`.
+2. At Phase 5 (Verification), the capture is stopped and `tests/lib_check_contacts.py` parses the gz-topic-text-format log for `contact { ... }` blocks where one collider matches the drone-model substring (default `x500_companion`) and the other is NOT allowlisted (default `ground_plane`; configurable via scenario JSON).
+3. Any drone-vs-non-ground contact → FAIL the scenario run, printed as a deduplicated list of `(drone_collider, other_collider)` pairs.
+
+**What this catches (per #727 evidence):**
+
+- Scenario 26 (and any other Tier-2 Gazebo scenario) false-PASS — drone hitting objects during NAVIGATE / RTL phases.
+- Future regressions where path-planning produces collisions the existing log-pattern checks miss, on any Gazebo-tier scenario.
+
+**What this does NOT catch (scope of this gate):**
+
+- Tier-1 / Cosys-AirSim scenarios (e.g. 25) — they run under `tests/run_scenario.sh`, not `tests/run_scenario_gazebo.sh`, so the gate's `gz topic -e` capture is never started.  An equivalent Tier-1 gate is a separate follow-up.
+
+**What this does NOT catch (out of scope for MVP):**
+
+- Drone-vs-ground crashes during takeoff (rotor-asymmetry failure mode) — requires altitude / attitude correlation; deferred to `max_attitude_error_during_arming` gate (#740 Layer 3 follow-up).  Layer 1 (PR #741) prevents this failure mode at the source, so this gate doesn't need to catch it.
+- Pose-consistency mismatches between published `slam/pose` and PX4's `LOCAL_POSITION_NED` — separate gate (#740 Layer 3 follow-up).
+
+**Files modified:**
+
+- `tests/run_scenario_gazebo.sh` — adds `WORLD_NAME` extraction, `CONTACT_CAPTURE_PID` lifecycle, contact-sensor verification step in Phase 5, cleanup in `cleanup_scenario` trap.
+- `tests/lib_check_contacts.py` — new Python helper.  Header-only-style state machine that parses gz-topic text format without needing a `gz-msgs` Python dependency.  Supports `--drone-pattern`, `--allowlist`, `--max-events` CLI flags.  4 verification paths tested with synthetic input: clean PASS (only ground contact), FAIL on cylinder collision, empty file PASS, missing file rc=2.
+- `tests/TESTS.md` — documents the new `flight_quality_gates.*` JSON config keys.
+
+**Configuration (scenario JSON):**
+
+```json
+{
+  "flight_quality_gates": {
+    "contact_sensor_enabled": true,
+    "contact_allowlist": ["landing_pad"],
+    "contact_drone_pattern": "x500_companion"
+  }
+}
+```
+
+All three keys are optional; sensible defaults match the cold-start hardening epic's intent.  To opt-out per scenario (e.g. tests that intentionally land on objects), set `contact_sensor_enabled: false`.
+
+**Why:**
+
+Layer 3 of the cold-start hardening epic.  Without this gate, we can't tell whether Layer 1's debounce (PR #741) actually fixed the cold-start failures or just got lucky on physics seed — the existing pass criteria mask physical flight problems.  After Wave 1 (PRs #741, #743, #744) lands on the integration branch, a cold-start sweep with this gate enabled becomes the authoritative measurement of whether the fix worked.
+
+**Empirical validation pending:** cold-start sweep on integration branch.  Per #727 evidence, success criterion = <5% rotor-asymmetry rate AND zero drone-vs-obstacle contact events across 20 cold-starts of Tier-2 Gazebo scenarios 02, 17, 18, 26.  (Scenario 25 is Tier 1 and runs separately — covered by the Tier-1 follow-up gate, not this PR.)
+
+---
+
+### Improvement #98 — Wrapper-Level Zenoh Stale-Message Filter (closes #722, PR #750)
+
+**Date:** 2026-05-13
+**Category:** Hardening — IPC defense-in-depth
+**Issue:** [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) (closed by this PR) / part of epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Wave 2
+**PR:** #750 (open against `feature/cold-start-hardening`)
+
+**What:**
+
+Lifts PR #721's per-site stale-pose filter (in `process4_mission_planner/src/main.cpp`) to the `ZenohSubscriber<T>` wrapper level.  Every IPC topic with a `timestamp_ns` field now gets the protection automatically, not just pose.  Closes the class-of-bugs hole that #722 identified: Zenoh's last-value cache delivers historic messages from previous publisher sessions to any newly-connected subscriber.
+
+**How it works:**
+
+1. New SFINAE `has_timestamp_ns<T>` detector at compile time (mirrors `has_validate<T>`).
+2. `ZenohSubscriber<T>` records `subscriber_birth_ns_` from `drone::util::get_clock().now_ns()` at construction.
+3. In `on_sample()`, after `deserialize` + `validate()`, drops messages where `temp->timestamp_ns + kBirthSlackNs < subscriber_birth_ns_` (100 ms slack matches PR #721).
+4. Log-once per subscriber via atomic compare-exchange — no spam if Zenoh replays many cached messages.
+5. Configurable opt-out (`filter_pre_birth_messages = false`) for tests that use synthetic timestamps.
+
+**Two-commit pattern (per #722 plan):**
+
+- **Commit 1** — Adds the wrapper-level filter + 4 new unit tests + threads opt-out parameter through `MessageBus::subscribe<T>` API + migrates 22 existing IPC tests to opt out (they use synthetic `timestamp_ns` for wire-format coverage, not staleness semantics).
+- **Commit 2** — Reverts the per-site filter in `process4_mission_planner/src/main.cpp` (PR #721) which is now subsumed.  Demonstrates the relationship in git log and shrinks P4 main.cpp.
+
+**Files modified:**
+
+- `common/ipc/include/ipc/zenoh_subscriber.h` — new `has_timestamp_ns` SFINAE, `subscriber_birth_ns_`, `kBirthSlackNs`, `log_stale_once`, filter logic in `on_sample()`, new constructor parameter.
+- `common/ipc/include/ipc/zenoh_message_bus.h` — `filter_pre_birth` parameter threaded through `subscribe<T>` + `subscribe_lazy<T>`.
+- `common/ipc/include/ipc/message_bus.h` — `filter_pre_birth` parameter threaded through `subscribe<T>` + `subscribe_optional<T>`.
+- `tests/test_zenoh_coverage.cpp` — 4 new `ZenohStaleMessageFilter` tests + 8 existing direct-constructor sites migrated.
+- `tests/test_zenoh_ipc.cpp` — 19 subscribe sites + 14 direct-constructor sites migrated.
+- `tests/test_message_bus.cpp` — 3 subscribe sites migrated.
+- `process4_mission_planner/src/main.cpp` — commit 2 removes the per-site filter declarations (`planner_birth_ns`, `kPoseBirthSlackNs`, `stale_pose_logged`) and the per-tick check; both replaced by a comment pointing to the wrapper.
+
+**Test count:** +4 (`test_zenoh_coverage.cpp`).  Full `ctest -N`: **2062** (was 2058 on `feature/cold-start-hardening` integration HEAD).  All 2062 tests pass; format clean.
+
+**Why:**
+
+Wave 2 of the cold-start hardening epic (#740).  Layer 1 (PR #741) catches RTF-independent ARM-gate failures.  This wave catches a different failure family — Zenoh last-value cache delivering historic data from previous sessions — that's also RTF-independent but distinct from the EKF2-flicker mechanism.  Composes with PR-D (forthcoming) which closes the third leg: P3 publishing `INITIALIZING` pose with fresh timestamps.
+
+After this PR + PR-D land, every safety-critical IPC topic has automatic defense-in-depth against the three known cold-start IPC hazards.
+
+---
+
 ### Improvement #99 — P3 INITIALIZING Pose-Publish Guard (Epic #740 Layer 2, PR #752)
 
 **Date:** 2026-05-13

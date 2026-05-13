@@ -44,6 +44,37 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ---
 
+### 2026-05-13 (PR #750 review-fix follow-ups)
+
+#### `ZenohSubscriber` SFINAE-branch test coverage gap
+
+- **P2** — The new wrapper-level stale-message filter in `common/ipc/include/ipc/zenoh_subscriber.h::on_sample()` is gated by `if constexpr (has_validate<T>::value)` then `if constexpr (has_timestamp_ns<T>::value)`.  Four code paths exist:
+  1. `validate=Y, timestamp_ns=Y` — exercised by `ZenohStaleMessageFilter.*` tests in `tests/test_zenoh_coverage.cpp` (and most safety-critical IPC types).
+  2. `validate=Y, timestamp_ns=N` — no current IPC type matches; no test.
+  3. `validate=N, timestamp_ns=Y` — `ThreadHealth` matches but is publisher-side only (never subscribed via this wrapper); no test.
+  4. `validate=N, timestamp_ns=N` — no current IPC type matches; no test.
+  - **Why:** A future contributor who adds a non-validating timestamped type and relies on the constructor docstring will not be alerted that the filter silently fails to apply to their type.  Branch coverage is currently theoretical-only for paths 2 / 3 / 4.
+  - **Suggested fix:** add 1–2 tests in `tests/test_zenoh_coverage.cpp::ZenohStaleMessageFilter` using a synthetic test-only type (e.g. `struct NoValidateWithTs { uint64_t timestamp_ns; }`) that exercises path 3 and asserts the message passes through unfiltered.  Path 2 is harder to test meaningfully without a `validate()` implementation; path 4 is the no-op baseline already covered by happy-path subscriber tests.
+  - **When to do it:** next change that touches `on_sample()`, or when adding a new IPC type that opts out of the filter.
+
+#### Duplicate `### Fix #51` entry in BUG_FIXES.md
+
+- **P3** — Two entries share the heading `### Fix #51`: one is "Gazebo SITL Broken After Ubuntu System Update" (chronologically earlier), the other is "Depth Anything V2 ONNX Model Incompatible with OpenCV DNN".  Renumbering one of them (probably the later one) keeps the audit trail unambiguous.
+  - **When to do it:** any quiet window; trivial sed-replace + index update.
+
+---
+
+### 2026-05-13 (PR #744 review-fix follow-ups)
+
+#### `tests/lib_check_contacts.py` — no pytest coverage
+
+- **P2** — The Python state machine that parses `gz topic` text format and classifies drone-vs-obstacle pairs is currently only verified by its in-the-loop behaviour during a scenario run.  A regression in `parse_contacts()` (e.g. the `---` delimiter reset added in PR #744 review fixes, or the `is_allowlisted` substring rule) could silently produce phantom or missing events without any unit-test signal.
+  - **Why:** the helper is a small but load-bearing piece of cold-start observability — a quietly-broken parser would re-introduce the false-PASS class this gate exists to prevent.
+  - **Suggested fix:** add `tests/test_lib_check_contacts.py` with pytest cases for: (a) synthetic clean log → exit 0; (b) synthetic single-contact log → exit 1 with the expected pair; (c) allowlist suppression; (d) truncated `contact { ... }` block followed by `---` → no phantom event; (e) missing file → exit 2.  Wire into `tests/run_tests.sh` if pytest is on the CI path.
+  - **When to do it:** next time the parser is touched, or as part of the Tier-1 follow-up gate that will share the same state machine.
+
+---
+
 ### 2026-05-13 (PR #741 review-fix follow-ups — backlog items deferred from the review)
 
 These are valid suggestions surfaced by the [9-agent + Copilot review of PR #741](https://github.com/nmohamaya/companion_software_stack/pull/741#issuecomment-4440678222) that we chose to defer to backlog rather than fix in the immediate follow-up PR #743.  Each has a defined "when to do it" trigger so it doesn't get forgotten.
