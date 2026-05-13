@@ -3607,4 +3607,38 @@ Two-part fix (per #714):
 
 ---
 
-*Last updated after Improvement #94 (PR #725). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #95 — Cold-Start ARM-Gate Stability Debounce (Epic #740 / #727 Layer 1, PR #741)
+
+**Date:** 2026-05-13
+**Category:** Bug Fix — Flight safety (cold-start)
+**Issue:** [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (epic, Layer 1) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (root-cause investigation)
+**PR:** [#741](https://github.com/nmohamaya/companion_software_stack/pull/741)
+
+**What:**
+
+`tick_preflight()` armed on the first tick where `fc_state.armable == true`. PX4's `health_all_ok` can flicker true momentarily on Gazebo cold-start while EKF2 attitude is still settling (gyro/accel bias estimates wandering for the first 1-15 s after spawn). Arming on a single-tick flicker produces asymmetric mixer commands → asymmetric rotor spin-up → drone tips on the ground at takeoff. Reproduced today on **3 of 6 live-takeoff scenario runs** across scenarios 02, 17, 18, 25, 26 (#727 evidence matrix).
+
+Fix: require **N consecutive seconds** of continuous `armable=true` before sending ARM. Any drop back to false resets the stability tracker, so a brief flicker has to be followed by a full fresh window of stable armable before ARM can fire. Default window: 3.0 s, exposed as `mission_planner.preflight_armable_stable_s` via `drone::Config`.
+
+**Files modified:**
+
+- `process4_mission_planner/include/planner/mission_state_tick.h` — new `StateTickConfig::preflight_armable_stable_s` field + `armable_first_seen_ns_` member + debounce gate in `tick_preflight()`. Uses `drone::util::get_clock().now_ns()` for mockable time. Underflow-safe (clock-backward treated as fresh first-observation).
+- `common/util/include/util/config_keys.h` — new `PREFLIGHT_ARMABLE_STABLE_S` constant.
+- `process4_mission_planner/src/main.cpp` — plumb the config key into `tick_cfg.preflight_armable_stable_s`.
+- `config/default.json` — `mission_planner.preflight_armable_stable_s = 3.0` with rationale comment.
+- `tests/test_mission_state_tick.cpp` — +4 tests using `ScopedMockClock` (`MissionStateTickDebounceTest` × 3 + `MissionStateTickDebounceConfigTest` × 1).
+- `tests/TESTS.md` — count + suite rows updated.
+- `CLAUDE.md` + `docs/guides/CPP_PATTERNS_GUIDE.md` — adopted four new safety-critical C++ rules surfaced by this work (FSM-transition debounce, cold-start data hygiene, asymmetric pre-conditions, mockable time).
+- `docs/tracking/IMPROVEMENTS.md` — logged two P3 test-discipline items noticed in passing (ScopedMockClock fixture ordering; bulk migration of remaining `steady_clock::now()` direct usage).
+
+**Why:**
+
+Layer 1 of the cold-start hardening epic (#740). Composes with three more layers: PR-B (#722 wrapper-level Zenoh stale-message filter — defence-in-depth), PR-C (scenario flight-quality gates — observability so we know fixes work), PR-D (P3 INITIALIZING pose-publish guard — eliminates wrong-pose-at-first-waypoint).
+
+**Test count:** +4 (`test_mission_state_tick.cpp` 24 → 28). Full `ctest -N` on this branch: 2054 → 2058. All 28 tests in the file pass; format clean.
+
+**Empirical validation pending:** cold-start sweep on the integration branch after Wave 1 lands. Per #727 evidence matrix, success criterion = <5% rotor-asymmetry rate across 20 cold-starts of scenarios 02, 17, 18, 25, 26 (vs. ~50% observed today).
+
+---
+
+*Last updated after Improvement #95 (PR #741). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
