@@ -1,0 +1,114 @@
+Companion Software Stack
+Copyright (c) 2025-2026 Naveen Mohanan
+All rights reserved.
+
+This product contains software developed by Naveen Mohanan and licensed
+under the terms set out in `LICENSE` (currently GNU Affero General Public
+License v3.0) and `COMMERCIAL_LICENSE.md`. A subset of files identified in
+`PIPELINE_LICENSE.md` is separately licensed under proprietary terms.
+
+================================================================================
+AI / ML TRAINING — EXPLICIT RESERVATION OF RIGHTS
+================================================================================
+
+Notwithstanding any grant under `LICENSE`, the copyright holder expressly
+RESERVES ALL RIGHTS in this work for the purposes of:
+
+  - Training, fine-tuning, distillation, or otherwise adapting any
+    machine-learning model, including but not limited to large language
+    models, vision-language models, code-generation models, classifiers,
+    encoders, and embedding models;
+
+  - Building, augmenting, or evaluating any dataset intended for any of
+    the above purposes;
+
+  - Inclusion in any retrieval-augmented-generation (RAG) corpus,
+    vector database, or AI inference-time context window where the
+    inclusion is not expressly permitted by separate written agreement
+    with the copyright holder;
+
+  - Any other text-and-data mining (TDM) within the meaning of Article 2
+    of EU Directive (EU) 2019/790 of the European Parliament and of the
+    Council of 17 April 2019 on copyright and related rights in the
+    Digital Single Market.
+
+This reservation is made:
+
+  - Under Article 4(3) of EU Directive 2019/790 — the rightsholder hereby
+    expressly reserves the right to opt out of text-and-data mining, by
+    appropriate means in a machine-readable format (this NOTICE file,
+    the accompanying `.github/robots.txt`, the accompanying
+    `ai.robots.txt`, and the LICENSE terms).
+
+  - Under United States copyright law (17 U.S.C. § 106) — the rightsholder
+    reserves the exclusive rights of reproduction, preparation of
+    derivative works, and public distribution, and explicitly does not
+    grant a licence for the AI/ML training purposes enumerated above.
+
+  - Under United Kingdom copyright law (Copyright, Designs and Patents
+    Act 1988) — the rightsholder reserves all rights including those
+    that would otherwise be subject to the proposed (but not yet
+    enacted) UK text-and-data-mining exception.
+
+Use of this work for any of the purposes enumerated above without
+express prior written permission from the copyright holder constitutes
+copyright infringement and is prosecuted to the maximum extent of
+applicable law.
+
+For licensing inquiries regarding AI/ML training, dataset construction,
+or any other text-and-data mining use, contact:
+  - LinkedIn: https://www.linkedin.com/in/naveen-mohanan
+  - GitHub: @nmohamaya
+
+================================================================================
+THIRD-PARTY SOFTWARE — ATTRIBUTIONS
+================================================================================
+
+This product depends on the following third-party software. Each
+project's licence terms apply to its respective files; consult the
+project's own LICENSE and NOTICE files for the full terms.
+
+  Zenoh — Apache License 2.0 / EPL-2.0 dual licence
+    Copyright Eclipse Foundation
+    https://zenoh.io
+
+  nlohmann/json — MIT License
+    Copyright (c) Niels Lohmann
+    https://github.com/nlohmann/json
+
+  Eigen — MPL 2.0
+    Copyright Eigen contributors
+    https://eigen.tuxfamily.org
+
+  spdlog — MIT License
+    Copyright (c) Gabi Melman
+    https://github.com/gabime/spdlog
+
+  Google Test — BSD 3-Clause License
+    Copyright (c) Google Inc.
+    https://github.com/google/googletest
+
+  OpenCV — Apache License 2.0 (4.5+) / BSD 3-Clause (older)
+    Copyright OpenCV contributors
+    https://opencv.org
+
+  Cosys-AirSim — MIT License
+    Copyright (c) Cosys-Lab, University of Antwerp
+    https://github.com/Cosys-Lab/Cosys-AirSim
+
+  MAVSDK — BSD-3-Clause License
+    Copyright (c) MAVSDK contributors
+    https://mavsdk.mavlink.io
+
+  Gazebo — Apache License 2.0
+    Copyright (c) Open Source Robotics Foundation
+    https://gazebosim.org
+
+================================================================================
+DOCUMENT HISTORY
+================================================================================
+
+- 2026-05-11 — Initial NOTICE created; AI/ML training reservation of
+  rights added with EU CDSM Article 4(3) opt-out, US 17 U.S.C. § 106
+  reservation, and UK CDPA 1988 reservation. Third-party attributions
+  consolidated.
