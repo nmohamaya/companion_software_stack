@@ -394,6 +394,21 @@ inline constexpr const char* STATIC_OBSTACLES = "mission_planner.static_obstacle
 inline constexpr const char* PREFLIGHT_ARMABLE_STABLE_S =
     "mission_planner.preflight_armable_stable_s";
 
+// Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle gate.  PX4
+// can arm the instant its EKF2 checks scrape past threshold, before the
+// attitude estimate has converged; commanding TAKEOFF onto that marginal
+// state makes PX4's attitude controller fight a phantom tilt → asymmetric
+// rotor spin-up → sloppy / ground-contact takeoff (#746 smoke-sweep
+// evidence).  After `fc_state.armed`, the planner holds until the FC's own
+// attitude + velocity estimate proves stable for N consecutive FCState
+// observations.  Observation-counted (not wall-timed) so the gate is
+// RTF-immune in SITL.  `takeoff_settle_observations = 0` disables the gate
+// (legacy immediate takeoff) for headless dev / unit-test fixtures.
+inline constexpr const char* TAKEOFF_SETTLE_OBSERVATIONS =
+    "mission_planner.takeoff_settle_observations";
+inline constexpr const char* TAKEOFF_MAX_TILT_DEG     = "mission_planner.takeoff_max_tilt_deg";
+inline constexpr const char* TAKEOFF_MAX_VELOCITY_MPS = "mission_planner.takeoff_max_velocity_mps";
+
 namespace path_planner {
 inline constexpr const char* BACKEND            = "mission_planner.path_planner.backend";
 inline constexpr const char* RESOLUTION_M       = "mission_planner.path_planner.resolution_m";

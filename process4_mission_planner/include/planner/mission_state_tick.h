@@ -73,6 +73,35 @@ struct StateTickConfig {
     // scenarios 02, 17, 18, 25, 26 (#727 reproduction matrix); short enough
     // to keep mission startup latency acceptable on well-conditioned boots.
     float preflight_armable_stable_s{3.0f};
+
+    // Issue #740 (epic #727 Layer 4) — post-ARM, pre-TAKEOFF settle gate.
+    // The #741 `armable` debounce (above) proved necessary-but-insufficient:
+    // the #746 smoke sweep showed PX4 can report armed with a marginal EKF2
+    // attitude estimate, and commanding TAKEOFF onto that state makes PX4's
+    // attitude controller fight a phantom tilt error → asymmetric rotor
+    // spin-up → the drone skids sideways instead of climbing.  Layer 4 holds
+    // after `fc_state.armed` until the FC's *own* attitude + velocity
+    // estimate proves stable: `|roll|` and `|pitch|` within
+    // `takeoff_max_tilt_deg`, `sqrt(vx²+vy²+vz²)` within
+    // `takeoff_max_velocity_mps`, for `takeoff_settle_observations`
+    // *consecutive* FCState observations.  Any excursion resets the counter
+    // — the estimate must settle continuously, not cumulatively.
+    //
+    // **Observation-counted, not wall-timed** — deliberately.  The companion
+    // runs on wall-clock; Gazebo+PX4-SITL run on sim-time.  A wall-timed gate
+    // under real-time-factor < 1 would under-wait in sim-time.  Counting
+    // FCState observations is RTF-immune: PX4 paces FCState publication in
+    // sim-time, so N observations is N observations regardless of RTF, and
+    // the gate behaves identically in SITL and on real hardware.
+    //
+    // **Default:** 30 observations (~0.6 s at a 50 Hz FCState rate).
+    // **Disable:** `takeoff_settle_observations = 0` collapses to legacy
+    // immediate-takeoff-on-armed — used by headless dev configs and the
+    // unit-test fixture so tests exercising post-TAKEOFF behaviour don't
+    // need to feed a settled FCState attitude stream.
+    int   takeoff_settle_observations{30};
+    float takeoff_max_tilt_deg{5.0f};
+    float takeoff_max_velocity_mps{0.3f};
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -215,6 +244,14 @@ private:
     // it dropped back to false and reset the timer).
     uint64_t armable_first_seen_ns_ = 0;
 
+    // Issue #740 (epic #727 Layer 4) — count of consecutive armed-state
+    // FCState observations where attitude + velocity have been within the
+    // takeoff-settle thresholds.  Incremented per settled tick, reset to 0
+    // on any excursion or whenever `fc_state.armed` is false (disarm /
+    // re-PREFLIGHT).  Takeoff fires once it reaches
+    // `config_.takeoff_settle_observations`.
+    uint32_t armed_settle_count_ = 0;
+
     // Collision recovery state (Issue #226)
     enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
     bool                                  recovery_started_ = false;
@@ -315,12 +352,70 @@ private:
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
                         const FCSendFn& send_fc) {
         if (fc_state.armed) {
-            DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
-            fsm.on_takeoff();
-            takeoff_sent_          = false;
-            armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
+            // Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle
+            // gate.  The #746 smoke sweep proved the #741 `armable` debounce
+            // is necessary-but-insufficient: PX4 can report armed with a
+            // marginal EKF2 attitude estimate, and commanding TAKEOFF onto
+            // that state makes PX4's attitude controller fight a phantom
+            // tilt → asymmetric rotor spin-up → the drone skids sideways
+            // instead of climbing.  Hold until the FC's own attitude +
+            // velocity estimate proves stable for N *consecutive* FCState
+            // observations.  Observation-counted (not wall-timed) → RTF-immune
+            // in SITL (see StateTickConfig::takeoff_settle_observations).
+            const int settle_target = config_.takeoff_settle_observations;
+            if (settle_target <= 0) {
+                // Gate disabled by config — legacy immediate takeoff.
+                DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
+                fsm.on_takeoff();
+                takeoff_sent_          = false;
+                armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
+                armed_settle_count_    = 0;
+                return;
+            }
+
+            const float tilt_limit = std::max(0.0f, config_.takeoff_max_tilt_deg);
+            const float vel_limit  = std::max(0.0f, config_.takeoff_max_velocity_mps);
+            const float roll_deg   = std::abs(fc_state.roll) * 57.2957795f;   // rad → deg
+            const float pitch_deg  = std::abs(fc_state.pitch) * 57.2957795f;  // rad → deg
+            const float vel_mag = std::sqrt(fc_state.vx * fc_state.vx + fc_state.vy * fc_state.vy +
+                                            fc_state.vz * fc_state.vz);
+            const bool  attitude_settled = std::isfinite(roll_deg) && std::isfinite(pitch_deg) &&
+                                          std::isfinite(vel_mag) && roll_deg <= tilt_limit &&
+                                          pitch_deg <= tilt_limit && vel_mag <= vel_limit;
+
+            if (attitude_settled) {
+                ++armed_settle_count_;
+                if (armed_settle_count_ >= static_cast<uint32_t>(settle_target)) {
+                    DRONE_LOG_INFO("[Planner] Armed + attitude settled ({} obs: roll={:.1f}° "
+                                   "pitch={:.1f}° |v|={:.2f}m/s) — initiating takeoff",
+                                   armed_settle_count_, roll_deg, pitch_deg, vel_mag);
+                    fsm.on_takeoff();
+                    takeoff_sent_          = false;
+                    armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
+                    armed_settle_count_    = 0;
+                    return;
+                }
+                // Still accumulating consecutive settled observations.
+                return;
+            }
+
+            // Excursion — attitude/velocity outside thresholds (or non-finite).
+            // Reset the counter: the FC estimate must settle *continuously*,
+            // not cumulatively.  Log once per excursion-onset (count > 0) so a
+            // sustained-unsettled FC doesn't spam, but operators see why
+            // takeoff is being withheld.
+            if (armed_settle_count_ > 0) {
+                DRONE_LOG_INFO(
+                    "[Planner] Armed but attitude not settled (roll={:.1f}° pitch={:.1f}° "
+                    "|v|={:.2f}m/s; limits tilt={:.1f}° vel={:.2f}m/s) — settle counter reset",
+                    roll_deg, pitch_deg, vel_mag, tilt_limit, vel_limit);
+            }
+            armed_settle_count_ = 0;
             return;
         }
+        // Not armed — clear the Layer 4 settle counter so a future arm starts
+        // a fresh consecutive-observation window (covers disarm + re-PREFLIGHT).
+        armed_settle_count_ = 0;
         // PR #741 review (4 agents convergent): use a single clock domain
         // (`drone::util::get_clock()`) for ALL PREFLIGHT timing so unit tests
         // with `ScopedMockClock` can drive every throttle deterministically.

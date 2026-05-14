@@ -211,6 +211,10 @@
         "rtl_min_dwell_seconds": 5,
         "_preflight_armable_stable_s_comment": "Issue #740 (epic #727): require N consecutive seconds of fc_state.armable=true before sending ARM. Debounces PX4 health_all_ok flicker on Gazebo cold-start that produces asymmetric rotor spin-up.",
         "preflight_armable_stable_s": 3.0,
+        "_takeoff_settle_comment": "Issue #740 (epic #727) Layer 4: post-ARM, pre-TAKEOFF settle gate. PX4 can report armed with a marginal EKF2 attitude estimate; commanding TAKEOFF onto it makes the attitude controller fight a phantom tilt -> asymmetric rotor spin-up -> sideways skid (#746 smoke evidence). Hold until FC-reported |roll|/|pitch| <= takeoff_max_tilt_deg AND velocity magnitude <= takeoff_max_velocity_mps for takeoff_settle_observations consecutive FCState observations. Observation-counted (not wall-timed) so it is RTF-immune in SITL. Set takeoff_settle_observations=0 to disable (legacy immediate takeoff).",
+        "takeoff_settle_observations": 30,
+        "takeoff_max_tilt_deg": 5.0,
+        "takeoff_max_velocity_mps": 0.3,
         "path_planner": {
             "backend": "dstar_lite",
             "ramp_dist_m": 3.0,

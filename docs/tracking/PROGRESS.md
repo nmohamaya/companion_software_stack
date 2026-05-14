@@ -3837,4 +3837,46 @@ After this PR + PR #745 land, every safety-critical IPC topic has automatic defe
 
 ---
 
-*Last updated after Improvement #99 (PR #752). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #100 — Post-ARM Pre-TAKEOFF Attitude/Velocity Settle Gate (Epic #740 Layer 4, PR pending)
+
+**Date:** 2026-05-14
+**Category:** Bug Fix — Flight safety (cold-start)
+**Issue:** [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (epic, Layer 4) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (root-cause investigation) / [#746](https://github.com/nmohamaya/companion_software_stack/issues/746) (Layer 4 sub-issue, smoke-sweep evidence)
+
+**What:**
+
+The Wave 1+2 cold-start smoke sweep (#746 comment, 2026-05-14) **falsified Layer 1's hypothesis**. The asymmetric rotor spin-up + sideways-skid takeoff still reproduced with Wave 1+2 merged — and the logs showed why: the #741 `armable` debounce engaged correctly every run, but `armable` (MAVSDK `health_all_ok`) fired at wildly nondeterministic times across runs (0.1 s / 10 s / 25 s after PREFLIGHT), and in one run it latched stably-true 22 s before PX4's commander would actually accept an ARM. Debouncing `armable` for 3 s doesn't help when the signal is stably-wrong.
+
+Refined root cause: PX4 arms the instant its EKF2 checks scrape past threshold — at which point the attitude estimate hasn't converged. PX4's attitude controller then commands differential (front-pair vs rear-pair) thrust to "correct" a phantom pitch error, inducing a *real* pitch moment → the drone skids sideways instead of climbing (#746 run-1 VIO trace: 11.8 m sideways at <1 m altitude, 8 s after arming).
+
+Layer 4 inserts a **post-ARM, pre-TAKEOFF settle gate** in `tick_preflight`: after `fc_state.armed` goes true, hold until the FC-reported attitude + velocity estimate proves stable — `|roll|` and `|pitch|` within `takeoff_max_tilt_deg`, `sqrt(vx²+vy²+vz²)` within `takeoff_max_velocity_mps` — for `takeoff_settle_observations` *consecutive* `FCState` observations. Any excursion resets the counter (the estimate must settle continuously, not cumulatively).
+
+**RTF-immune by design:** the gate counts observations, not wall-seconds. The companion runs on wall-clock; Gazebo+PX4-SITL run on sim-time — a wall-timed gate under real-time-factor < 1 would under-wait in sim-time. Counting `FCState` observations sidesteps the clock domain entirely: PX4 paces `FCState` publication in sim-time, so N observations is N observations regardless of RTF, and the gate behaves identically in SITL and on real hardware. No new MAVLink plumbing — `FCState` already carries `roll/pitch/yaw/vx/vy/vz`.
+
+**How it works:**
+
+1. `tick_preflight`'s `if (fc_state.armed)` branch no longer transitions immediately. It evaluates attitude/velocity against the thresholds; settled → `++armed_settle_count_`, excursion → reset to 0.
+2. When `armed_settle_count_` reaches `takeoff_settle_observations` → `fsm.on_takeoff()`.
+3. `armed_settle_count_` is also reset whenever `fc_state.armed` is false (disarm / re-PREFLIGHT).
+4. **Disable path:** `takeoff_settle_observations = 0` collapses to legacy immediate-takeoff-on-armed (headless dev / unit-test fixtures).
+
+**Files modified:**
+
+- `process4_mission_planner/include/planner/mission_state_tick.h` — 3 new `StateTickConfig` fields, `armed_settle_count_` member, the settle gate in `tick_preflight`.
+- `common/util/include/util/config_keys.h` — `TAKEOFF_SETTLE_OBSERVATIONS`, `TAKEOFF_MAX_TILT_DEG`, `TAKEOFF_MAX_VELOCITY_MPS`.
+- `process4_mission_planner/src/main.cpp` — config load + defensive clamps (mirrors the #743 `preflight_armable_stable_s` clamp pattern).
+- `config/default.json` — `mission_planner.takeoff_settle_observations = 30`, `takeoff_max_tilt_deg = 5.0`, `takeoff_max_velocity_mps = 0.3` with rationale comment.
+- `tests/test_mission_state_tick.cpp` — 4 new tests (`MissionStateTickTakeoffSettleTest` × 3 + `MissionStateTickTakeoffSettleConfigTest` × 1). No `ScopedMockClock` needed — the gate is observation-counted.
+- `tests/TESTS.md` — count + suite rows updated.
+
+**Test count:** +4 (`test_mission_state_tick.cpp` 32 → 36). All 36 tests in the file pass; full build clean (`-Werror`); format clean.
+
+**Why:**
+
+Layer 4 of the cold-start hardening epic (#740) — and the one the #746 smoke sweep proved is actually load-bearing. Layer 1 (#741) remains useful as a coarse "FC is talking and claims ready" filter, but Layer 4 is the *direct* takeoff-safety gate: don't commit the motors until the FC's own attitude/velocity estimate proves it's settled. It acts on the direct signal (FC attitude), not a proxy (`health_all_ok`) or a downstream symptom (rotor sync).
+
+**Empirical validation pending:** re-run the 4-scenario cold-start smoke sweep with Layer 4 enabled — confirm the settle gate delays `on_takeoff()` until attitude is stable and the sideways-skid is reduced.
+
+---
+
+*Last updated after Improvement #100 (Epic #740 Layer 4). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

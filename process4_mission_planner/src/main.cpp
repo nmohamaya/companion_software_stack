@@ -457,6 +457,52 @@ int main(int argc, char* argv[]) {
                                           0.0f, kMaxArmableStableS);
     }
     tick_cfg.preflight_armable_stable_s = armable_stable_s_raw;
+
+    // Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle gate.
+    // Same defensive-clamp-on-load policy as the debounce window above.
+    //   - takeoff_settle_observations: int count; clamp to [0, 1000].  0
+    //     disables the gate (legacy immediate takeoff).  Upper bound 1000
+    //     (~20 s at 50 Hz) is clearly mis-config — a real FC that can't
+    //     settle attitude in that long has a sensor fault, not a tuning need.
+    //   - takeoff_max_tilt_deg: degrees; clamp to [0, 45].  >45° pre-takeoff
+    //     tilt is physically implausible on the ground.
+    //   - takeoff_max_velocity_mps: m/s; clamp to [0, 5].  >5 m/s "settled"
+    //     velocity defeats the gate's purpose.
+    constexpr int   kMaxSettleObs  = 1000;
+    constexpr float kMaxSettleTilt = 45.0f;
+    constexpr float kMaxSettleVel  = 5.0f;
+    int             settle_obs_raw =
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::TAKEOFF_SETTLE_OBSERVATIONS, 30);
+    if (settle_obs_raw < 0 || settle_obs_raw > kMaxSettleObs) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations {} outside [0, {}] — clamping. "
+                       "0 disables the Layer 4 settle gate; values > {} suggest sensor "
+                       "mis-config rather than a tuning need.",
+                       settle_obs_raw, kMaxSettleObs, kMaxSettleObs);
+        settle_obs_raw = std::clamp(settle_obs_raw, 0, kMaxSettleObs);
+    }
+    float settle_tilt_raw =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::TAKEOFF_MAX_TILT_DEG, 5.0f);
+    if (!std::isfinite(settle_tilt_raw) || settle_tilt_raw < 0.0f ||
+        settle_tilt_raw > kMaxSettleTilt) {
+        DRONE_LOG_WARN("[Planner] takeoff_max_tilt_deg {:.2f} outside [0, {:.1f}] (or non-finite) "
+                       "— clamping.",
+                       settle_tilt_raw, kMaxSettleTilt);
+        settle_tilt_raw = std::clamp(std::isfinite(settle_tilt_raw) ? settle_tilt_raw : 5.0f, 0.0f,
+                                     kMaxSettleTilt);
+    }
+    float settle_vel_raw =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::TAKEOFF_MAX_VELOCITY_MPS, 0.3f);
+    if (!std::isfinite(settle_vel_raw) || settle_vel_raw < 0.0f || settle_vel_raw > kMaxSettleVel) {
+        DRONE_LOG_WARN("[Planner] takeoff_max_velocity_mps {:.2f} outside [0, {:.1f}] (or "
+                       "non-finite) — clamping.",
+                       settle_vel_raw, kMaxSettleVel);
+        settle_vel_raw = std::clamp(std::isfinite(settle_vel_raw) ? settle_vel_raw : 0.3f, 0.0f,
+                                    kMaxSettleVel);
+    }
+    tick_cfg.takeoff_settle_observations = settle_obs_raw;
+    tick_cfg.takeoff_max_tilt_deg        = settle_tilt_raw;
+    tick_cfg.takeoff_max_velocity_mps    = settle_vel_raw;
+
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
