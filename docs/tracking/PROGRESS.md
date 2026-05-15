@@ -3837,7 +3837,7 @@ After this PR + PR #745 land, every safety-critical IPC topic has automatic defe
 
 ---
 
-### Improvement #100 — Post-ARM Pre-TAKEOFF Attitude/Velocity Settle Gate (Epic #740 Layer 4, PR pending)
+### Improvement #100 — Post-ARM Pre-TAKEOFF Attitude/Velocity Settle Gate (Epic #740 Layer 4, PR #763)
 
 **Date:** 2026-05-14
 **Category:** Bug Fix — Flight safety (cold-start)
@@ -3869,7 +3869,22 @@ Layer 4 inserts a **post-ARM, pre-TAKEOFF settle gate** in `tick_preflight`: aft
 - `tests/test_mission_state_tick.cpp` — 4 new tests (`MissionStateTickTakeoffSettleTest` × 3 + `MissionStateTickTakeoffSettleConfigTest` × 1). No `ScopedMockClock` needed — the gate is observation-counted.
 - `tests/TESTS.md` — count + suite rows updated.
 
-**Test count:** +4 (`test_mission_state_tick.cpp` 32 → 36). All 36 tests in the file pass; full build clean (`-Werror`); format clean.
+**Test count:** +7 (`test_mission_state_tick.cpp` 32 → 39). Initial 4 (`SettleGateHoldsUntilNConsecutiveObservations`, `SettleGateExcursionResetsCounter`, `SettleGateResetsWhenDisarmed`, `ZeroObservationsDisablesGate`) plus 3 from the PR #763 review-fix round (`SettleGateVelocityExcursionResetsCounter`, `SettleGateNonFiniteResetsCounter`, `SettleGateNeverSettlesHoldsPreflight`). All 39 tests in the file pass; full build clean (`-Werror`); format clean.
+
+**PR #763 review-fix follow-ups (Pass 1 + Pass 2 + Copilot, addressed in-PR):**
+
+- **API contract (P1):** clarified the `preflight_arm_retry_s` / `preflight_wait_log_s` docstring — they are NOT runtime-configurable despite the field-name hint; wiring them through `drone::Config` is tracked in IMPROVEMENTS.md.
+- **Coverage (P2 ×2 — convergent test-unit + test-quality):** added the missing velocity-excursion + non-finite-FC-estimate (NaN) tests so both branches of the `attitude_settled` predicate are covered.
+- **Fault recovery (P2):** excursion log promoted INFO → WARN — drone is armed and attitude is moving outside thresholds, that's a degraded condition. Added a "never-settles holds PREFLIGHT" test pinning the fail-safe contract; the corresponding *escalation* (timeout → disarm-with-fault) is intentionally deferred to **#718** (which already tracks the same gap for the Layer 1 armable debounce — both gates share one escalation design).
+- **Code quality (P2):** extracted `validate_and_clamp<T>` helper in `process4_mission_planner/src/main.cpp` collapsing 4 near-identical clamp stanzas into a single template; promoted `kRadToDeg` to `common/util/include/util/math_constants.h` (consumed by both `cosys_radar.h` and the Layer 4 gate).
+- **Member docstring (P2):** `armed_settle_count_` reset paths fully enumerated.
+- **Security (P3):** negative `takeoff_settle_observations` now clamps to **1**, not 0 — protects the `=0` disable sentinel from a typo'd negative silently disabling the gate; added a startup WARN if the resolved value is exactly 0 so an accidental production-disable is loud.
+- Doc-bookkeeping (P3): TESTS.md mission row `~287→~291`, this entry's "PR pending" → "PR #763".
+
+**Deferred to follow-up work:**
+
+- Block extraction (the ~50-line armed-block in `tick_preflight`) → **#718** — the right shape will be clearer once the timeout-escalation logic lands inside the same block.
+- Wiring `preflight_arm_retry_s` / `preflight_wait_log_s` to `drone::Config` → already tracked in `docs/tracking/IMPROVEMENTS.md` (filed from PR #741 review).
 
 **Why:**
 

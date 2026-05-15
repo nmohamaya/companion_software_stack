@@ -8,6 +8,7 @@
 #include "util/mock_clock.h"
 
 #include <chrono>
+#include <limits>  // std::numeric_limits — NaN test for SettleGateNonFiniteResetsCounter
 #include <thread>
 #include <vector>
 
@@ -728,6 +729,101 @@ TEST_F(MissionStateTickTakeoffSettleTest, SettleGateResetsWhenDisarmed) {
 
     // 5th post-re-arm settled observation fires it.
     do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// PR #763 review (test-unit + test-quality P2): velocity-excursion path
+// was untested — only roll excursion was exercised.  This pins the
+// `vel_mag <= vel_limit` branch: a mid-window velocity spike resets the
+// counter, just like a tilt excursion does.  Without this test, a refactor
+// that dropped the velocity check entirely (`vel_mag` from the
+// `attitude_settled` predicate) would still pass the existing 4 tests.
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateVelocityExcursionResetsCounter) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);  // settled (vx=vy=vz=0)
+
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Velocity excursion: |v| = 1.0 m/s — well past the 0.3 m/s limit.
+    // Roll/pitch stay zero so this isolates the velocity branch.
+    auto fc_moving = make_fc(true, 0);
+    fc_moving.vx   = 1.0f;
+    do_tick(pose, fc_moving);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // 4 more settled observations must NOT fire — counter reset, not resumed.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Takeoff fired after only 4 post-velocity-excursion settled observations — "
+           "the velocity-branch reset is not happening (Layer 4 logic bug).";
+
+    // 5th fires it.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// PR #763 review (test-unit + test-quality P2): the `std::isfinite` guards
+// in the gate predicate were uncovered — a NaN attitude (the exact
+// cold-start hazard the gate exists to defend against — corrupted EKF2
+// estimate publishing a NaN field) needs to count as an excursion, not
+// silently pass the threshold check.  This pins the non-finite branch.
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateNonFiniteResetsCounter) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);
+
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // NaN roll — exactly the kind of garbage a cold-start EKF2 estimate
+    // could produce.  Must NOT pass the threshold check (else a bad FC
+    // estimate could short-circuit the gate).
+    auto fc_nan = make_fc(true, 0);
+    fc_nan.roll = std::numeric_limits<float>::quiet_NaN();
+    do_tick(pose, fc_nan);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Counter must have reset — 4 more settled observations should not fire.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Takeoff fired after only 4 post-NaN settled observations — the `std::isfinite` "
+           "guard isn't resetting the counter, so a NaN FC estimate could skip the gate.";
+
+    // 5th fires it.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// PR #763 review (fault-recovery P3 + test-quality): the "never settles"
+// failure mode (FC attitude estimate persistently outside thresholds — a
+// genuine sensor fault, EKF2 stuck, or persistent vibration) was untested.
+// Pin the safety contract: the FSM stays in PREFLIGHT indefinitely, no
+// crash, no spurious transition.  The corresponding fault-escalation work
+// (timeout + escalate to disarm-with-fault) is tracked in #718 — that
+// ISSUE expansion is OUT of this PR's scope; the test here just verifies
+// the current fail-safe behaviour (grounded > bad takeoff).
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateNeverSettlesHoldsPreflight) {
+    auto pose = make_pose(0, 0, 0);
+
+    // 50 consecutive armed-but-tilted observations — far more than the
+    // 5-observation threshold.  None should ever count as settled.
+    auto fc_tilted = make_fc(true, 0);
+    fc_tilted.roll = 0.30f;  // ~17° — well past the 5° tilt limit
+
+    for (int i = 0; i < 50; ++i) {
+        do_tick(pose, fc_tilted);
+        ASSERT_EQ(fsm.state(), MissionState::PREFLIGHT)
+            << "FSM left PREFLIGHT on tick " << (i + 1)
+            << " despite attitude never settling — Layer 4 fail-safe contract violated "
+               "(should hold PREFLIGHT until either attitude settles or the operator "
+               "intervenes; #718 will add a timeout-escalation path on top of this).";
+    }
+
+    // Confirm the gate does eventually release once attitude settles —
+    // proves we held PREFLIGHT for the right reason (excursion), not
+    // because the gate is broken.
+    auto fc_armed = make_fc(true, 0);
+    for (int i = 0; i < 5; ++i) do_tick(pose, fc_armed);
     EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
 }
 

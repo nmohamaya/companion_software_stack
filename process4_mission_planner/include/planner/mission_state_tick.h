@@ -19,6 +19,7 @@
 #include "util/diagnostic.h"
 #include "util/iclock.h"
 #include "util/ilogger.h"
+#include "util/math_constants.h"
 #include "util/scoped_timer.h"
 
 #include <algorithm>
@@ -52,12 +53,23 @@ struct StateTickConfig {
     // mission_planner.obstacle_avoidance.influence_radius_m.
     float avoider_influence_radius_m = 5.0f;
 
-    // Issue #716 — PREFLIGHT ARM gating timings.  Both are exposed via
-    // `drone::Config` (mission_planner.preflight.*).  Defaults match the
-    // values empirically validated on scenario 18:
+    // Issue #716 — PREFLIGHT ARM gating timings.  Defaults match the values
+    // empirically validated on scenario 18:
     //   - 3 s ARM retry: short enough to recover within a few ticks if PX4
     //     drops an ARM message; long enough not to flood MAVLink.
     //   - 1 s wait log: visible to operators without spamming the log.
+    //
+    // **Currently NOT runtime-configurable.**  Despite the `mission_planner.
+    // preflight.*` shape that an operator might infer from the field names,
+    // these two are read straight from the struct defaults — `main.cpp` does
+    // not call `cfg.get<>()` for them, no entries exist in `config/default.
+    // json`, and no constants exist in `config_keys.h`.  Wiring them through
+    // `drone::Config` (so they can be tuned per-scenario) is tracked in
+    // `docs/tracking/IMPROVEMENTS.md` ("Sibling `cfg_key` constants for
+    // `preflight_arm_retry_s` / `preflight_wait_log_s` absent" — filed from
+    // the PR #741 review).  Surfaced again by the PR #763 (Layer 4) review:
+    // the new `takeoff_settle_*` keys land alongside as genuinely
+    // config-backed, making the contrast stark.
     int preflight_arm_retry_s{3};
     int preflight_wait_log_s{1};
 
@@ -246,10 +258,16 @@ private:
 
     // Issue #740 (epic #727 Layer 4) — count of consecutive armed-state
     // FCState observations where attitude + velocity have been within the
-    // takeoff-settle thresholds.  Incremented per settled tick, reset to 0
-    // on any excursion or whenever `fc_state.armed` is false (disarm /
-    // re-PREFLIGHT).  Takeoff fires once it reaches
-    // `config_.takeoff_settle_observations`.
+    // takeoff-settle thresholds.  Incremented per settled tick.  Reset to 0
+    // on:
+    //   (a) any excursion (attitude/velocity outside thresholds, or
+    //       non-finite from the FC),
+    //   (b) `fc_state.armed` going false (disarm / re-PREFLIGHT), and
+    //   (c) the gate-disabled path firing takeoff
+    //       (`takeoff_settle_observations == 0`) — for documentation
+    //       completeness; the counter is a no-op in that branch since it
+    //       never had a chance to grow.
+    // Takeoff fires once it reaches `config_.takeoff_settle_observations`.
     uint32_t armed_settle_count_ = 0;
 
     // Collision recovery state (Issue #226)
@@ -375,8 +393,8 @@ private:
 
             const float tilt_limit = std::max(0.0f, config_.takeoff_max_tilt_deg);
             const float vel_limit  = std::max(0.0f, config_.takeoff_max_velocity_mps);
-            const float roll_deg   = std::abs(fc_state.roll) * 57.2957795f;   // rad → deg
-            const float pitch_deg  = std::abs(fc_state.pitch) * 57.2957795f;  // rad → deg
+            const float roll_deg   = std::abs(fc_state.roll) * drone::util::kRadToDeg;
+            const float pitch_deg  = std::abs(fc_state.pitch) * drone::util::kRadToDeg;
             const float vel_mag = std::sqrt(fc_state.vx * fc_state.vx + fc_state.vy * fc_state.vy +
                                             fc_state.vz * fc_state.vz);
             const bool  attitude_settled = std::isfinite(roll_deg) && std::isfinite(pitch_deg) &&
@@ -404,8 +422,15 @@ private:
             // not cumulatively.  Log once per excursion-onset (count > 0) so a
             // sustained-unsettled FC doesn't spam, but operators see why
             // takeoff is being withheld.
+            //
+            // PR #763 review (fault-recovery P2): logged at WARN — the drone
+            // is armed (motors potentially spinning at idle) and the FC's
+            // attitude estimate is moving outside safety thresholds.  That's
+            // a degraded condition, not routine status.  An operator
+            // monitoring at INFO would otherwise miss the excursion pattern
+            // entirely.
             if (armed_settle_count_ > 0) {
-                DRONE_LOG_INFO(
+                DRONE_LOG_WARN(
                     "[Planner] Armed but attitude not settled (roll={:.1f}° pitch={:.1f}° "
                     "|v|={:.2f}m/s; limits tilt={:.1f}° vel={:.2f}m/s) — settle counter reset",
                     roll_deg, pitch_deg, vel_mag, tilt_limit, vel_limit);

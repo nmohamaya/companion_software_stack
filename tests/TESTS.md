@@ -50,7 +50,7 @@
 | `ipc` | Zenoh IPC primitives, message bus, wire format, serializer | ~296 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~86 |
 | `perception` | Kalman tracker, fusion engine (UKF+camera+radar), color contour, YOLOv8 | ~189 |
-| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D, geofence, event bus | ~287 |
+| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D, geofence, event bus | ~291 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, MAVLink, and plugin HAL backends | ~137 |
 | `payload` | GimbalController servo simulation | ~34 |
@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **100 C++ + 5 shell + 1 Python** | **2086 (no SDK, 8 Cosys-SDK tests skipped) / 2094 (+SDK) + 42 + 29 + 250+** | Active baseline updated for Issue #740 Layer 4 (post-ARM takeoff settle gate, +4 tests in `test_mission_state_tick.cpp`). Prior baseline `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/cold-start-hardening` integration branch: PR #741 (Layer 1, merged) +4; PR #743 (review-fixes, merged) +4; Issue #740 Layer 4 (this) +4 (`SettleGateHoldsUntilNConsecutiveObservations`, `SettleGateExcursionResetsCounter`, `SettleGateResetsWhenDisarmed`, `ZeroObservationsDisablesGate`). Earlier `feature/perception-v2-integration` deltas since PR #704: PR #711 net −7; PR #717 +2; PR #725 +1 net. For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **100 C++ + 5 shell + 1 Python** | **2089 (no SDK, 8 Cosys-SDK tests skipped) / 2097 (+SDK) + 42 + 29 + 250+** | Active baseline updated for Issue #740 Layer 4 (post-ARM takeoff settle gate, +7 tests in `test_mission_state_tick.cpp`). Prior baseline `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/cold-start-hardening` integration branch: PR #741 (Layer 1, merged) +4; PR #743 (review-fixes, merged) +4; Issue #740 Layer 4 (PR #763) +7 (initial 4 — `SettleGateHoldsUntilNConsecutiveObservations`, `SettleGateExcursionResetsCounter`, `SettleGateResetsWhenDisarmed`, `ZeroObservationsDisablesGate` — plus 3 from PR #763 review fixes: `SettleGateVelocityExcursionResetsCounter`, `SettleGateNonFiniteResetsCounter`, `SettleGateNeverSettlesHoldsPreflight`). Earlier `feature/perception-v2-integration` deltas since PR #704: PR #711 net −7; PR #717 +2; PR #725 +1 net. For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -719,7 +719,7 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 36 tests
+### test_mission_state_tick.cpp — 39 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
 states (PREFLIGHT, TAKEOFF, NAVIGATE, NAVIGATE_UNSTUCK, RTL, LAND) with
@@ -740,7 +740,7 @@ cases.
 | `MissionStateTickTest` | 20 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, NAVIGATE_UNSTUCK disarm-abort (#503), RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π], **Issue #716 PREFLIGHT ARM gating**: waits when `fc_state.armable=false`, fires ARM on armable transition true, does not resend ARM within retry interval, handles armable true→false→true flicker without spurious re-arm |
 | `MissionStateTickDebounceTest` | 7 | **Issue #740 ARM-gate stability debounce**: flicker resets the stability window (no premature ARM after EKF2 blip); continuous armable for the full window fires ARM exactly once; continuous armable below the window does not fire ARM. **PR #743 additions**: clock-rewind safety guard (false-green protection against unsigned-subtraction underflow); ARM-retry × debounce compose correctly at production defaults (no duplicate ARM within 3s retry, second ARM after 3s+); exact-window boundary semantics (3.0s == window_ns counts as elapsed); armed-transition resets `armable_first_seen_ns_` for future re-PREFLIGHT |
 | `MissionStateTickDebounceConfigTest` | 1 | Zero-window config disables the debounce (preserves legacy single-tick behaviour for headless dev / non-Gazebo tests) |
-| `MissionStateTickTakeoffSettleTest` | 3 | **Issue #740 Layer 4 post-ARM settle gate**: takeoff held until N consecutive settled (level + near-zero-velocity) FCState observations, fires exactly on the Nth; an attitude excursion mid-window resets the counter (continuous, not cumulative); a disarm mid-window clears the counter so a re-arm must re-accumulate the full N |
+| `MissionStateTickTakeoffSettleTest` | 6 | **Issue #740 Layer 4 post-ARM settle gate**: takeoff held until N consecutive settled (level + near-zero-velocity) FCState observations, fires exactly on the Nth; tilt excursion mid-window resets the counter; **velocity excursion** mid-window resets (PR #763 review); **non-finite (NaN) FC estimate** counts as excursion, isolating the `std::isfinite` guard (PR #763 review); a disarm mid-window clears the counter so a re-arm must re-accumulate the full N; **never-settles** holds PREFLIGHT indefinitely (fail-safe, escalation tracked in #718) |
 | `MissionStateTickTakeoffSettleConfigTest` | 1 | `takeoff_settle_observations = 0` disables the Layer 4 gate (legacy immediate takeoff on first armed observation) |
 | `MissionStateTickUnstuckTest` | 2 | NAVIGATE_UNSTUCK escalation behaviour (#503) |
 | `Issue624YawRefreshTest` | 2 | Post-avoider yaw-towards-velocity refresh (#624) |

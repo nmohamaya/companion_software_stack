@@ -24,6 +24,7 @@
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
+#include "util/math_constants.h"
 
 #include <algorithm>
 #include <atomic>
@@ -75,12 +76,15 @@ namespace drone::hal {
 ///   auto dets = radar.read();
 class CosysRadarBackend : public IRadar {
 public:
-    // PR #636 P2 review: lift the magic π out of the call sites
-    // (was repeated 8 times across the ctor / log lines) and give it
-    // typed constants for radians ↔ degrees conversion.
-    static constexpr float kPi       = 3.14159265358979323846f;
-    static constexpr float kDegToRad = kPi / 180.0f;
-    static constexpr float kRadToDeg = 180.0f / kPi;
+    // PR #636 P2 review: lift the magic π out of the call sites (was
+    // repeated 8 times across the ctor / log lines) and use typed constants
+    // for radians ↔ degrees conversion.  PR #763 review (code-quality P2):
+    // promoted to `common/util/math_constants.h` so the same constants are
+    // shared with the planner's Layer 4 settle gate (Issue #740) without
+    // re-deriving the literal in every header.
+    static constexpr float kPi       = drone::util::kPi;
+    static constexpr float kDegToRad = drone::util::kDegToRad;
+    static constexpr float kRadToDeg = drone::util::kRadToDeg;
 
     // PR #636 P2 review: positive-floor on cluster bin sizes — a config
     // value of 0 (typo, tampering, or future "disable clustering" flag
