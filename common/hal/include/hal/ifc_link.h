@@ -32,6 +32,40 @@ struct FCState {
     /// SimpleFlight has no real preflight check and accepts ARM unconditionally.
     /// SimulatedFCLink mirrors that pattern (always armable when connected).
     bool armable{false};
+
+    /// Issue #740 Layer 4 — full body-frame attitude estimate from the FC,
+    /// in radians.  Required by the planner's post-ARM, pre-TAKEOFF settle
+    /// gate (see `process4_mission_planner/include/planner/mission_state_
+    /// tick.h::tick_preflight`) which won't command TAKEOFF until the FC
+    /// reports `|roll|`/`|pitch|` within a tilt threshold for N consecutive
+    /// observations.  Zero default keeps backends that don't populate the
+    /// field (currently `SimulatedFCLink`) trivially-settled — acceptable
+    /// for that backend because it has no real EKF.
+    /// MavlinkFCLink: from `Telemetry::subscribe_attitude_euler`.
+    /// CosysFCLink:   derived from `kinematics_estimated.pose.orientation`
+    ///                quaternion via the standard NED Euler conversion.
+    /// SimulatedFCLink: zero (no real EKF; tests that exercise Layer 4
+    ///                  inject attitude on the IPC FCState directly).
+    float roll{0.0f};
+    float pitch{0.0f};
+    float yaw{0.0f};
+
+    /// Issue #740 Layer 4 — full velocity vector in NED frame (m/s).
+    /// `ground_speed` above is the horizontal magnitude `sqrt(vx²+vy²)` of
+    /// these components and remains for backwards compatibility.  Layer 4
+    /// uses `sqrt(vx²+vy²+vz²)` (full magnitude) as one of two settle
+    /// predicates — vertical motion is non-zero on the ground only during
+    /// disturbances, which is exactly what we want to detect.
+    /// MavlinkFCLink: from `Telemetry::subscribe_velocity_ned` (north,
+    ///                east, down).
+    /// CosysFCLink:   from `kinematics_estimated.twist.linear` (NED).
+    /// SimulatedFCLink: zero by default; the existing `last_v[xy z]_`
+    ///                  fields driven by `send_trajectory()` are not the
+    ///                  FC-reported estimate, they're commanded velocities
+    ///                  — different signal.
+    float vx{0.0f};
+    float vy{0.0f};
+    float vz{0.0f};
 };
 
 /// Abstract flight controller link interface.

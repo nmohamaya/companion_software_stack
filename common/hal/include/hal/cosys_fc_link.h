@@ -389,10 +389,39 @@ private:
                 // NOTE: SimpleFlight reports altitude above spawn, not true AGL.
                 s.altitude_rel = static_cast<float>(-ms.kinematics_estimated.pose.position.z());
 
-                // Ground speed from horizontal NED velocity
+                // NED velocity from AirSim kinematics.  Issue #740 Layer 4
+                // (PR #763 Copilot review): store individual NED components
+                // in addition to ground_speed so the planner's post-ARM
+                // settle gate can read full velocity (`sqrt(vx²+vy²+vz²)`)
+                // and detect vertical disturbances on the ground that don't
+                // show up in horizontal-only ground_speed.
                 const float vx = static_cast<float>(ms.kinematics_estimated.twist.linear.x());
                 const float vy = static_cast<float>(ms.kinematics_estimated.twist.linear.y());
+                const float vz = static_cast<float>(ms.kinematics_estimated.twist.linear.z());
+                s.vx           = vx;
+                s.vy           = vy;
+                s.vz           = vz;
                 s.ground_speed = std::sqrt(vx * vx + vy * vy);
+
+                // Issue #740 Layer 4 (PR #763 Copilot review): body-frame
+                // Euler attitude derived from the AirSim orientation
+                // quaternion via the standard NED → Euler conversion.
+                // Required by the planner's post-ARM settle gate which
+                // gates TAKEOFF on `|roll|`/`|pitch|` within thresholds.
+                // Without this, the gate reads default-zero attitude and
+                // its predicate becomes trivially-true (the gate
+                // degenerates to a fixed N-observation delay rather than
+                // gating on actual attitude convergence).
+                const float qw = static_cast<float>(ms.kinematics_estimated.pose.orientation.w());
+                const float qx = static_cast<float>(ms.kinematics_estimated.pose.orientation.x());
+                const float qy = static_cast<float>(ms.kinematics_estimated.pose.orientation.y());
+                const float qz = static_cast<float>(ms.kinematics_estimated.pose.orientation.z());
+                // Pitch: clamp the asin argument to [-1, 1] to defend against
+                // tiny numerical excursions from a non-unit quaternion.
+                const float sin_pitch = std::clamp(2.0f * (qw * qy - qz * qx), -1.0f, 1.0f);
+                s.roll  = std::atan2(2.0f * (qw * qx + qy * qz), 1.0f - 2.0f * (qx * qx + qy * qy));
+                s.pitch = std::asin(sin_pitch);
+                s.yaw   = std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
 
                 // Battery / GPS not simulated by SimpleFlight — fill with
                 // reasonable constants so downstream health checks do not

@@ -380,6 +380,17 @@ private:
             // velocity estimate proves stable for N *consecutive* FCState
             // observations.  Observation-counted (not wall-timed) → RTF-immune
             // in SITL (see StateTickConfig::takeoff_settle_observations).
+            //
+            // PR #763 review (Copilot): clear `armable_first_seen_ns_` here.
+            // The pre-ARM debounce window has served its purpose by the time
+            // we observe `armed=true`, so leaving it set leaves a stale
+            // timestamp that — if the drone disarms while still in the Layer
+            // 4 settle gate (operator intervention, mid-PREFLIGHT fault) —
+            // would fall back to the armable code below with `(now -
+            // first_seen) >= window` immediately satisfied, letting the next
+            // ARM fire on a single armable=true tick without re-debouncing.
+            // Resetting on the armed-observed edge closes that re-arm path.
+            armable_first_seen_ns_  = 0;
             const int settle_target = config_.takeoff_settle_observations;
             if (settle_target <= 0) {
                 // Gate disabled by config — legacy immediate takeoff.

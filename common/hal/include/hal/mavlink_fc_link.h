@@ -19,6 +19,7 @@
 
 #include "hal/ifc_link.h"
 #include "util/ilogger.h"
+#include "util/math_constants.h"  // kDegToRad — for MAVSDK attitude_euler conversion
 
 #include <atomic>
 #include <chrono>
@@ -343,9 +344,16 @@ private:
             cached_state_.satellites = static_cast<uint8_t>(std::clamp(gps.num_satellites, 0, 255));
         });
 
-        // Velocity (for ground speed computation)
+        // Velocity (NED frame).  Issue #740 Layer 4 — store individual
+        // components in addition to the horizontal-magnitude ground_speed
+        // so the planner's post-ARM settle gate can read full velocity
+        // (`sqrt(vx²+vy²+vz²)`) and detect vertical disturbances on the
+        // ground that don't show up in `ground_speed`.
         telemetry_->subscribe_velocity_ned([this](mavsdk::Telemetry::VelocityNed vel) {
             std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.vx = vel.north_m_s;
+            cached_state_.vy = vel.east_m_s;
+            cached_state_.vz = vel.down_m_s;
             cached_state_.ground_speed =
                 std::sqrt(vel.north_m_s * vel.north_m_s + vel.east_m_s * vel.east_m_s);
             // Update timestamp on every velocity update
@@ -353,6 +361,25 @@ private:
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
                                           .count());
+        });
+
+        // Issue #740 Layer 4 — body-frame Euler attitude from EKF2.  Required
+        // by the planner's post-ARM settle gate (`tick_preflight`) which
+        // holds TAKEOFF until `|roll|` and `|pitch|` are within a tilt
+        // threshold for N consecutive observations.  PR #763 review
+        // (Copilot) caught that the gate was previously reading
+        // default-zero `roll`/`pitch` because no MAVSDK subscription
+        // populated them — making the predicate trivially-true and the
+        // gate degenerate to a fixed N-observation delay.  This
+        // subscription closes that gap so the gate actually checks EKF2
+        // attitude convergence, not a constant.
+        telemetry_->subscribe_attitude_euler([this](mavsdk::Telemetry::EulerAngle eul) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            // MAVSDK reports Euler angles in degrees; convert to radians to
+            // match our HAL FCState contract (per `ifc_link.h`).
+            cached_state_.roll  = eul.roll_deg * drone::util::kDegToRad;
+            cached_state_.pitch = eul.pitch_deg * drone::util::kDegToRad;
+            cached_state_.yaw   = eul.yaw_deg * drone::util::kDegToRad;
         });
     }
 
