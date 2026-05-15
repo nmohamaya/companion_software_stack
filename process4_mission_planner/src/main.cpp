@@ -35,8 +35,48 @@
 #include <filesystem>
 #include <optional>
 #include <thread>
+#include <type_traits>  // std::is_floating_point_v (validate_and_clamp helper)
 
 using namespace drone::planner;
+
+namespace {
+
+/// Issue #740 / PR #763 review (api-contract + code-quality P2): single
+/// validate-and-clamp helper for tunable config values.  Replaces the
+/// near-identical 4-stanza pattern that grew from 1 (PR #743 added
+/// `preflight_armable_stable_s`) to 4 (PR #763 added the three
+/// `takeoff_settle_*` keys), and would have grown to N for every future
+/// tunable.
+///
+/// Reads `key` via `cfg.get<T>` with `default_val` fallback, then defends
+/// against (a) non-finite floats and (b) out-of-range values by emitting a
+/// WARN naming the human-readable key + observed value + allowed range,
+/// and returning a clamp into `[min_val, max_val]`.  Non-finite inputs
+/// fall back to `default_val` *before* the clamp so a NaN config doesn't
+/// silently fold to the lower bound.
+template<typename T>
+T validate_and_clamp(const drone::Config& cfg, const char* key, T default_val, T min_val, T max_val,
+                     const char* human_name) {
+    T    raw       = cfg.get<T>(key, default_val);
+    bool finite_ok = true;
+    if constexpr (std::is_floating_point_v<T>) {
+        finite_ok = std::isfinite(raw);
+    }
+    if (!finite_ok || raw < min_val || raw > max_val) {
+        if constexpr (std::is_floating_point_v<T>) {
+            DRONE_LOG_WARN("[Planner] {} {:.3g} outside [{:.3g}, {:.3g}] (or non-finite) — "
+                           "clamping (default {:.3g} substituted on non-finite input).",
+                           human_name, raw, min_val, max_val, default_val);
+        } else {
+            DRONE_LOG_WARN("[Planner] {} {} outside [{}, {}] — clamping.", human_name, raw, min_val,
+                           max_val);
+        }
+        raw = std::clamp(finite_ok ? raw : default_val, min_val, max_val);
+    }
+    return raw;
+}
+
+}  // namespace
 
 static std::atomic<bool> g_running{true};
 
@@ -426,37 +466,57 @@ int main(int argc, char* argv[]) {
     tick_cfg.collision_hover_duration_s = collision_hover_duration;
     tick_cfg.stuck_detector             = stuck_cfg;
     tick_cfg.avoider_influence_radius_m = avoider_influence_radius;
-    // Issue #740 (epic #727) — ARM-gate debounce window.  Configurable so
-    // headless dev / unit-test scenarios can shrink it; production Gazebo
-    // and real-hardware use the 3.0 s default.
+    // Issue #740 (epic #727) — ARM-gate debounce window + Layer 4 post-ARM
+    // settle gate.  Defensive-clamp-on-load policy via the
+    // `validate_and_clamp` helper (anonymous namespace at top of this file)
+    // — see PR #741 / PR #743 review for the rationale on why every tunable
+    // gets validated at load: NaN/inf would silently disable safety gates;
+    // values > the documented max suggest sensor mis-config (warranting
+    // investigation, not a wider tuning range).  The helper collapses what
+    // grew from 1 stanza (PR #743) to 4 stanzas (this PR) into one place.
     //
-    // PR #741 review (memory-safety + security + Copilot, 3 convergent):
-    // validate at the load site to defend against tampered / typo'd config.
-    // Without this clamp, `+inf` or any value > ~1.84e10 seconds produces
-    // a float→uint64_t conversion outside the destination type's range,
-    // which is UB per [conv.fpint]/1 — practical effect ranges from "gate
-    // silently disabled" (returns 0) to "drone hangs in PREFLIGHT for ages"
-    // (returns garbage uint64_t).  NaN slips past the `std::max` guard and
-    // also disables the gate.  Mirrors the `voxel_input_min_confidence`
-    // clamp pattern below (lines ~475-485) — same defensive-clamp-on-load
-    // policy.  Upper bound = 30 s: longer than that is clearly mis-config
-    // (a real drone shouldn't take 30 s for EKF2 to settle; if it does,
-    // there's a sensor problem that warrants investigation, not a longer
-    // gate).
-    constexpr float kMaxArmableStableS = 30.0f;
-    float           armable_stable_s_raw =
-        ctx.cfg.get<float>(drone::cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S, 3.0f);
-    if (!std::isfinite(armable_stable_s_raw) || armable_stable_s_raw < 0.0f ||
-        armable_stable_s_raw > kMaxArmableStableS) {
-        DRONE_LOG_WARN("[Planner] preflight_armable_stable_s {:.2f} outside [0, {:.1f}] (or "
-                       "non-finite) — clamping.  NaN/inf would disable the gate; values > "
-                       "{:.1f}s suggest sensor mis-config rather than a tuning need.",
-                       armable_stable_s_raw, kMaxArmableStableS, kMaxArmableStableS);
-        armable_stable_s_raw = std::clamp(std::isfinite(armable_stable_s_raw) ? armable_stable_s_raw
-                                                                              : 3.0f,
-                                          0.0f, kMaxArmableStableS);
+    // **`takeoff_settle_observations` — special-case clamp** (security P3
+    // from the PR #763 review): the gate's `=0` value is the documented
+    // *disable* sentinel.  Generic clamp-to-min-0 would silently fold a
+    // typo'd negative ("-3" via copy-paste) into the disable sentinel.
+    // Below: clamp negatives to 1 instead of 0; emit a separate WARN if
+    // the resolved value is exactly 0 so an operator can never silently
+    // ship a Layer-4-disabled production config.
+    tick_cfg.preflight_armable_stable_s = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S, 3.0f, 0.0f, 30.0f,
+        "preflight_armable_stable_s");
+
+    constexpr int kMaxSettleObs = 1000;
+    int           settle_obs_raw =
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::TAKEOFF_SETTLE_OBSERVATIONS, 30);
+    if (settle_obs_raw < 0) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations {} is negative — clamping to 1. "
+                       "(0 is the disable sentinel; a negative typo MUST NOT silently disable "
+                       "the Layer 4 settle gate.)",
+                       settle_obs_raw);
+        settle_obs_raw = 1;
+    } else if (settle_obs_raw > kMaxSettleObs) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations {} > {} — clamping. "
+                       "Values that high suggest sensor mis-config rather than a tuning need.",
+                       settle_obs_raw, kMaxSettleObs);
+        settle_obs_raw = kMaxSettleObs;
     }
-    tick_cfg.preflight_armable_stable_s = armable_stable_s_raw;
+    if (settle_obs_raw == 0) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations = 0 — Layer 4 settle gate "
+                       "DISABLED (legacy immediate-takeoff-on-armed).  Intended ONLY for "
+                       "headless dev configs and unit-test fixtures; production should set "
+                       ">= 1 (default 30).  See `mission_state_tick.h::tick_preflight` for the "
+                       "asymmetric-rotor-spin-up failure mode this gate prevents (Issue #740 / "
+                       "#746 evidence).");
+    }
+    tick_cfg.takeoff_settle_observations = settle_obs_raw;
+    tick_cfg.takeoff_max_tilt_deg =
+        validate_and_clamp<float>(ctx.cfg, drone::cfg_key::mission_planner::TAKEOFF_MAX_TILT_DEG,
+                                  5.0f, 0.0f, 45.0f, "takeoff_max_tilt_deg");
+    tick_cfg.takeoff_max_velocity_mps = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::TAKEOFF_MAX_VELOCITY_MPS, 0.3f, 0.0f, 5.0f,
+        "takeoff_max_velocity_mps");
+
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;

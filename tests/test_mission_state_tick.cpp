@@ -8,6 +8,7 @@
 #include "util/mock_clock.h"
 
 #include <chrono>
+#include <limits>  // std::numeric_limits — NaN test for SettleGateNonFiniteResetsCounter
 #include <thread>
 #include <vector>
 
@@ -73,6 +74,11 @@ FCState make_fc(bool armed, float rel_alt) {
 inline StateTickConfig make_default_test_config() {
     StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
     c.preflight_armable_stable_s = 0.0f;
+    // Issue #740 Layer 4 — disable the post-ARM settle gate by default so
+    // tests exercising post-TAKEOFF behaviour transition immediately on
+    // `fc_state.armed` (legacy semantics).  The dedicated
+    // `MissionStateTickTakeoffSettleTest` fixture below re-enables it.
+    c.takeoff_settle_observations = 0;
     return c;
 }
 
@@ -246,6 +252,11 @@ protected:
     StateTickConfig config = [] {
         StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
         c.preflight_armable_stable_s = 3.0f;  // production default
+        // This fixture exercises the #741 pre-ARM debounce.  Disable the
+        // #740 Layer 4 post-ARM settle gate so the armed→takeoff transition
+        // fires immediately — Layer 4 has its own fixture
+        // (MissionStateTickTakeoffSettleTest) below.
+        c.takeoff_settle_observations = 0;
         return c;
     }();
     MissionStateTick              state_tick{config};
@@ -553,6 +564,267 @@ TEST_F(MissionStateTickDebounceTest, ArmedTransitionResetsStabilityWindowForReen
     do_tick(pose, fc_ok);
     ASSERT_EQ(fc_calls.size(), 1u);
     EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle gate.
+//
+// The #746 smoke sweep proved the #741 `armable` debounce is necessary-
+// but-insufficient: PX4 can report armed with a marginal EKF2 attitude
+// estimate, and commanding TAKEOFF onto it makes the attitude controller
+// fight a phantom tilt → asymmetric rotor spin-up → sideways skid.  Layer
+// 4 holds after `fc_state.armed` until the FC-reported attitude + velocity
+// estimate has been within thresholds for N *consecutive* FCState
+// observations.  The gate is observation-counted (not wall-timed), so
+// these tests need no ScopedMockClock — they just feed FCState sequences.
+// ═══════════════════════════════════════════════════════════
+class MissionStateTickTakeoffSettleTest : public ::testing::Test {
+protected:
+    // settle_observations = 5 (small for fast tests), production-shaped
+    // tilt/velocity limits.  preflight_armable_stable_s = 0 so the pre-ARM
+    // debounce is out of the picture — these tests exercise only the
+    // post-ARM settle gate.
+    StateTickConfig config = [] {
+        StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
+        c.preflight_armable_stable_s  = 0.0f;
+        c.takeoff_settle_observations = 5;
+        c.takeoff_max_tilt_deg        = 5.0f;
+        c.takeoff_max_velocity_mps    = 0.3f;
+        return c;
+    }();
+    MissionStateTick              state_tick{config};
+    MockPublisher<TrajectoryCmd>  traj_pub;
+    MockPublisher<PayloadCommand> payload_pub;
+    MissionFSM                    fsm;
+    StaticObstacleLayer           obstacle_layer;
+    std::vector<FCCallRecord>     fc_calls;
+
+    FCSendFn send_fc = [this](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+
+    void SetUp() override {
+        fsm.load_mission({{10, 0, 5, 0, 2, 3, true}, {20, 0, 5, 0, 2, 3, false}});
+        fsm.on_arm();  // → PREFLIGHT
+    }
+
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite").value();
+    std::unique_ptr<IObstacleAvoider> avoider_ =
+        create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
+
+    void do_tick(const Pose& pose, const FCState& fc_state) {
+        DetectedObjectList            objects{};
+        drone::util::FrameDiagnostics diag(0);
+        state_tick.tick(fsm, pose, fc_state, objects, *planner_, nullptr, *avoider_, obstacle_layer,
+                        traj_pub, payload_pub, send_fc, 0, diag);
+    }
+};
+
+// A settled (armed, level, near-zero velocity) FCState held for N
+// consecutive observations fires takeoff exactly on the Nth — not before.
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateHoldsUntilNConsecutiveObservations) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);  // roll=pitch=0, vx=vy=vz=0 → settled
+
+    // Ticks 1..4: settled but below the 5-observation threshold → stay PREFLIGHT.
+    for (int i = 1; i <= 4; ++i) {
+        do_tick(pose, fc_armed);
+        EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+            << "Takeoff fired after only " << i
+            << " settled observations — Layer 4 gate released early (need 5).";
+    }
+
+    // Tick 5: 5th consecutive settled observation → takeoff.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF)
+        << "Takeoff did NOT fire after 5 consecutive settled observations — "
+           "Layer 4 gate stuck.";
+}
+
+// An attitude excursion mid-window resets the counter: the FC estimate
+// must settle *continuously*, not cumulatively.
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateExcursionResetsCounter) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);
+
+    // 4 settled observations — one short of the threshold.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Excursion: roll = 0.30 rad (~17°) — well past the 5° tilt limit.
+    // Must reset the counter to 0.
+    auto fc_tilted = make_fc(true, 0);
+    fc_tilted.roll = 0.30f;
+    do_tick(pose, fc_tilted);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // After the excursion, 4 more settled observations must still NOT fire
+    // takeoff — proving the counter restarted from 0, not resumed from 4.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Takeoff fired with only 4 post-excursion settled observations — "
+           "the settle counter resumed instead of resetting (Layer 4 logic bug).";
+
+    // The 5th post-excursion settled observation fires it.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// `takeoff_settle_observations = 0` disables the gate — takeoff fires on
+// the first armed observation (legacy behaviour, used by headless dev
+// configs and the default unit-test fixture).
+TEST(MissionStateTickTakeoffSettleConfigTest, ZeroObservationsDisablesGate) {
+    StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
+    c.preflight_armable_stable_s  = 0.0f;
+    c.takeoff_settle_observations = 0;  // gate disabled
+    MissionStateTick              state_tick{c};
+    MockPublisher<TrajectoryCmd>  traj_pub;
+    MockPublisher<PayloadCommand> payload_pub;
+    MissionFSM                    fsm;
+    StaticObstacleLayer           obstacle_layer;
+    std::vector<FCCallRecord>     fc_calls;
+    FCSendFn                      send_fc = [&](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+    auto planner = create_path_planner("dstar_lite").value();
+    auto avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
+
+    fsm.load_mission({{10, 0, 5, 0, 2, 3, true}});
+    fsm.on_arm();  // → PREFLIGHT
+
+    DetectedObjectList            objects{};
+    drone::util::FrameDiagnostics diag(0);
+    state_tick.tick(fsm, make_pose(0, 0, 0), make_fc(true, 0), objects, *planner, nullptr, *avoider,
+                    obstacle_layer, traj_pub, payload_pub, send_fc, 0, diag);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF)
+        << "With takeoff_settle_observations = 0 the gate must be disabled — takeoff "
+           "should fire on the first armed observation (legacy behaviour).";
+}
+
+// A disarm mid-window resets the settle counter: a subsequent re-arm must
+// re-accumulate the full N consecutive observations.  Covers the disarm /
+// re-PREFLIGHT path (the counter is cleared whenever `fc_state.armed` is
+// false).
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateResetsWhenDisarmed) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);
+
+    // 4 settled armed observations — one short of the threshold.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Disarm: armed=false, armable=false → falls through to the pre-ARM
+    // path, which clears the Layer 4 settle counter.
+    auto fc_disarmed    = make_fc(false, 0);
+    fc_disarmed.armable = false;
+    do_tick(pose, fc_disarmed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Re-arm: 4 settled observations must still NOT fire takeoff — the
+    // disarm reset the counter, so we need the full 5 again.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Takeoff fired with only 4 post-re-arm settled observations — the "
+           "settle counter was not cleared on disarm (Layer 4 re-entry bug).";
+
+    // 5th post-re-arm settled observation fires it.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// PR #763 review (test-unit + test-quality P2): velocity-excursion path
+// was untested — only roll excursion was exercised.  This pins the
+// `vel_mag <= vel_limit` branch: a mid-window velocity spike resets the
+// counter, just like a tilt excursion does.  Without this test, a refactor
+// that dropped the velocity check entirely (`vel_mag` from the
+// `attitude_settled` predicate) would still pass the existing 4 tests.
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateVelocityExcursionResetsCounter) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);  // settled (vx=vy=vz=0)
+
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Velocity excursion: |v| = 1.0 m/s — well past the 0.3 m/s limit.
+    // Roll/pitch stay zero so this isolates the velocity branch.
+    auto fc_moving = make_fc(true, 0);
+    fc_moving.vx   = 1.0f;
+    do_tick(pose, fc_moving);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // 4 more settled observations must NOT fire — counter reset, not resumed.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Takeoff fired after only 4 post-velocity-excursion settled observations — "
+           "the velocity-branch reset is not happening (Layer 4 logic bug).";
+
+    // 5th fires it.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// PR #763 review (test-unit + test-quality P2): the `std::isfinite` guards
+// in the gate predicate were uncovered — a NaN attitude (the exact
+// cold-start hazard the gate exists to defend against — corrupted EKF2
+// estimate publishing a NaN field) needs to count as an excursion, not
+// silently pass the threshold check.  This pins the non-finite branch.
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateNonFiniteResetsCounter) {
+    auto pose     = make_pose(0, 0, 0);
+    auto fc_armed = make_fc(true, 0);
+
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // NaN roll — exactly the kind of garbage a cold-start EKF2 estimate
+    // could produce.  Must NOT pass the threshold check (else a bad FC
+    // estimate could short-circuit the gate).
+    auto fc_nan = make_fc(true, 0);
+    fc_nan.roll = std::numeric_limits<float>::quiet_NaN();
+    do_tick(pose, fc_nan);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Counter must have reset — 4 more settled observations should not fire.
+    for (int i = 0; i < 4; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Takeoff fired after only 4 post-NaN settled observations — the `std::isfinite` "
+           "guard isn't resetting the counter, so a NaN FC estimate could skip the gate.";
+
+    // 5th fires it.
+    do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// PR #763 review (fault-recovery P3 + test-quality): the "never settles"
+// failure mode (FC attitude estimate persistently outside thresholds — a
+// genuine sensor fault, EKF2 stuck, or persistent vibration) was untested.
+// Pin the safety contract: the FSM stays in PREFLIGHT indefinitely, no
+// crash, no spurious transition.  The corresponding fault-escalation work
+// (timeout + escalate to disarm-with-fault) is tracked in #718 — that
+// ISSUE expansion is OUT of this PR's scope; the test here just verifies
+// the current fail-safe behaviour (grounded > bad takeoff).
+TEST_F(MissionStateTickTakeoffSettleTest, SettleGateNeverSettlesHoldsPreflight) {
+    auto pose = make_pose(0, 0, 0);
+
+    // 50 consecutive armed-but-tilted observations — far more than the
+    // 5-observation threshold.  None should ever count as settled.
+    auto fc_tilted = make_fc(true, 0);
+    fc_tilted.roll = 0.30f;  // ~17° — well past the 5° tilt limit
+
+    for (int i = 0; i < 50; ++i) {
+        do_tick(pose, fc_tilted);
+        ASSERT_EQ(fsm.state(), MissionState::PREFLIGHT)
+            << "FSM left PREFLIGHT on tick " << (i + 1)
+            << " despite attitude never settling — Layer 4 fail-safe contract violated "
+               "(should hold PREFLIGHT until either attitude settles or the operator "
+               "intervenes; #718 will add a timeout-escalation path on top of this).";
+    }
+
+    // Confirm the gate does eventually release once attitude settles —
+    // proves we held PREFLIGHT for the right reason (excursion), not
+    // because the gate is broken.
+    auto fc_armed = make_fc(true, 0);
+    for (int i = 0; i < 5; ++i) do_tick(pose, fc_armed);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
 }
 
 // ═══════════════════════════════════════════════════════════
