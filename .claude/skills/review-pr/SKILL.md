@@ -93,7 +93,7 @@ Review Routing:
     - review-api-contract (always)
     - review-code-quality (always)
     - review-performance (always)
-  Total: 8 agents across 2 passes
+  Total: 9 agents across 2 passes
 ```
 
 ### Step 3: Pass 1 — Safety & Correctness [PARALLEL]
@@ -128,7 +128,12 @@ Agent(
   subagent_type: "test-unit",
   prompt: "... (same PR_WORKTREE instructions) ..."
 )
-// Add conditional agents (review-concurrency, review-fault-recovery, test-scenario) if triggered
+// Add conditional agents if triggered:
+//   review-concurrency        — diff contains std::atomic / std::mutex / std::thread / lock_guard / memory_order
+//   review-fault-recovery     — diff touches process4_*, process5_*, process7_*, watchdog, fault, recovery
+//   test-scenario             — diff touches common/ipc/, common/hal/, config/scenarios/, Gazebo configs
+//   review-data-plumbing      — diff touches common/hal/, common/ipc/, process5_comms/, new cfg.get<>(),
+//                                 or new struct fields in any include/ — traces producer→consumer wiring
 ```
 
 **Critical:** Every agent prompt MUST include the `PR_WORKTREE` path and explicit instructions to read files from there. Agents that read from the working directory will review stale code from whatever branch is currently checked out.

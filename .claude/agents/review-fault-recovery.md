@@ -54,7 +54,7 @@ P7 supervises all other processes. Restart ordering follows the dependency graph
   - **"We've been seeing data for N frames" heuristics** elsewhere in the stack that may now hit zero frames during the suppression window.
 
   This is the dual of the `review-concurrency` write-cadence-change rule: that one looks at the writer-side change, this one looks at the downstream consumers and the fault-recovery / degradation paths that may now trigger spuriously.
-  Ref: P3 INITIALIZING-skip guard widened the PoseDoubleBuffer first-publish race in PR #752; same pattern applies to any new "skip publishing while X" guard.
+  Ref: Issue #727 (cold-start hardening) — INITIALIZING-skip guard in `process3_slam_vio_nav/src/main.cpp` widened a pre-existing first-publish race in `PoseDoubleBuffer` (`process3_slam_vio_nav/src/main.cpp::PoseDoubleBuffer::read()`); same pattern applies to any new "skip publishing while X" guard added to a publishing thread anywhere in `process[1-7]_*`.
 
 ### P3 — Medium (fix in follow-up)
 - [ ] **Fault injection paths tested** — new fault recovery code has corresponding test scenarios
