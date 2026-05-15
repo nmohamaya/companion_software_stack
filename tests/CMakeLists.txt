@@ -95,7 +95,7 @@ target_compile_definitions(test_config_validator PRIVATE
 
 # ── IClock interface tests ───────────────────────────────────
 add_drone_test(test_iclock           test_iclock.cpp)
-add_drone_test(test_clock_migration_768 test_clock_migration_768.cpp)
+add_drone_test(test_clock_migration_767 test_clock_migration_767.cpp)
 
 # ── Result<T,E> type tests ───────────────────────────────────
 add_drone_test(test_result          test_result.cpp)
