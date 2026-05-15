@@ -50,6 +50,7 @@ When a PR or diff needs review, apply these routing rules based on the changed f
 | `std::atomic`, `std::mutex`, `std::thread`, `lock_guard`, `memory_order` | **review-concurrency** |
 | `process4_mission_planner/`, `process5_comms/`, `process7_system_monitor/`, watchdog, fault, restart | **review-fault-recovery** |
 | `common/ipc/`, `common/hal/`, Gazebo, scenario config | **test-scenario** |
+| `common/hal/`, `common/ipc/`, `process5_comms/`, new `cfg.get<>(...)` calls, new struct fields in `include/` | **review-data-plumbing** — traces producer→consumer wiring across boundaries; catches the class of "field exists in struct but is never written" bugs Copilot has caught on 6 PRs in a row that the rest of the roster missed |
 
 ### Routing by Scope
 | Changed paths | Feature Agent |

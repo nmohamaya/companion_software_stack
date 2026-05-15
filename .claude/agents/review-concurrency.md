@@ -40,12 +40,36 @@ You are a **read-only** reviewer focused exclusively on concurrency correctness.
 - [ ] **No recursive mutexes** — restructure code instead
 - [ ] **Lock ordering documented** — when multiple mutexes are held, ordering must be documented to prevent deadlock
 - [ ] **Mutex-protected observability on flight-critical threads requires DR justification.** Loggers, profilers, metrics collectors, or any call chain that takes a `std::mutex` must NOT be invoked from P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, or watchdog touch paths *unless* a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` analyses (1) priority isolation — all recorders share similar priority, no higher-priority thread is blocked, (2) mutex-hold-time is bounded and dominated by the measured work, and (3) the usage is gated behind an explicit config flag so production builds don't pay the cost. Preferred pattern is a lock-free buffer (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) drained by a dedicated IO thread. See CLAUDE.md § Concurrency tiering → "Observability on flight-critical threads."
+- [ ] **Latch-and-payload pattern: latch must be loaded last by the reader.** When a class exposes a `bool initialized_` (or `ready_`, `valid_`, `published_`) atomic that gates access to other atomic-or-protected payload state, the reader's correct pattern is to load the latch FIRST and only then read the payload. The latch's release/acquire ordering does not retroactively protect a prior load. Canonical correct shape:
+  ```cpp
+  if (!latch.load(std::memory_order_acquire)) return false;
+  // Now safe to read payload — writer's release-store of latch
+  // happens-before this acquire-load.
+  auto idx = payload_idx_.load(std::memory_order_acquire);
+  out = buffers_[idx];
+  ```
+  Any code that loads the payload state FIRST and then checks the latch is a **P1 finding** — the visibility guarantee is the wrong way round. Canonical broken example to grep for:
+  ```cpp
+  // HAZARD — payload loaded before latch
+  auto idx = payload_idx_.load(std::memory_order_acquire);
+  if (!latch.load(std::memory_order_acquire)) return false;
+  out = buffers_[idx];   // idx may be stale; checking latch second is too late
+  ```
+  Ref: `process3_slam_vio_nav/src/main.cpp::PoseDoubleBuffer::read()` (post-fix).
 
 ### P2 — High (should fix before merge)
 - [ ] **Thread ownership traced** — for every shared mutable variable, identify which threads access it and what synchronization protects it
 - [ ] **`RESOURCE_LOCK "zenoh_session"`** on all Zenoh tests — prevents parallel session exhaustion under `ctest -j`
 - [ ] **No bare `std::thread`** without join/detach guarantees — use RAII wrappers
 - [ ] **Condition variable predicates** — `wait()` always uses a predicate to guard against spurious wakeups
+- [ ] **This PR changes the *write cadence* of a shared resource.** When a diff changes how often a shared atomic / buffer / channel is written — especially from "always" to "conditional", or "every frame" to "first valid frame only" — verify that existing readers' invariants did not depend on multi-write priming. Concrete code patterns to flag:
+  - A new `if (...) { write(); }` wrapper around a previously-unconditional write.
+  - A new early-return that skips a buffer update.
+  - A new guard that suppresses a `mark_*()` / `notify_*()` call on some condition.
+
+  The race shape is: *the previous code was correct only because of write frequency, not write correctness.* A second tick used to write whatever the first tick missed; the new code never gets the second tick.
+  Ref: PoseDoubleBuffer race exposed by adding the INITIALIZING-skip guard in P3.
+- [ ] **Default-initialised buffer slots are silent failure modes.** When a class exposes `T buffers_[N]` (or any array / ring of state holders) and a reader can land on any slot via an atomic index, verify every slot has been written at least once before the reader can be unblocked. The contract violation is the writer not priming all slots before signalling ready. The symptom is a reader landing on a default-constructed slot and silently consuming garbage. Both `TripleBuffer` and `SPSCRing`-style patterns have variants of this hazard depending on init order.
 
 ### P3 — Medium (fix in follow-up)
 - [ ] **Lock scope minimized** — locks held for minimum duration, no I/O or allocations under lock

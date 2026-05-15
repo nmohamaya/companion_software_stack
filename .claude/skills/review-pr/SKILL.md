@@ -75,6 +75,7 @@ Examine the diff to determine which Pass 1 agents to launch:
 - `review-concurrency` — if diff contains `std::atomic`, `std::mutex`, `std::thread`, `lock_guard`, `condition_variable`, `memory_order`
 - `review-fault-recovery` — if diff touches `process4_*`, `process5_*`, `process7_*`, `watchdog`, `fault`, `recovery`
 - `test-scenario` — if diff touches `common/ipc/`, `common/hal/`, `config/scenarios/`, Gazebo configs
+- `review-data-plumbing` — if diff touches `common/hal/`, `common/ipc/`, `process5_comms/`, introduces new `cfg.get<>(...)` calls, or adds new struct fields in any `include/`. Traces producer→consumer wiring across boundaries to catch the "field exists in struct but is never written by the producer" class of bugs Copilot has caught on 6 PRs in a row that the rest of the roster missed (PR #763 attitude-settle gate is the canonical example).
 
 If `--focus` was specified, prioritize that domain's agent and reduce others to a quick scan.
 
@@ -86,12 +87,13 @@ Review Routing:
     - review-security (always)
     - test-unit (always)
     - review-concurrency (triggered: diff contains "std::atomic")
+    - review-data-plumbing (triggered: diff touches common/hal/)
   Pass 2 (quality & contracts):
     - review-test-quality (always)
     - review-api-contract (always)
     - review-code-quality (always)
     - review-performance (always)
-  Total: 7 agents across 2 passes
+  Total: 8 agents across 2 passes
 ```
 
 ### Step 3: Pass 1 — Safety & Correctness [PARALLEL]

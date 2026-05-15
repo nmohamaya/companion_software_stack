@@ -48,6 +48,13 @@ P7 supervises all other processes. Restart ordering follows the dependency graph
 - [ ] **Dependency graph respected on restart** — when P7 restarts a process, its dependencies must be healthy first
 - [ ] **systemd `WatchdogSec` and `BindsTo` consistent** with code behavior — if code changes watchdog timing, systemd units must match
 - [ ] **Error context preserved** — `Result<T,E>` error types carry enough context for debugging (not just "failed")
+- [ ] **Guards that suppress writes have downstream invariant implications.** When a PR adds a conditional `if (state == X) { skip_write(); }` (or `return early` before a publish, or suppresses a `mark_*()` call), trace what existing consumers assumed about the write cadence — particularly:
+  - **Stale-detection thresholds** (`stale_pose_ns`, `last_msg_age_s`) that fire based on time-since-last-write — the new write-suppression window may push consumers past their stale threshold the first time it fires.
+  - **Buffer-priming assumptions** in the consumer (e.g. double-buffer expectations that both slots get populated quickly).
+  - **"We've been seeing data for N frames" heuristics** elsewhere in the stack that may now hit zero frames during the suppression window.
+
+  This is the dual of the `review-concurrency` write-cadence-change rule: that one looks at the writer-side change, this one looks at the downstream consumers and the fault-recovery / degradation paths that may now trigger spuriously.
+  Ref: P3 INITIALIZING-skip guard widened the PoseDoubleBuffer first-publish race in PR #752; same pattern applies to any new "skip publishing while X" guard.
 
 ### P3 — Medium (fix in follow-up)
 - [ ] **Fault injection paths tested** — new fault recovery code has corresponding test scenarios

@@ -43,6 +43,7 @@ These are **test design bugs** — the tests pass, compile, and don't crash, but
 - [ ] **Test positioning validates the feature** — For grid/spatial tests: are test coordinates chosen to exercise the specific geometric check? (e.g., Chebyshev-1 means adjacent cell, not same cell)
 - [ ] **Error paths tested** — If new code has error handling (`Result::Err`, early returns), are those paths exercised?
 - [ ] **Test isolation** — Do tests clean up after themselves? Are `ScopedMockClock` or similar RAII guards used for time-dependent tests? Can tests interfere with each other?
+- [ ] **Default-init test trap.** When a test fixture default-constructs an IPC / struct input (`make_X(...)`, `FCState{}`, `Pose{}`) and the unit-under-test reads fields from it, verify the test exercises the algorithm with **non-default** field values matching production-realistic non-zero ranges. A test that only feeds default-zero inputs and asserts "predicate passes" is identical to a test on a no-op algorithm — it proves nothing about the algorithm's behaviour on real data. Demand both: a positive test with meaningful non-zero values and a negative test that *fails* the gate; otherwise the test only proves the gate accepts default-init silence. Ref: PR #763 (Layer 4 settle gate) — `make_fc(true, 0)` left attitude/velocity at default zero; production code also produced default zero (because the field was never wired); test could not distinguish "real settled" from "no data".
 
 ### P3 — Medium (nice to have)
 
