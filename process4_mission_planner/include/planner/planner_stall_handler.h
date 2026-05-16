@@ -49,10 +49,12 @@
 #include "util/diagnostic.h"
 #include "util/latency_profiler.h"
 #include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
 
 namespace drone::planner {
@@ -82,7 +84,15 @@ public:
 
     /// Returns the callback to install via `ThreadWatchdog::set_stuck_callback`.
     /// Capture-by-this — the handler instance must outlive the watchdog.
-    [[nodiscard]] auto make_callback(drone::util::LatencyProfiler* profiler) {
+    /// In main.cpp this is enforced by declaring the handler BEFORE the
+    /// watchdog so the watchdog destructor (which joins the scan thread)
+    /// runs before the handler is destroyed (PR #775 review fix).
+    ///
+    /// PR #775 review fix (memory-safety P2): explicit `std::function`
+    /// return type instead of `auto` so the lifetime contract is visible
+    /// at the call site without needing to follow the deduced type.
+    [[nodiscard]] drone::util::ThreadWatchdog::StuckCallback make_callback(
+        drone::util::LatencyProfiler* profiler) {
         return [this, profiler](const drone::util::ThreadHeartbeat& beat) {
             on_stuck(beat, profiler);
         };
@@ -92,8 +102,15 @@ public:
     /// per planning tick from `main.cpp` and passed into
     /// `FaultManager::set_planner_stall()`.  Returns true exactly once
     /// per stuck-detection event; subsequent calls return false until
-    /// the watchdog fires again.  (Latched-on-fire is intentional —
-    /// FaultManager's escalation-only policy handles the persistence.)
+    /// the watchdog fires again.  (Latched-on-fire is intentional.)
+    ///
+    /// PR #775 review fix (api-contract P2): the
+    /// "FaultManager's escalation-only policy handles the persistence"
+    /// claim used to be on this docstring — it is TRUE for the LOITER
+    /// action (preserved by `high_water_mark_`) but FALSE for the
+    /// FAULT_PLANNER_STALL bit in `active_faults` unless FaultManager's
+    /// `set_planner_stall()` is OR-latched (which it now is, post-fix).
+    /// See fault_manager.h::set_planner_stall for the latch contract.
     [[nodiscard]] bool consume_event() {
         return stalled_.exchange(false, std::memory_order_acq_rel);
     }
@@ -105,6 +122,11 @@ public:
     /// synthetic heartbeat record + optional profiler.  Used by
     /// `tests/test_planner_stall_handler.cpp` so tests don't need to
     /// stand up a real ThreadWatchdog scan loop.
+    ///
+    /// **DO NOT call from production code** — production callers must
+    /// install via `make_callback()` so the lifetime contract (handler
+    /// outlives watchdog) is enforced by main.cpp's declaration order.
+    /// PR #775 review fix (code-quality P3).
     void on_stuck_for_test(const drone::util::ThreadHeartbeat& beat,
                            drone::util::LatencyProfiler*       profiler = nullptr) {
         on_stuck(beat, profiler);

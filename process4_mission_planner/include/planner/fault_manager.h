@@ -90,9 +90,16 @@ public:
     /// @param cfg  Drone config — reads "fault_manager.*" keys.
     template<typename Config>
     explicit FaultManager(const Config& cfg) {
-        config_.pose_stale_timeout_ns = static_cast<uint64_t>(cfg.template get<int>(
-                                            "fault_manager.pose_stale_timeout_ms", 500)) *
-                                        1'000'000ULL;
+        // PR #775 review fix (security P2 — CLAUDE.md §"Unguarded
+        // signed→unsigned casts on durations/sizes/counts"):
+        // every cfg.get<int> result is clamped to non-negative BEFORE
+        // the static_cast<uint64_t>, otherwise a tampered config with
+        // a negative integer (e.g. `"fault_manager.fc_link_lost_timeout_ms": -1`)
+        // wraps to ~584 years and silently disables the fault.
+        config_.pose_stale_timeout_ns =
+            static_cast<uint64_t>(
+                std::max(0, cfg.template get<int>("fault_manager.pose_stale_timeout_ms", 500))) *
+            1'000'000ULL;
 
         config_.battery_warn_percent = cfg.template get<float>("fault_manager.battery_warn_percent",
                                                                30.0f);
@@ -101,17 +108,19 @@ public:
         config_.battery_crit_percent = cfg.template get<float>("fault_manager.battery_crit_percent",
                                                                10.0f);
 
-        config_.fc_link_lost_timeout_ns = static_cast<uint64_t>(cfg.template get<int>(
-                                              "fault_manager.fc_link_lost_timeout_ms", 3000)) *
-                                          1'000'000ULL;
+        config_.fc_link_lost_timeout_ns =
+            static_cast<uint64_t>(
+                std::max(0, cfg.template get<int>("fault_manager.fc_link_lost_timeout_ms", 3000))) *
+            1'000'000ULL;
 
-        config_.fc_link_rtl_timeout_ns = static_cast<uint64_t>(cfg.template get<int>(
-                                             "fault_manager.fc_link_rtl_timeout_ms", 15000)) *
-                                         1'000'000ULL;
+        config_.fc_link_rtl_timeout_ns =
+            static_cast<uint64_t>(
+                std::max(0, cfg.template get<int>("fault_manager.fc_link_rtl_timeout_ms", 15000))) *
+            1'000'000ULL;
 
         config_.loiter_escalation_timeout_ns =
-            static_cast<uint64_t>(
-                cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30)) *
+            static_cast<uint64_t>(std::max(
+                0, cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30))) *
             1'000'000'000ULL;
 
         {
@@ -290,6 +299,18 @@ public:
     }
 
     /// Reset the escalation state (e.g. after landing / new mission).
+    ///
+    /// PR #775 review fix (fault-recovery P2 — process-restart docs):
+    /// Both `preflight_timeout_` and `planner_stall_` are IN-MEMORY
+    /// state.  If P7 restarts P4 mid-stall, the latched fault bits are
+    /// wiped along with the process — the loiter-escalation timer (30 s
+    /// default at `loiter_escalation_timeout_ns`) also resets.  A
+    /// persistent stall will re-raise within one watchdog scan period
+    /// post-restart, so RTL escalation still happens — just delayed by
+    /// up to one full loiter-escalation cycle per restart.  Acceptable
+    /// for the cold-start hardening defense system; documented here so
+    /// the trade-off is visible if a future change wants IPC-level
+    /// fault persistence (e.g. P7-backed sticky fault store).
     void reset() {
         high_water_mark_       = FaultAction::NONE;
         high_water_reason_     = "nominal";
@@ -309,18 +330,40 @@ public:
     /// Set geofence violation state (called from the planning loop).
     void set_geofence_violation(bool violated) { geofence_violated_ = violated; }
 
-    /// Issue #718 — set/clear the PREFLIGHT-timeout fault flag.  Called
-    /// from the planning loop after `MissionStateTick::consume_preflight_timeout_event()`.
-    /// Setting to `true` raises FAULT_FC_PREFLIGHT_TIMEOUT on the next
-    /// evaluate(); setting to `false` clears the bit (but the high-
-    /// water mark may still hold from prior escalation).
-    void set_preflight_timeout(bool timed_out) { preflight_timeout_ = timed_out; }
+    /// Issue #718 — raise the PREFLIGHT-timeout fault flag.  Called
+    /// from the planning loop with the boolean returned by
+    /// `MissionStateTick::consume_preflight_timeout_event()`.
+    ///
+    /// **Latch semantics (PR #775 review fix — fault-recovery + test-quality
+    /// + api-contract P1):** the flag is OR-latched, NOT direct-assigned.
+    /// Once raised, `FAULT_FC_PREFLIGHT_TIMEOUT` remains in `active_faults`
+    /// across subsequent `evaluate()` calls (so GCS polling at 500 ms–1 s
+    /// reliably sees the bit despite the planner ticking at 10 Hz) until
+    /// `reset()` clears it on the next mission.  The previous direct-
+    /// assign behaviour caused the bit to appear for exactly ONE
+    /// MissionStatus publication then drop — operationally invisible to
+    /// most GCS polling intervals.
+    ///
+    /// Passing `false` is a no-op (use `reset()` to clear).
+    void set_preflight_timeout(bool timed_out) {
+        if (timed_out) preflight_timeout_ = true;
+    }
 
-    /// Issues #718 / #765 — set/clear the planner-stall fault flag.
-    /// Called from the planning loop after `PlannerStallHandler::consume_event()`
-    /// returns true.  Raises FAULT_PLANNER_STALL → LOITER escalation
-    /// on the next evaluate().
-    void set_planner_stall(bool stalled) { planner_stall_ = stalled; }
+    /// Issues #718 / #765 — raise the planner-stall fault flag.  Called
+    /// from the planning loop with the boolean returned by
+    /// `PlannerStallHandler::consume_event()`.
+    ///
+    /// **Latch semantics (PR #775 review fix):** same as
+    /// `set_preflight_timeout` above — OR-latched, never cleared except
+    /// via `reset()`.  Without the latch, `FAULT_PLANNER_STALL` would
+    /// drop from `active_faults` the tick after the stuck-event fires
+    /// (one-shot consume_event() returns false on every non-event tick).
+    /// The LOITER recommended_action persists via the existing high-water
+    /// mark; this latch ensures the cause-bit identity also persists for
+    /// GCS visibility.
+    void set_planner_stall(bool stalled) {
+        if (stalled) planner_stall_ = true;
+    }
 
 private:
     static constexpr int kVioDebounceCount = 3;

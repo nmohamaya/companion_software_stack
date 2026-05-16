@@ -356,6 +356,13 @@ inline std::string fault_flags_string(uint32_t flags) {
         {static_cast<uint32_t>(FaultType::FAULT_VIO_DEGRADED), "FAULT_VIO_DEGRADED"},
         {static_cast<uint32_t>(FaultType::FAULT_VIO_LOST), "FAULT_VIO_LOST"},
         {static_cast<uint32_t>(FaultType::FAULT_STUCK), "FAULT_STUCK"},
+        // PR #775 review fix (security + data-plumbing P2): the two new
+        // fault bits introduced by Issue #718 must be in kFlags[] or they
+        // fall through to "FAULT_UNKNOWN(0x2000/0x4000)" in operator logs
+        // and GCS dashboards — defeating the named-bit visibility purpose.
+        {static_cast<uint32_t>(FaultType::FAULT_FC_PREFLIGHT_TIMEOUT),
+         "FAULT_FC_PREFLIGHT_TIMEOUT"},
+        {static_cast<uint32_t>(FaultType::FAULT_PLANNER_STALL), "FAULT_PLANNER_STALL"},
     };
     uint32_t known = 0;
     for (const auto& f : kFlags) {

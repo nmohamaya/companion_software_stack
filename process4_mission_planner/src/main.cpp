@@ -531,10 +531,21 @@ int main(int argc, char* argv[]) {
                                 0, 1800, "preflight_timeout_s");
     if (tick_cfg.preflight_timeout_s > 0 &&
         tick_cfg.preflight_warn_s >= tick_cfg.preflight_timeout_s) {
+        // PR #775 review fix (security P3): WARN-only used to leave the
+        // invariant unenforced — a tampered or misconfigured
+        // `preflight_warn_s: 1800, preflight_timeout_s: 30` would let
+        // both values through unchanged and the operator-visible
+        // escalation runway would be silently meaningless.  Now we
+        // clamp `preflight_warn_s` to `preflight_timeout_s - 1` so the
+        // WARN log is guaranteed to fire at least one tick before the
+        // DISARM escalation.
+        const int clamped_warn = std::max(0, tick_cfg.preflight_timeout_s - 1);
         DRONE_LOG_WARN("[Planner] preflight_warn_s ({}) >= preflight_timeout_s ({}) — "
-                       "WARN log will never fire before the timeout escalation.  Set "
-                       "preflight_warn_s < preflight_timeout_s for visible escalation runway.",
-                       tick_cfg.preflight_warn_s, tick_cfg.preflight_timeout_s);
+                       "clamping preflight_warn_s to {} (preflight_timeout_s - 1) so the WARN "
+                       "log fires before the timeout escalation.  Update config to "
+                       "preflight_warn_s < preflight_timeout_s to silence this warning.",
+                       tick_cfg.preflight_warn_s, tick_cfg.preflight_timeout_s, clamped_warn);
+        tick_cfg.preflight_warn_s = clamped_warn;
     }
 
     MissionStateTick      state_tick(tick_cfg);
@@ -719,7 +730,25 @@ int main(int argc, char* argv[]) {
     drone::systemd::notify_ready();
 
     // ── Thread heartbeat + watchdog + health publisher ──────
+    //
+    // PR #775 review fix (P1, memory-safety + concurrency + api-contract
+    // converged): `PlannerStallHandler` MUST be declared BEFORE
+    // `ThreadWatchdog` so that destruction order (LIFO) is:
+    //   1. `~ThreadWatchdog()` runs first — sets running_=false and
+    //      joins the scan thread.  After this point, no further
+    //      stuck-callback invocations are possible.
+    //   2. `~PlannerStallHandler()` runs second — the destroyed
+    //      `stalled_` atomic + `watched_thread_name_` string can no
+    //      longer be touched by a dangling callback.
+    //
+    // The previous order (watchdog first, handler second) caused the
+    // scan thread to fire the lambda with a dangling `this` during the
+    // ~1 s window between handler destruction and watchdog join.  The
+    // handler's own docstring (planner_stall_handler.h §"Capture-by-this")
+    // already states the contract; this comment exists to lock the
+    // declaration order against a future-reorder regression.
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
+    PlannerStallHandler         stall_handler("planning_loop");
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
         drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
@@ -740,16 +769,6 @@ int main(int argc, char* argv[]) {
         DRONE_LOG_INFO("[Benchmark] LatencyProfiler enabled — stages: PlannerLoop, GeofenceCheck, "
                        "FaultEval");
     }
-    // Issues #718 / #765 — install the ThreadWatchdog stuck-callback
-    // for the planning_loop thread.  Diagnostic dump + FAULT_PLANNER_STALL
-    // event flag (LOITER recovery via FaultManager).  Note: must be
-    // declared AFTER `benchmark_profiler` so the callback's profiler_ptr
-    // capture sees the correct address; AFTER `watchdog` is the call site.
-    // Deferred from #765 acceptance: stack-trace via SIGUSR1 + backtrace_symbols
-    // (async-signal-safety mechanics non-trivial), mutex-snapshot
-    // ("which locks does the stuck thread hold" — needs codebase-wide
-    // instrumented mutex wrappers).
-    PlannerStallHandler           stall_handler("planning_loop");
     drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
                                                                     : nullptr;
     // Install the watchdog stuck-callback now that `profiler_ptr` is

@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **102 C++ + 5 shell + 1 Python** | **2110 (no SDK, 8 Cosys-SDK tests skipped) / 2118 (+SDK) + 42 + 29 + 250+** | Current PR: Issues #718 + #765 (cold-start defense escalation) +18 tests across 3 files (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→45, new `test_planner_stall_handler.cpp` with 7 tests). Recent deltas on `feature/cold-start-hardening`: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3, **this PR +18**. For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **102 C++ + 5 shell + 1 Python** | **2112 (no SDK, 8 Cosys-SDK tests skipped) / 2120 (+SDK) + 42 + 29 + 250+** | Current PR: Issues #718 + #765 (cold-start defense escalation) +20 tests across 3 files (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→47, new `test_planner_stall_handler.cpp` with 7 tests). Latch-persistence + fault_flags_string registry tests added in PR #775 review-fix round. Recent deltas on `feature/cold-start-hardening`: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3, **this PR +20**. For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -666,7 +666,7 @@ flight mission lifecycle plus the Issue #503 stuck detector.
 
 ---
 
-### test_fault_manager.cpp — 45 tests
+### test_fault_manager.cpp — 47 tests
 
 **What it tests:** `FaultManager` graceful degradation engine — config-driven
 fault evaluation with escalation-only policy.

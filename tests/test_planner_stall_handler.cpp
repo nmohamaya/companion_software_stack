@@ -1,8 +1,8 @@
 // tests/test_planner_stall_handler.cpp
 //
 // Unit tests for `drone::planner::PlannerStallHandler` — the watchdog
-// stuck-callback handler that ships in PR #718 + partially closes
-// the #765 P4 mid-flight planning_loop stall.
+// stuck-callback handler that ships in PR #775 (closes Issue #718,
+// partially closes #765 P4 mid-flight planning_loop stall).
 //
 // What we test:
 //   - `consume_event()` returns false initially, true after a stuck

@@ -125,7 +125,12 @@ struct StateTickConfig {
     //      IDLE entry path),
     //   3. raises a single-shot event consumed by main.cpp on the next
     //      `FaultManager.evaluate()` to set `FAULT_FC_PREFLIGHT_TIMEOUT`
-    //      for GCS visibility.
+    //      for GCS visibility.  PR #775 review fix: the FaultManager
+    //      setter is OR-latched (see fault_manager.h::set_preflight_timeout)
+    //      so the bit persists in `active_faults` across all subsequent
+    //      evaluate() calls until `reset()` — GCS polling at 500 ms–1 s
+    //      reliably observes the fault despite the planner ticking at
+    //      10 Hz.  Pre-fix it was visible for one tick only.
     //
     // `preflight_warn_s` (must be < `preflight_timeout_s`) promotes
     // the per-tick "Waiting for FC preflight" log from INFO to WARN so
@@ -212,8 +217,7 @@ public:
         // re-entry to PREFLIGHT would inherit a stale `preflight_held_since_ns_`
         // and fire the timeout almost immediately.
         if (last_tick_state_ == MissionState::PREFLIGHT && fsm.state() != MissionState::PREFLIGHT) {
-            preflight_held_since_ns_    = 0;
-            preflight_last_warn_log_ns_ = 0;
+            reset_preflight_timer();
         }
         last_tick_state_ = fsm.state();
 
@@ -398,6 +402,18 @@ private:
         return false;
     }
 
+    // Issue #718 / PR #775 review (code-quality P2): the two PREFLIGHT
+    // timeout-tracking fields move together — reset one, reset the other,
+    // or the warn-log throttle gets out of sync with the held-since
+    // timestamp.  Extracted to a one-liner so all four reset sites
+    // (outer-tick state-exit detector, timeout-fired path, gate-disabled
+    // takeoff success, Layer 4 settle success) can't accidentally diverge
+    // if a third field is added later.
+    void reset_preflight_timer() {
+        preflight_held_since_ns_    = 0;
+        preflight_last_warn_log_ns_ = 0;
+    }
+
     // ── PREFLIGHT: wait for FC readiness, then ARM (retry on configurable
     //               interval as a safety net for dropped MAVLink messages) ──
     //
@@ -489,11 +505,10 @@ private:
                             static_cast<double>(held_ns) * 1e-9, fc_state.armable, fc_state.armed);
             send_fc(drone::ipc::FCCommandType::DISARM, 0.0f);
             fsm.on_landed();  // FSM → IDLE (existing entry path)
-            preflight_timeout_fired_    = true;
-            preflight_held_since_ns_    = 0;  // avoid immediate re-fire on re-entry
-            preflight_last_warn_log_ns_ = 0;
-            armable_first_seen_ns_      = 0;
-            armed_settle_count_         = 0;
+            preflight_timeout_fired_ = true;
+            reset_preflight_timer();  // avoid immediate re-fire on re-entry
+            armable_first_seen_ns_ = 0;
+            armed_settle_count_    = 0;
             return;
         }
 
@@ -542,16 +557,19 @@ private:
                 // Gate disabled by config — legacy immediate takeoff.
                 DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
                 fsm.on_takeoff();
-                takeoff_sent_          = false;
-                armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
-                armed_settle_count_    = 0;
+                takeoff_sent_       = false;
+                armed_settle_count_ = 0;
+                // PR #775 review (code-quality P2.6): redundant
+                // `armable_first_seen_ns_ = 0` removed — already cleared
+                // at the top of the `if (fc_state.armed)` block (see
+                // "Copilot fix" comment ~30 lines up).
+                //
                 // Issue #718 — release on successful takeoff fires.
                 // Defence-in-depth: the outer-tick state-exit detector
                 // in `tick()` would catch the PREFLIGHT → TAKEOFF edge
                 // on the next tick, but resetting here makes the intent
                 // explicit and avoids relying on the dispatch order.
-                preflight_held_since_ns_    = 0;
-                preflight_last_warn_log_ns_ = 0;
+                reset_preflight_timer();
                 return;
             }
 
@@ -572,12 +590,15 @@ private:
                                    "pitch={:.1f}° |v|={:.2f}m/s) — initiating takeoff",
                                    armed_settle_count_, roll_deg, pitch_deg, vel_mag);
                     fsm.on_takeoff();
-                    takeoff_sent_          = false;
-                    armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
-                    armed_settle_count_    = 0;
+                    takeoff_sent_       = false;
+                    armed_settle_count_ = 0;
+                    // PR #775 review (code-quality P2.6): redundant
+                    // `armable_first_seen_ns_ = 0` removed — already
+                    // cleared at the top of the `if (fc_state.armed)`
+                    // block 50+ lines up.
+                    //
                     // Issue #718 — release on successful Layer 4 takeoff.
-                    preflight_held_since_ns_    = 0;
-                    preflight_last_warn_log_ns_ = 0;
+                    reset_preflight_timer();
                     return;
                 }
                 // Still accumulating consecutive settled observations.

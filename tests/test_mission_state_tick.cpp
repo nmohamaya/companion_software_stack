@@ -1509,10 +1509,14 @@ TEST_F(MissionStateTickPreflightTimeoutTest, WarnThresholdElapsesButNotYetTimeou
     EXPECT_FALSE(state_tick.consume_preflight_timeout_event());
 }
 
-// Recovery before timeout — Layer 1 case.  `armable` flickers false
-// for a while then recovers; the eventual ARM fires (after the existing
-// debounce window), and the timeout never fires.
-TEST_F(MissionStateTickPreflightTimeoutTest, Layer1RecoveryBeforeTimeoutDoesNotFire) {
+// PR #775 review (test-unit + test-quality + Copilot P1 — rename):
+// previously named `Layer1RecoveryBeforeTimeoutDoesNotFire`, which lied —
+// the test actually asserts the timeout WINS the race when total elapsed
+// (debounce + recovery delay) exceeds `preflight_timeout_s`.  Renamed to
+// match what it actually exercises: safety-first ordering where the
+// timeout check at the top of tick_preflight precedes the ARM path deeper
+// in the function.
+TEST_F(MissionStateTickPreflightTimeoutTest, Layer1TimeoutWinsOverPendingArmInRaceWindow) {
     auto pose          = make_pose(0, 0, 0);
     auto fc_unready    = make_fc(false, 0);
     fc_unready.armable = false;
