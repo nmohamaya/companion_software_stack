@@ -1,8 +1,11 @@
 // process4_mission_planner/include/planner/planner_stall_handler.h
 //
 // Issue #765 (acceptance #1 partial) — diagnostic enrichment + LOITER
-// escalation when ThreadWatchdog detects the `planning_loop` thread
-// stuck for more than `planner_stall_loiter_s`.
+// escalation when `ThreadWatchdog` detects the `planning_loop` thread
+// stuck for more than the watchdog's own `heartbeat_timeout_s`
+// threshold (default 5 s for critical threads).  No separate config
+// key for the planner-stall threshold — see config_keys.h comment on
+// the dropped `planner_stall_loiter_s` for the rationale.
 //
 // What this does
 // ──────────────
@@ -63,10 +66,16 @@ namespace drone::planner {
 /// thread, the FAULT_PLANNER_STALL event flag, and the diagnostic
 /// dump emitted on stuck-detection.
 ///
-/// Construct once in `main.cpp` and call `install(...)` with the
-/// LatencyProfiler pointer (may be nullptr — dump degrades gracefully)
-/// and the `ThreadWatchdog`.  Read `consume_event()` once per planning
-/// tick and pass to `FaultManager::set_planner_stall()`.
+/// Usage in `main.cpp`:
+///   1. Construct the handler (with the watched-thread name) BEFORE
+///      the `ThreadWatchdog` so destruction order is correct
+///      (see `make_callback()` lifetime contract below).
+///   2. Build the callback via `make_callback(profiler_ptr)` after the
+///      `LatencyProfiler` exists.  Pass `nullptr` if benchmark mode is
+///      disabled — the dump degrades gracefully.
+///   3. Install the callback via `watchdog.set_stuck_callback(...)`.
+///   4. Each planning tick: read `consume_event()` and pass to
+///      `FaultManager::set_planner_stall()`.
 class PlannerStallHandler {
 public:
     /// @param watched_thread_name  Name of the thread whose stall
