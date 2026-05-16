@@ -20,6 +20,7 @@
 #include "slam/vio_types.h"
 #include "util/config_keys.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
 #include "util/process_context.h"
 #include "util/rate_clamp.h"
 #include "util/scoped_timer.h"
@@ -372,12 +373,7 @@ static void cosys_passthrough_pose_thread(
 
         if (got) {
             drone::ipc::Pose shm_pose{};
-            const auto       now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                    std::chrono::steady_clock::now().time_since_epoch())
-                                    .count();
-            // Clamp negative steady_clock epoch (paranoia — shouldn't happen) before
-            // narrowing to uint64_t.
-            shm_pose.timestamp_ns = static_cast<uint64_t>(std::max<int64_t>(0, now_ns));
+            shm_pose.timestamp_ns = drone::util::get_clock().now_ns();
 
             // AirSim NED → internal (X=N, Y=E, Z=Up): negate Z.
             shm_pose.translation[0] = static_cast<double>(kin.pose.position.x());

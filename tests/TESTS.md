@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **100 C++ + 5 shell + 1 Python** | **2089 (no SDK, 8 Cosys-SDK tests skipped) / 2097 (+SDK) + 42 + 29 + 250+** | Active baseline updated for Issue #740 Layer 4 (post-ARM takeoff settle gate, +7 tests in `test_mission_state_tick.cpp`). Prior baseline `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/cold-start-hardening` integration branch: PR #741 (Layer 1, merged) +4; PR #743 (review-fixes, merged) +4; Issue #740 Layer 4 (PR #763) +7 (initial 4 — `SettleGateHoldsUntilNConsecutiveObservations`, `SettleGateExcursionResetsCounter`, `SettleGateResetsWhenDisarmed`, `ZeroObservationsDisablesGate` — plus 3 from PR #763 review fixes: `SettleGateVelocityExcursionResetsCounter`, `SettleGateNonFiniteResetsCounter`, `SettleGateNeverSettlesHoldsPreflight`). Earlier `feature/perception-v2-integration` deltas since PR #704: PR #711 net −7; PR #717 +2; PR #725 +1 net. For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **101 C++ + 5 shell + 1 Python** | **2092 (no SDK, 8 Cosys-SDK tests skipped) / 2100 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #767 (PR #774) +3 tests in new `test_clock_migration_767.cpp`. Prior baseline `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/cold-start-hardening` integration: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3. For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -746,6 +746,28 @@ cases.
 | `Issue624YawRefreshTest` | 2 | Post-avoider yaw-towards-velocity refresh (#624) |
 
 **Key files under test:** `planner/mission_state_tick.h`
+
+---
+
+### test_clock_migration_767.cpp — 3 tests
+
+**What it tests:** Documentation tests for the [#767](https://github.com/nmohamaya/companion_software_stack/issues/767) tactical clock migration (sub-issue of clock-modernisation epic [#766](https://github.com/nmohamaya/companion_software_stack/issues/766)). Three production sites were migrated from direct `std::chrono::steady_clock::now()` to `drone::util::get_clock()` so they share a clock domain with the existing `get_clock()` consumers and with future `MockClock` / `GazeboSimClock` ([#769](https://github.com/nmohamaya/companion_software_stack/issues/769)) / `FCSystemTimeClock` ([#770](https://github.com/nmohamaya/companion_software_stack/issues/770)) backends:
+
+1. P3 cosys-passthrough pose stamp at `process3_slam_vio_nav/src/main.cpp:376` (producer of `pose.timestamp_ns`).
+2. P5 `fc_tx_thread` heartbeat suppressor at `process5_comms/src/main.cpp:165, 263, 298` (`now_init`, `now_send`, `now` driving the period + stale-bound gates around `evaluate_heartbeat`).
+3. P4 pose-staleness consumer at `process4_mission_planner/src/main.cpp:887` (the inline `now_ns` feeding both the SAFETY-CRITICAL inline staleness check at line 891 and `FaultManager.evaluate(... now_ns ...)` at line 943).
+
+**Honest scope statement.** These tests do NOT regression-lock the migrated production lines — the sites are inside long thread loops that aren't extracted into separately-linkable functions, so a unit test cannot detect a revert from `get_clock()` back to `steady_clock::now()` at any specific call site. The PR review for #767 surfaced this gap (review-test-quality + Copilot, multiple-agent agreement); the honest framing here is documentation, not pretend-regression-lock. Real call-site coverage would need a static text-grep CI gate (tracked under the bulk-migration enforcement issue), an integration test running each process with mockable instrumentation, or a refactor extracting the time source into a separately-testable seam. All three are out of scope for the tactical migration tracked here.
+
+| Suite / Test | What is verified |
+|--------------|------------------|
+| `ClockMigration767Test::P3PoseStampReadsActiveClock` | `pose.timestamp_ns = get_clock().now_ns()` reads the active clock — picks up `ScopedMockClock` initial value and advances on `advance_ms()`. Demonstrates the producer-side abstraction works. |
+| `ClockMigration767Test::P4FaultManagerStaleCheckIsMockClockDriven` | **End-to-end producer (P3 stamp) ↔ consumer (P4 `FaultManager.evaluate`) coherence.** The actual `FaultManager` code path is exercised — not the inline check in P4 main.cpp's loop, which is not extracted. Drives `FAULT_POSE_STALE` from inactive to active via `advance_ms(501)` against the configured 500 ms `pose_stale_timeout_ns`. This is the architectural unlock — pre-migration the consumer's `now_ns` was raw `steady_clock`, so this end-to-end mock-clock scenario was impossible. |
+| `ClockMigration767Test::P5HeartbeatStaleBoundIsMockClockDriven` | Mirrors the production heartbeat wiring with the **production constants** (`kHeartbeatPeriod{40}` and `kMaxHeartbeatStaleMs{5000}` from `process5_comms/src/main.cpp:154-155`). Drives `None → Send → SuppressStale` through `advance_ms(50)` + `advance_ms(4'951)` in microseconds. Pre-migration this gate was only exercisable via `sleep_for(>5'001 ms)` — CI-hostile. |
+
+**Why these tests matter:** Pre-migration the producer/consumer sides of the pose-staleness fault path used different clock APIs — coherent in production (both reduce to the same syscall) but split under any future MockClock / GazeboSimClock backend. The P4 staleness test specifically demonstrates the end-to-end mock-clock coherence the migration was added to enable. The heartbeat test uses production constants so a future regression that changes the production threshold without updating the test will fail.
+
+**Key files under test:** `process3_slam_vio_nav/src/main.cpp`, `process5_comms/src/main.cpp`, `process4_mission_planner/src/main.cpp`, `process4_mission_planner/include/planner/fault_manager.h`, `process5_comms/include/comms/heartbeat_decision.h`, `common/util/include/util/iclock.h`
 
 ---
 

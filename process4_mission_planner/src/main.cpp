@@ -883,9 +883,14 @@ int main(int argc, char* argv[]) {
             health_sub->receive(sys_health);
         }
 
-        auto now_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                std::chrono::steady_clock::now().time_since_epoch())
-                                                .count());
+        // Issue #767: source via drone::util::get_clock() so the pose-staleness
+        // gate (inline below + FaultManager.evaluate at line ~943) shares a
+        // clock domain with the P3 producer (process3_slam_vio_nav/src/main.cpp,
+        // also migrated in this PR).  Without this, MockClock-driven tests of
+        // the staleness gate compute age = (real_wall - mocked_stamp), which is
+        // meaningless.  Other steady_clock::now() callsites in this file are
+        // tracked by the bulk-migration sweep (clock-modernisation epic #766).
+        auto now_ns = drone::util::get_clock().now_ns();
 
         // ── 2. Pose staleness check (SAFETY CRITICAL, inline) ──
         if (pose.timestamp_ns > 0 && (now_ns - pose.timestamp_ns) > kPoseStaleThresholdNs) {
