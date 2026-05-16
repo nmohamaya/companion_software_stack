@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **101 C++ + 5 shell + 1 Python** | **2092 (no SDK, 8 Cosys-SDK tests skipped) / 2100 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #767 (PR #774) +3 tests in new `test_clock_migration_767.cpp`. Prior baseline `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/cold-start-hardening` integration: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3. For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **102 C++ + 5 shell + 1 Python** | **2110 (no SDK, 8 Cosys-SDK tests skipped) / 2118 (+SDK) + 42 + 29 + 250+** | Current PR: Issues #718 + #765 (cold-start defense escalation) +18 tests across 3 files (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→45, new `test_planner_stall_handler.cpp` with 7 tests). Recent deltas on `feature/cold-start-hardening`: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3, **this PR +18**. For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -666,7 +666,7 @@ flight mission lifecycle plus the Issue #503 stuck detector.
 
 ---
 
-### test_fault_manager.cpp — 41 tests
+### test_fault_manager.cpp — 45 tests
 
 **What it tests:** `FaultManager` graceful degradation engine — config-driven
 fault evaluation with escalation-only policy.
@@ -719,7 +719,7 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 39 tests
+### test_mission_state_tick.cpp — 46 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
 states (PREFLIGHT, TAKEOFF, NAVIGATE, NAVIGATE_UNSTUCK, RTL, LAND) with
@@ -742,10 +742,34 @@ cases.
 | `MissionStateTickDebounceConfigTest` | 1 | Zero-window config disables the debounce (preserves legacy single-tick behaviour for headless dev / non-Gazebo tests) |
 | `MissionStateTickTakeoffSettleTest` | 6 | **Issue #740 Layer 4 post-ARM settle gate**: takeoff held until N consecutive settled (level + near-zero-velocity) FCState observations, fires exactly on the Nth; tilt excursion mid-window resets the counter; **velocity excursion** mid-window resets (PR #763 review); **non-finite (NaN) FC estimate** counts as excursion, isolating the `std::isfinite` guard (PR #763 review); a disarm mid-window clears the counter so a re-arm must re-accumulate the full N; **never-settles** holds PREFLIGHT indefinitely (fail-safe, escalation tracked in #718) |
 | `MissionStateTickTakeoffSettleConfigTest` | 1 | `takeoff_settle_observations = 0` disables the Layer 4 gate (legacy immediate takeoff on first armed observation) |
+| `MissionStateTickPreflightTimeoutTest` | 6 | **Issue #718 — PREFLIGHT timeout escalation**: Layer 1 (`armable` never stably true) AND Layer 4 (post-ARM attitude/velocity never settle) both trigger DISARM + FSM → IDLE + single-shot `FAULT_FC_PREFLIGHT_TIMEOUT` event after `preflight_timeout_s` wall-clock; WARN-log fires at `preflight_warn_s` before the timeout (escalation runway visibility); fast recovery (ARM fires within budget) does NOT trigger the timeout; the timeout WINS the timeout-vs-ARM race when both conditions are satisfied in the same tick (safety-first ordering); re-entry to PREFLIGHT after a prior timeout starts a fresh timer (outer-tick state-exit detector reset path). Drives all timing via `ScopedMockClock`. |
+| `MissionStateTickPreflightTimeoutConfigTest` | 1 | `preflight_timeout_s = 0` disables the escalation entirely (legacy hold-forever behaviour preserved for headless dev configs + unit-test fixtures). |
 | `MissionStateTickUnstuckTest` | 2 | NAVIGATE_UNSTUCK escalation behaviour (#503) |
 | `Issue624YawRefreshTest` | 2 | Post-avoider yaw-towards-velocity refresh (#624) |
 
 **Key files under test:** `planner/mission_state_tick.h`
+
+---
+
+### test_planner_stall_handler.cpp — 7 tests
+
+**What it tests:** [`drone::planner::PlannerStallHandler`](../process4_mission_planner/include/planner/planner_stall_handler.h) — the `ThreadWatchdog::set_stuck_callback` handler installed by P4 main.cpp ([#718](https://github.com/nmohamaya/companion_software_stack/issues/718) + partial [#765](https://github.com/nmohamaya/companion_software_stack/issues/765)). Responsibilities: log diagnostic dump (LatencyProfiler snapshot + thread name) when any registered thread is detected stuck; set the `FAULT_PLANNER_STALL` event flag ONLY for the watched thread (`planning_loop` by default — other threads are logged but don't trigger LOITER escalation, they're handled by their own paths / process restart).
+
+| Test | What is validated |
+|------|-------------------|
+| `ConsumeEventIsFalseInitially` | No stall events — `consume_event()` and `peek_event()` both return false |
+| `WatchedThreadStallSetsEventFlag` | A stuck-event for the watched thread sets the flag; `consume_event()` returns true exactly once (single-shot semantics) |
+| `NonWatchedThreadStallDoesNotSetEventFlag` | Stuck-events for OTHER threads (e.g. `fc_state_subscriber`) get logged but do NOT raise `FAULT_PLANNER_STALL` — only `planning_loop` escalates to LOITER |
+| `MultipleStuckEventsLatchToSingleConsume` | 3 stuck-events collapse to one `consume_event()` returning true (intentional: FaultManager's escalation-only policy handles persistence, no need to re-raise each tick) |
+| `DiagnosticDumpWithProfilerDoesNotCrash` | The LatencyProfiler-snapshot dump path (called with a non-null profiler) runs cleanly — no exceptions, no asan trips |
+| `MakeCallbackProducesValidStuckCallback` | The callback object returned by `make_callback()` correctly captures the handler (the watchdog scan thread fires the callback; the handler must outlive it) |
+| `ConsumeEventIsThreadSafeAcrossWatchdogAndPlanningLoop` | The `std::atomic<bool>` with explicit acquire/release ordering keeps the setter-thread (watchdog scan) + consumer-thread (planning loop) coherent under 1000-iteration contention |
+
+**Why these tests matter:** The handler is the bridge between `ThreadWatchdog` (fires on the scan thread) and `FaultManager` (consumes on the planning loop thread). The atomic ordering MUST be right or stall events get lost in the race; the watched-thread filter MUST be right or every stuck thread escalates to LOITER (which is wrong — non-planner threads have their own recovery paths). Pre-#718, the watchdog only logged on stuck-detection — there was no escalation. This handler is the first time a stuck `planning_loop` actually triggers a fault response.
+
+**Deferred from #765 acceptance** (tracked in the issue for follow-up): stack-trace capture via `pthread_kill(SIGUSR1)` + `backtrace_symbols` (async-signal-safety mechanics non-trivial), mutex-snapshot ("which locks does the stuck thread hold" — needs codebase-wide instrumented mutex wrappers).
+
+**Key files under test:** `process4_mission_planner/include/planner/planner_stall_handler.h`, `common/util/include/util/thread_watchdog.h`, `common/util/include/util/latency_profiler.h`
 
 ---
 

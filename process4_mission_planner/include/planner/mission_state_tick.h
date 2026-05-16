@@ -114,6 +114,32 @@ struct StateTickConfig {
     int   takeoff_settle_observations{30};
     float takeoff_max_tilt_deg{5.0f};
     float takeoff_max_velocity_mps{0.3f};
+
+    // Issue #718 — PREFLIGHT timeout escalation.  If either Layer 1
+    // (`fc_state.armable` never stably true) or Layer 4 (post-ARM
+    // attitude/velocity never settle) holds the FSM in PREFLIGHT for
+    // more than `preflight_timeout_s` wall-clock seconds, the planner:
+    //   1. emits FCCommandType::DISARM (cheap action — drone is on the
+    //      ground or motors at idle, NEVER in flight from PREFLIGHT),
+    //   2. transitions FSM → IDLE via `fsm.on_landed()` (the existing
+    //      IDLE entry path),
+    //   3. raises a single-shot event consumed by main.cpp on the next
+    //      `FaultManager.evaluate()` to set `FAULT_FC_PREFLIGHT_TIMEOUT`
+    //      for GCS visibility.
+    //
+    // `preflight_warn_s` (must be < `preflight_timeout_s`) promotes
+    // the per-tick "Waiting for FC preflight" log from INFO to WARN so
+    // operators see the escalation approaching before it fires.
+    //
+    // Both keys default to "0 disables the escalation entirely" so
+    // legacy unit-test fixtures (and headless dev configs that don't
+    // want timeouts firing during interactive debugging) can keep the
+    // existing hold-forever behaviour.  Production configs MUST set
+    // a non-zero timeout — see CLAUDE.md §"Asymmetric pre-conditions
+    // for asymmetric-cost actions": a stuck-in-PREFLIGHT drone with
+    // no operator alert is a silent-failure mode.
+    int preflight_warn_s{30};
+    int preflight_timeout_s{60};
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -180,6 +206,17 @@ public:
             }
         }
 
+        // Issue #718 — reset PREFLIGHT timeout tracking on the trailing
+        // edge of any PREFLIGHT exit (success via takeoff, or GCS abort,
+        // or our own timeout-induced abort).  Without this, a future
+        // re-entry to PREFLIGHT would inherit a stale `preflight_held_since_ns_`
+        // and fire the timeout almost immediately.
+        if (last_tick_state_ == MissionState::PREFLIGHT && fsm.state() != MissionState::PREFLIGHT) {
+            preflight_held_since_ns_    = 0;
+            preflight_last_warn_log_ns_ = 0;
+        }
+        last_tick_state_ = fsm.state();
+
         // No `default:` — exhaustive switch enables -Wswitch to catch new
         // MissionState values the moment they're added (CLAUDE.md safety rule).
         switch (fsm.state()) {
@@ -214,6 +251,17 @@ public:
     [[nodiscard]] bool consume_fault_reset() {
         bool v            = fault_exec_reset_;
         fault_exec_reset_ = false;
+        return v;
+    }
+
+    /// Issue #718 — single-shot event flag.  Set by `tick_preflight()`
+    /// when the PREFLIGHT-stuck timer fires (after DISARMing + FSM → IDLE).
+    /// main.cpp reads + clears this each tick and passes the boolean into
+    /// `FaultManager::set_preflight_timeout()` so the next `evaluate()`
+    /// raises FAULT_FC_PREFLIGHT_TIMEOUT for GCS visibility.
+    [[nodiscard]] bool consume_preflight_timeout_event() {
+        bool v                   = preflight_timeout_fired_;
+        preflight_timeout_fired_ = false;
         return v;
     }
 
@@ -269,6 +317,29 @@ private:
     //       never had a chance to grow.
     // Takeoff fires once it reaches `config_.takeoff_settle_observations`.
     uint32_t armed_settle_count_ = 0;
+
+    // Issue #718 — PREFLIGHT timeout escalation tracking.
+    // `preflight_held_since_ns_` = wall time of the first tick the FSM
+    // entered (or returned to) PREFLIGHT.  Zero = "not currently in a
+    // PREFLIGHT hold."  Reset on (a) successful release via
+    // `fsm.on_takeoff()`, (b) the timeout firing (we transition to IDLE),
+    // and (c) the outer-tick state-exit detector below (if the FSM
+    // leaves PREFLIGHT for any other reason — GCS abort, etc.).
+    // `preflight_last_warn_log_ns_` throttles the WARN-promoted log so
+    // it fires once per `preflight_wait_log_s` after the warn threshold.
+    // `preflight_timeout_fired_` is a single-shot event flag for
+    // `consume_preflight_timeout_event()` — main.cpp reads + clears it
+    // each tick and passes the boolean into `FaultManager.set_preflight_timeout()`.
+    uint64_t preflight_held_since_ns_    = 0;
+    uint64_t preflight_last_warn_log_ns_ = 0;
+    bool     preflight_timeout_fired_    = false;
+
+    // Issue #718 — tracks the previous tick's FSM state so we can detect
+    // PREFLIGHT exit on the *trailing* edge and clear `preflight_held_since_ns_`.
+    // Without this, a GCS-induced abort (PREFLIGHT → IDLE) would leave
+    // the timer set, and a future re-entry to PREFLIGHT would inherit a
+    // stale elapsed window and fire the timeout immediately.
+    MissionState last_tick_state_ = MissionState::IDLE;
 
     // Collision recovery state (Issue #226)
     enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
@@ -369,6 +440,81 @@ private:
     // FAULT_FC_PREFLIGHT_TIMEOUT is tracked as #718.
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
                         const FCSendFn& send_fc) {
+        // PR #741 review (4 agents convergent): use a single clock domain
+        // (`drone::util::get_clock()`) for ALL PREFLIGHT timing so unit tests
+        // with `ScopedMockClock` can drive every throttle deterministically.
+        // One `now_ns` capture per tick — cheap (one atomic load + virtual
+        // call), and `tick_preflight()` exits PREFLIGHT after a few seconds
+        // so this isn't a sustained hot path.
+        const uint64_t now_ns = drone::util::get_clock().now_ns();
+
+        // ── Issue #718 — PREFLIGHT timeout escalation ──────────
+        // Track continuous time held in PREFLIGHT and DISARM + abort
+        // to IDLE if `preflight_timeout_s` elapses without release.
+        // Covers BOTH Layer 1 (`armable` never stably true) and Layer 4
+        // (post-ARM attitude/velocity never settle) — neither layer
+        // released, no point in keeping the FSM held with no operator
+        // visibility past the configured budget.  Per CLAUDE.md
+        // "Asymmetric pre-conditions for asymmetric-cost actions",
+        // the recovery action is DISARM (cheap: drone is on the
+        // ground or motors at idle — NEVER in flight from PREFLIGHT)
+        // rather than LOITER (which is the mid-flight response and
+        // makes no sense pre-takeoff).
+        //
+        // Sentinel `0` = "not currently tracking" — set on first tick
+        // in PREFLIGHT, reset by the outer-tick state-exit detector
+        // (in `tick()`) and by the takeoff-success paths below.
+        // Clock-rewind guard mirrors the `armable_first_seen_ns_`
+        // pattern (PR #743 review): a MockClock manual reset must
+        // restart the window, not produce a wrapped-uint underflow.
+        if (preflight_held_since_ns_ == 0 || now_ns < preflight_held_since_ns_) {
+            preflight_held_since_ns_    = now_ns;
+            preflight_last_warn_log_ns_ = 0;  // fresh window, fresh WARN throttle
+        }
+        const uint64_t held_ns = now_ns - preflight_held_since_ns_;
+        const uint64_t timeout_ns =
+            static_cast<uint64_t>(std::max(0, config_.preflight_timeout_s)) * 1'000'000'000ULL;
+        const uint64_t warn_ns = static_cast<uint64_t>(std::max(0, config_.preflight_warn_s)) *
+                                 1'000'000'000ULL;
+
+        if (timeout_ns > 0 && held_ns > timeout_ns) {
+            // Timeout fired — abort PREFLIGHT.  Emit DISARM (cheap: pre-
+            // takeoff), transition FSM → IDLE via the existing IDLE entry
+            // path, and raise the single-shot event for main.cpp to
+            // propagate as FAULT_FC_PREFLIGHT_TIMEOUT on the next
+            // `FaultManager.evaluate()`.
+            DRONE_LOG_ERROR("[Planner] PREFLIGHT timeout — held for {:.1f}s without release "
+                            "(armable={}, armed={}); DISARMing and aborting to IDLE. "
+                            "FAULT_FC_PREFLIGHT_TIMEOUT will be raised for GCS.",
+                            static_cast<double>(held_ns) * 1e-9, fc_state.armable, fc_state.armed);
+            send_fc(drone::ipc::FCCommandType::DISARM, 0.0f);
+            fsm.on_landed();  // FSM → IDLE (existing entry path)
+            preflight_timeout_fired_    = true;
+            preflight_held_since_ns_    = 0;  // avoid immediate re-fire on re-entry
+            preflight_last_warn_log_ns_ = 0;
+            armable_first_seen_ns_      = 0;
+            armed_settle_count_         = 0;
+            return;
+        }
+
+        // Warn threshold reached but not yet timeout — promote the
+        // per-tick wait log from INFO to WARN so operators see the
+        // escalation approaching.  Throttled on `preflight_wait_log_s`
+        // (separate from the Layer 1 `last_wait_log_time_ns_` INFO
+        // throttle so an operator monitoring at WARN sees both the
+        // promotion edge and the per-tick state without flooding).
+        if (warn_ns > 0 && held_ns > warn_ns) {
+            const uint64_t warn_log_interval_ns =
+                static_cast<uint64_t>(std::max(0, config_.preflight_wait_log_s)) * 1'000'000'000ULL;
+            if (fire_throttled(preflight_last_warn_log_ns_, now_ns, warn_log_interval_ns)) {
+                DRONE_LOG_WARN(
+                    "[Planner] PREFLIGHT held for {:.1f}s (warn at {}s, timeout at {}s) — "
+                    "armable={}, armed={}",
+                    static_cast<double>(held_ns) * 1e-9, config_.preflight_warn_s,
+                    config_.preflight_timeout_s, fc_state.armable, fc_state.armed);
+            }
+        }
+
         if (fc_state.armed) {
             // Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle
             // gate.  The #746 smoke sweep proved the #741 `armable` debounce
@@ -399,6 +545,13 @@ private:
                 takeoff_sent_          = false;
                 armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
                 armed_settle_count_    = 0;
+                // Issue #718 — release on successful takeoff fires.
+                // Defence-in-depth: the outer-tick state-exit detector
+                // in `tick()` would catch the PREFLIGHT → TAKEOFF edge
+                // on the next tick, but resetting here makes the intent
+                // explicit and avoids relying on the dispatch order.
+                preflight_held_since_ns_    = 0;
+                preflight_last_warn_log_ns_ = 0;
                 return;
             }
 
@@ -422,6 +575,9 @@ private:
                     takeoff_sent_          = false;
                     armable_first_seen_ns_ = 0;  // reset for any future re-PREFLIGHT
                     armed_settle_count_    = 0;
+                    // Issue #718 — release on successful Layer 4 takeoff.
+                    preflight_held_since_ns_    = 0;
+                    preflight_last_warn_log_ns_ = 0;
                     return;
                 }
                 // Still accumulating consecutive settled observations.
@@ -451,14 +607,8 @@ private:
         }
         // Not armed — clear the Layer 4 settle counter so a future arm starts
         // a fresh consecutive-observation window (covers disarm + re-PREFLIGHT).
+        // `now_ns` captured at top of function (see PR #741 review comment).
         armed_settle_count_ = 0;
-        // PR #741 review (4 agents convergent): use a single clock domain
-        // (`drone::util::get_clock()`) for ALL PREFLIGHT timing so unit tests
-        // with `ScopedMockClock` can drive every throttle deterministically.
-        // One `now_ns` capture per tick — cheap (one atomic load + virtual
-        // call), and `tick_preflight()` exits PREFLIGHT after a few seconds
-        // so this isn't a sustained hot path.
-        const uint64_t now_ns = drone::util::get_clock().now_ns();
         if (!fc_state.armable) {
             // FC preflight not yet clear (EKF2 converging, sensors warming,
             // GPS lock acquiring, etc.).  Reset the stability tracker — any

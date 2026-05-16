@@ -15,6 +15,7 @@
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
+#include "planner/planner_stall_handler.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/config_keys.h"
 #include "util/correlation.h"
@@ -517,6 +518,25 @@ int main(int argc, char* argv[]) {
         ctx.cfg, drone::cfg_key::mission_planner::TAKEOFF_MAX_VELOCITY_MPS, 0.3f, 0.0f, 5.0f,
         "takeoff_max_velocity_mps");
 
+    // Issue #718 — PREFLIGHT timeout escalation tunables.  Both
+    // default to "0 disables the escalation" so headless dev configs
+    // and the existing unit-test fixture keep the legacy hold-forever
+    // behaviour.  Production defaults (set in config/default.json):
+    // warn=30s, timeout=60s — gives 2.5x margin over the worst-case
+    // ~22s preflight wait observed in the PR #763 smoke sweep.
+    tick_cfg.preflight_warn_s = validate_and_clamp<int>(
+        ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_WARN_S, 30, 0, 600, "preflight_warn_s");
+    tick_cfg.preflight_timeout_s =
+        validate_and_clamp<int>(ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_TIMEOUT_S, 60,
+                                0, 1800, "preflight_timeout_s");
+    if (tick_cfg.preflight_timeout_s > 0 &&
+        tick_cfg.preflight_warn_s >= tick_cfg.preflight_timeout_s) {
+        DRONE_LOG_WARN("[Planner] preflight_warn_s ({}) >= preflight_timeout_s ({}) — "
+                       "WARN log will never fire before the timeout escalation.  Set "
+                       "preflight_warn_s < preflight_timeout_s for visible escalation runway.",
+                       tick_cfg.preflight_warn_s, tick_cfg.preflight_timeout_s);
+    }
+
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
@@ -720,8 +740,24 @@ int main(int argc, char* argv[]) {
         DRONE_LOG_INFO("[Benchmark] LatencyProfiler enabled — stages: PlannerLoop, GeofenceCheck, "
                        "FaultEval");
     }
+    // Issues #718 / #765 — install the ThreadWatchdog stuck-callback
+    // for the planning_loop thread.  Diagnostic dump + FAULT_PLANNER_STALL
+    // event flag (LOITER recovery via FaultManager).  Note: must be
+    // declared AFTER `benchmark_profiler` so the callback's profiler_ptr
+    // capture sees the correct address; AFTER `watchdog` is the call site.
+    // Deferred from #765 acceptance: stack-trace via SIGUSR1 + backtrace_symbols
+    // (async-signal-safety mechanics non-trivial), mutex-snapshot
+    // ("which locks does the stuck thread hold" — needs codebase-wide
+    // instrumented mutex wrappers).
+    PlannerStallHandler           stall_handler("planning_loop");
     drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
                                                                     : nullptr;
+    // Install the watchdog stuck-callback now that `profiler_ptr` is
+    // known.  Callback fires on the watchdog scan thread when any
+    // registered thread is detected stuck; the handler logs the
+    // diagnostic dump and sets the FAULT_PLANNER_STALL event flag
+    // only for the watched thread (planning_loop).
+    watchdog.set_stuck_callback(stall_handler.make_callback(profiler_ptr));
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Execution order contract:
@@ -941,6 +977,15 @@ int main(int argc, char* argv[]) {
         }
 
         // ── 5. Fault evaluate ───────────────────────────────
+        // Issue #718 — consume the PREFLIGHT-timeout event from the
+        // state-tick (set when `tick_preflight` fires the stuck-timer
+        // escalation) and the planner-stall event from the watchdog
+        // callback handler.  Latched-once: each event flag is cleared
+        // by consume, and FaultManager's escalation-only policy keeps
+        // the fault bit raised until `reset()` runs (next mission).
+        fault_mgr.set_preflight_timeout(state_tick.consume_preflight_timeout_event());
+        fault_mgr.set_planner_stall(stall_handler.consume_event());
+
         auto fault = [&]() {
             drone::util::ScopedDiagTimer              t(diag, "FaultEval");
             std::optional<drone::util::ScopedLatency> bench_fault;

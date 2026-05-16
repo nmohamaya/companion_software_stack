@@ -409,6 +409,28 @@ inline constexpr const char* TAKEOFF_SETTLE_OBSERVATIONS =
 inline constexpr const char* TAKEOFF_MAX_TILT_DEG     = "mission_planner.takeoff_max_tilt_deg";
 inline constexpr const char* TAKEOFF_MAX_VELOCITY_MPS = "mission_planner.takeoff_max_velocity_mps";
 
+// Issue #718 — PREFLIGHT timeout escalation.  When either Layer 1
+// (`armable` never stably true) or Layer 4 (post-ARM attitude/velocity
+// never settle) holds the FSM in PREFLIGHT for more than
+// `preflight_timeout_s`, the planner DISARMs the FC and transitions
+// FSM → IDLE, raising `FAULT_FC_PREFLIGHT_TIMEOUT` for GCS visibility.
+// `preflight_warn_s` (must be < preflight_timeout_s) promotes the
+// per-tick wait log from INFO to WARN so operators see the escalation
+// approaching.  Setting `preflight_timeout_s = 0` disables the timeout
+// entirely (legacy "hold forever" behaviour for headless dev / unit-
+// test fixtures).
+inline constexpr const char* PREFLIGHT_WARN_S    = "mission_planner.preflight_warn_s";
+inline constexpr const char* PREFLIGHT_TIMEOUT_S = "mission_planner.preflight_timeout_s";
+
+// Issues #718 / #765 — NAVIGATE-time planner-stall escalation uses the
+// existing `ThreadWatchdog` heartbeat-timeout for stuck-detection.
+// When the watchdog fires its stuck-callback for the `planning_loop`
+// thread, `PlannerStallHandler` sets a one-shot event flag that
+// FaultManager reads on the next `evaluate()` and raises
+// `FAULT_PLANNER_STALL` (escalating to LOITER — vehicle is in the
+// air, NEVER disarm).  No separate config key is needed because the
+// detection threshold IS the watchdog's heartbeat_timeout_s.
+
 namespace path_planner {
 inline constexpr const char* BACKEND            = "mission_planner.path_planner.backend";
 inline constexpr const char* RESOLUTION_M       = "mission_planner.path_planner.resolution_m";

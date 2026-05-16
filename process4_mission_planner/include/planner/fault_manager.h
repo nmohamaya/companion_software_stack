@@ -30,19 +30,21 @@ namespace drone::planner {
 using drone::ipc::FaultAction;
 using drone::ipc::fault_action_name;
 using drone::ipc::FaultType;
-inline constexpr auto FAULT_NONE             = FaultType::FAULT_NONE;
-inline constexpr auto FAULT_CRITICAL_PROCESS = FaultType::FAULT_CRITICAL_PROCESS;
-inline constexpr auto FAULT_POSE_STALE       = FaultType::FAULT_POSE_STALE;
-inline constexpr auto FAULT_BATTERY_LOW      = FaultType::FAULT_BATTERY_LOW;
-inline constexpr auto FAULT_BATTERY_CRITICAL = FaultType::FAULT_BATTERY_CRITICAL;
-inline constexpr auto FAULT_BATTERY_RTL      = FaultType::FAULT_BATTERY_RTL;
-inline constexpr auto FAULT_THERMAL_WARNING  = FaultType::FAULT_THERMAL_WARNING;
-inline constexpr auto FAULT_THERMAL_CRITICAL = FaultType::FAULT_THERMAL_CRITICAL;
-inline constexpr auto FAULT_PERCEPTION_DEAD  = FaultType::FAULT_PERCEPTION_DEAD;
-inline constexpr auto FAULT_FC_LINK_LOST     = FaultType::FAULT_FC_LINK_LOST;
-inline constexpr auto FAULT_GEOFENCE_BREACH  = FaultType::FAULT_GEOFENCE_BREACH;
-inline constexpr auto FAULT_VIO_DEGRADED     = FaultType::FAULT_VIO_DEGRADED;
-inline constexpr auto FAULT_VIO_LOST         = FaultType::FAULT_VIO_LOST;
+inline constexpr auto FAULT_NONE                 = FaultType::FAULT_NONE;
+inline constexpr auto FAULT_CRITICAL_PROCESS     = FaultType::FAULT_CRITICAL_PROCESS;
+inline constexpr auto FAULT_POSE_STALE           = FaultType::FAULT_POSE_STALE;
+inline constexpr auto FAULT_BATTERY_LOW          = FaultType::FAULT_BATTERY_LOW;
+inline constexpr auto FAULT_BATTERY_CRITICAL     = FaultType::FAULT_BATTERY_CRITICAL;
+inline constexpr auto FAULT_BATTERY_RTL          = FaultType::FAULT_BATTERY_RTL;
+inline constexpr auto FAULT_THERMAL_WARNING      = FaultType::FAULT_THERMAL_WARNING;
+inline constexpr auto FAULT_THERMAL_CRITICAL     = FaultType::FAULT_THERMAL_CRITICAL;
+inline constexpr auto FAULT_PERCEPTION_DEAD      = FaultType::FAULT_PERCEPTION_DEAD;
+inline constexpr auto FAULT_FC_LINK_LOST         = FaultType::FAULT_FC_LINK_LOST;
+inline constexpr auto FAULT_GEOFENCE_BREACH      = FaultType::FAULT_GEOFENCE_BREACH;
+inline constexpr auto FAULT_VIO_DEGRADED         = FaultType::FAULT_VIO_DEGRADED;
+inline constexpr auto FAULT_VIO_LOST             = FaultType::FAULT_VIO_LOST;
+inline constexpr auto FAULT_FC_PREFLIGHT_TIMEOUT = FaultType::FAULT_FC_PREFLIGHT_TIMEOUT;
+inline constexpr auto FAULT_PLANNER_STALL        = FaultType::FAULT_PLANNER_STALL;
 using drone::ipc::to_uint;
 
 // ═══════════════════════════════════════════════════════════
@@ -235,6 +237,25 @@ public:
             escalate(result, FaultAction::RTL, "geofence breach");
         }
 
+        // ── 8a. PREFLIGHT timeout (Issue #718) ───────────────
+        // MissionStateTick has already DISARMed + transitioned the
+        // FSM → IDLE.  Surface as WARN so GCS sees the cause; no
+        // further in-flight escalation since the vehicle isn't flying.
+        if (preflight_timeout_) {
+            result.active_faults |= FAULT_FC_PREFLIGHT_TIMEOUT;
+            escalate(result, FaultAction::WARN, "preflight timeout — disarmed and aborted");
+        }
+
+        // ── 8b. Planner stall (Issues #718 / #765) ───────────
+        // ThreadWatchdog detected the planning_loop thread stuck for
+        // more than planner_stall_loiter_s.  Vehicle is in the air —
+        // never disarm; LOITER lets the existing loiter-escalation
+        // timer take over if the stall persists.
+        if (planner_stall_) {
+            result.active_faults |= FAULT_PLANNER_STALL;
+            escalate(result, FaultAction::LOITER, "planner thread stalled");
+        }
+
         // ── 9. Enforce escalation-only policy ───────────────
         // Once we've escalated to a higher action, never downgrade.
         // Applied BEFORE the loiter timer so that a cleared LOITER
@@ -275,6 +296,8 @@ public:
         loiter_start_ns_       = 0;
         geofence_violated_     = false;
         vio_low_quality_count_ = 0;
+        preflight_timeout_     = false;
+        planner_stall_         = false;
     }
 
     /// Current high-water mark (highest action ever returned).
@@ -286,6 +309,19 @@ public:
     /// Set geofence violation state (called from the planning loop).
     void set_geofence_violation(bool violated) { geofence_violated_ = violated; }
 
+    /// Issue #718 — set/clear the PREFLIGHT-timeout fault flag.  Called
+    /// from the planning loop after `MissionStateTick::consume_preflight_timeout_event()`.
+    /// Setting to `true` raises FAULT_FC_PREFLIGHT_TIMEOUT on the next
+    /// evaluate(); setting to `false` clears the bit (but the high-
+    /// water mark may still hold from prior escalation).
+    void set_preflight_timeout(bool timed_out) { preflight_timeout_ = timed_out; }
+
+    /// Issues #718 / #765 — set/clear the planner-stall fault flag.
+    /// Called from the planning loop after `PlannerStallHandler::consume_event()`
+    /// returns true.  Raises FAULT_PLANNER_STALL → LOITER escalation
+    /// on the next evaluate().
+    void set_planner_stall(bool stalled) { planner_stall_ = stalled; }
+
 private:
     static constexpr int kVioDebounceCount = 3;
 
@@ -295,6 +331,8 @@ private:
     uint64_t    loiter_start_ns_       = 0;
     bool        geofence_violated_     = false;
     int         vio_low_quality_count_ = 0;
+    bool        preflight_timeout_     = false;  // Issue #718
+    bool        planner_stall_         = false;  // Issues #718 / #765
 
     /// Escalate to a higher action (no-op if target is lower/equal).
     static void escalate(FaultState& state, FaultAction target, const char* reason) {

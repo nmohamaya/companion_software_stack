@@ -785,3 +785,105 @@ TEST(FaultManagerTest, VIOQualityIgnoredBeforeFirstPose) {
     EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
     EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Issue #718 — set_preflight_timeout() + FAULT_FC_PREFLIGHT_TIMEOUT
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, PreflightTimeoutRaisesFaultBitAndWarnAction) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    // No event set — no fault.
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_FALSE(r1.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+
+    // Set the event — fault bit raised, action escalates to WARN.
+    // (WARN is cosmetic for GCS: planner has already DISARMed + FSM → IDLE.)
+    mgr.set_preflight_timeout(true);
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_TRUE(r2.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT)
+        << "set_preflight_timeout(true) did not propagate to FAULT_FC_PREFLIGHT_TIMEOUT";
+    EXPECT_EQ(r2.recommended_action, FaultAction::WARN)
+        << "Expected WARN action (cosmetic — drone is already on the ground)";
+}
+
+TEST(FaultManagerTest, PreflightTimeoutClearsOnSetFalseButHighWaterMarkHolds) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    mgr.set_preflight_timeout(true);
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_TRUE(r1.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+
+    // Clear the event flag — fault bit no longer raised this tick.
+    mgr.set_preflight_timeout(false);
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_FALSE(r2.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT)
+        << "active_faults still has FAULT_FC_PREFLIGHT_TIMEOUT after set_preflight_timeout(false)";
+
+    // But the high-water mark holds (escalation-only policy):
+    // recommended_action stays WARN even though no fault is active this tick.
+    EXPECT_EQ(r2.recommended_action, FaultAction::WARN)
+        << "high_water_mark did not preserve WARN after fault cleared "
+           "(escalation-only policy violation)";
+
+    // Reset clears the high-water mark (e.g. after landing / new mission).
+    mgr.reset();
+    auto r3 = mgr.evaluate(health, fc, now - 50 * MS, now + 2 * MS);
+    EXPECT_EQ(r3.recommended_action, FaultAction::NONE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issues #718 / #765 — set_planner_stall() + FAULT_PLANNER_STALL
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, PlannerStallRaisesFaultBitAndEscalatesToLoiter) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    // No stall event — nominal.
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_FALSE(r1.active_faults & FAULT_PLANNER_STALL);
+
+    // Set the stall event — fault bit + LOITER action (NEVER disarm in air).
+    mgr.set_planner_stall(true);
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_TRUE(r2.active_faults & FAULT_PLANNER_STALL)
+        << "set_planner_stall(true) did not propagate to FAULT_PLANNER_STALL";
+    EXPECT_EQ(r2.recommended_action, FaultAction::LOITER)
+        << "Expected LOITER action — asymmetric pre-condition rule (vehicle "
+           "is in the air; disarm would mean falling out of the sky)";
+}
+
+TEST(FaultManagerTest, PlannerStallAndPreflightTimeoutCoexist) {
+    // Both events simultaneously — should raise BOTH fault bits, and the
+    // recommended action should be the HIGHER of WARN (preflight) and
+    // LOITER (planner stall) = LOITER per the escalation-only policy.
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    mgr.set_preflight_timeout(true);
+    mgr.set_planner_stall(true);
+
+    auto result = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_TRUE(result.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+    EXPECT_TRUE(result.active_faults & FAULT_PLANNER_STALL);
+    EXPECT_EQ(result.recommended_action, FaultAction::LOITER)
+        << "Both faults raised, expected LOITER (higher than WARN) to win the "
+           "escalation rank.";
+
+    // reset() clears both flags.
+    mgr.reset();
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_FALSE(r2.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+    EXPECT_FALSE(r2.active_faults & FAULT_PLANNER_STALL);
+}
