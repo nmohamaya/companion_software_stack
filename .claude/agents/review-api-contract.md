@@ -39,6 +39,17 @@ These are **contract bugs** — the code works but doesn't do what it says or cl
   - Preconditions and postconditions
   - Thread safety claims
 - [ ] **Data invariant consistency** — When two or more member variables track related state (e.g., a count and a set), can they diverge? Are they updated atomically or can a crash/exception leave them inconsistent?
+- [ ] **Data-plumbing trace.** When a PR consumes IPC / struct / shared-state fields, grep the publisher / setter side for assignments to *each* consumed field. Flag any consumed field that is never assigned anywhere in the publisher path — a default-init read makes the consuming algorithm silently trivial.
+
+  **Concrete checklist:**
+  - For every `state.X` / `msg.X` / `cfg.get<>(drone::cfg_key::Y, default)` read in the diff, locate where `X` is *written* upstream (publisher process, HAL backend, config JSON).
+  - If the write site doesn't exist (or is on a code path that never executes for this consumer), the read returns default-init zero, and any predicate over it (`X > threshold`, `if (X)`, `state == X`) silently passes / fails.
+  - Don't assume "the field exists in the struct, so it's populated." Default-init is the universal foot-gun.
+  - **Config-key convention.** This codebase requires `cfg.get<>()` call sites to use `drone::cfg_key::*` constants from `common/util/include/util/config_keys.h`, not raw string literals — a typo on a constant is a compile error, a typo on a string literal silently returns `default`. Flag any new raw-string `cfg.get<T>("foo.bar")` in the diff as a convention violation regardless of whether the data-plumbing trace also fails.
+
+  **Why:** PR #763 (Epic #740 Layer 4) shipped an attitude-settle gate that was reading `FCState.{roll,pitch,yaw,vy,vz}` — fields documented on the IPC struct but never assigned by `process5_comms::fc_rx_thread`. The gate's predicate (`|roll|<5°` && `|pitch|<5°` && `|v|<0.3`) was trivially-true on the ground (0 ≤ 5 always). Tests using `make_fc(true, 0)` (default-zero attitude) couldn't distinguish "real settled" from "no data" because production also gave default-zero. Behaviour was right by coincidence; stated purpose was fiction.
+
+  This rule overlaps with — but does not replace — the `review-data-plumbing` agent. That agent does the systematic cross-boundary trace as its sole focus; this checklist item ensures api-contract reviewers also catch the docstring/field-population mismatch that's the contract-side symptom of the same bug.
 
 ### P2 — High (should fix before merge)
 
