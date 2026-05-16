@@ -15,6 +15,7 @@
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
+#include "planner/planner_stall_handler.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/config_keys.h"
 #include "util/correlation.h"
@@ -517,6 +518,36 @@ int main(int argc, char* argv[]) {
         ctx.cfg, drone::cfg_key::mission_planner::TAKEOFF_MAX_VELOCITY_MPS, 0.3f, 0.0f, 5.0f,
         "takeoff_max_velocity_mps");
 
+    // Issue #718 — PREFLIGHT timeout escalation tunables.  Both
+    // default to "0 disables the escalation" so headless dev configs
+    // and the existing unit-test fixture keep the legacy hold-forever
+    // behaviour.  Production defaults (set in config/default.json):
+    // warn=30s, timeout=60s — gives 2.5x margin over the worst-case
+    // ~22s preflight wait observed in the PR #763 smoke sweep.
+    tick_cfg.preflight_warn_s = validate_and_clamp<int>(
+        ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_WARN_S, 30, 0, 600, "preflight_warn_s");
+    tick_cfg.preflight_timeout_s =
+        validate_and_clamp<int>(ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_TIMEOUT_S, 60,
+                                0, 1800, "preflight_timeout_s");
+    if (tick_cfg.preflight_timeout_s > 0 &&
+        tick_cfg.preflight_warn_s >= tick_cfg.preflight_timeout_s) {
+        // PR #775 review fix (security P3): WARN-only used to leave the
+        // invariant unenforced — a tampered or misconfigured
+        // `preflight_warn_s: 1800, preflight_timeout_s: 30` would let
+        // both values through unchanged and the operator-visible
+        // escalation runway would be silently meaningless.  Now we
+        // clamp `preflight_warn_s` to `preflight_timeout_s - 1` so the
+        // WARN log is guaranteed to fire at least one tick before the
+        // DISARM escalation.
+        const int clamped_warn = std::max(0, tick_cfg.preflight_timeout_s - 1);
+        DRONE_LOG_WARN("[Planner] preflight_warn_s ({}) >= preflight_timeout_s ({}) — "
+                       "clamping preflight_warn_s to {} (preflight_timeout_s - 1) so the WARN "
+                       "log fires before the timeout escalation.  Update config to "
+                       "preflight_warn_s < preflight_timeout_s to silence this warning.",
+                       tick_cfg.preflight_warn_s, tick_cfg.preflight_timeout_s, clamped_warn);
+        tick_cfg.preflight_warn_s = clamped_warn;
+    }
+
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
@@ -699,7 +730,25 @@ int main(int argc, char* argv[]) {
     drone::systemd::notify_ready();
 
     // ── Thread heartbeat + watchdog + health publisher ──────
+    //
+    // PR #775 review fix (P1, memory-safety + concurrency + api-contract
+    // converged): `PlannerStallHandler` MUST be declared BEFORE
+    // `ThreadWatchdog` so that destruction order (LIFO) is:
+    //   1. `~ThreadWatchdog()` runs first — sets running_=false and
+    //      joins the scan thread.  After this point, no further
+    //      stuck-callback invocations are possible.
+    //   2. `~PlannerStallHandler()` runs second — the destroyed
+    //      `stalled_` atomic + `watched_thread_name_` string can no
+    //      longer be touched by a dangling callback.
+    //
+    // The previous order (watchdog first, handler second) caused the
+    // scan thread to fire the lambda with a dangling `this` during the
+    // ~1 s window between handler destruction and watchdog join.  The
+    // handler's own docstring (planner_stall_handler.h §"Capture-by-this")
+    // already states the contract; this comment exists to lock the
+    // declaration order against a future-reorder regression.
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
+    PlannerStallHandler         stall_handler("planning_loop");
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
         drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
@@ -722,6 +771,12 @@ int main(int argc, char* argv[]) {
     }
     drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
                                                                     : nullptr;
+    // Install the watchdog stuck-callback now that `profiler_ptr` is
+    // known.  Callback fires on the watchdog scan thread when any
+    // registered thread is detected stuck; the handler logs the
+    // diagnostic dump and sets the FAULT_PLANNER_STALL event flag
+    // only for the watched thread (planning_loop).
+    watchdog.set_stuck_callback(stall_handler.make_callback(profiler_ptr));
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Execution order contract:
@@ -941,6 +996,15 @@ int main(int argc, char* argv[]) {
         }
 
         // ── 5. Fault evaluate ───────────────────────────────
+        // Issue #718 — consume the PREFLIGHT-timeout event from the
+        // state-tick (set when `tick_preflight` fires the stuck-timer
+        // escalation) and the planner-stall event from the watchdog
+        // callback handler.  Latched-once: each event flag is cleared
+        // by consume, and FaultManager's escalation-only policy keeps
+        // the fault bit raised until `reset()` runs (next mission).
+        fault_mgr.set_preflight_timeout(state_tick.consume_preflight_timeout_event());
+        fault_mgr.set_planner_stall(stall_handler.consume_event());
+
         auto fault = [&]() {
             drone::util::ScopedDiagTimer              t(diag, "FaultEval");
             std::optional<drone::util::ScopedLatency> bench_fault;

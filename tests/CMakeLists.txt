@@ -382,6 +382,11 @@ add_drone_test(test_obstacle_prediction test_obstacle_prediction.cpp)
 # ── Mission State Tick tests (Issue #154) ──────────────────
 add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)
 
+# ── PlannerStallHandler tests (Issues #718 / #765) ─────────
+# Watchdog stuck-callback + FAULT_PLANNER_STALL event flag +
+# LatencyProfiler diagnostic dump on planning_loop stall.
+add_drone_test(test_planner_stall_handler test_planner_stall_handler.cpp)
+
 # ── Radar HAL tests (Issue #209) ──────────────────────────
 add_drone_test(test_radar_hal          test_radar_hal.cpp)
 

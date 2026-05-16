@@ -1353,3 +1353,321 @@ TEST_F(Issue624YawRefreshTest, YawRefreshSkippedBelowVelocityThreshold) {
            "|v|² = 0.0002 < threshold² = 0.01.  The threshold guard at "
            "mission_state_tick.h ~line 414 has regressed (Issue #624).";
 }
+
+// ═══════════════════════════════════════════════════════════
+// Issue #718 — PREFLIGHT timeout escalation tests
+//
+// Cold-start defense system completion: when either Layer 1
+// (`armable` never stably true) or Layer 4 (post-ARM attitude/velocity
+// never settle) holds the FSM in PREFLIGHT for more than
+// `preflight_timeout_s`, the planner DISARMs + transitions FSM → IDLE +
+// raises a single-shot event consumed by main.cpp to set
+// FAULT_FC_PREFLIGHT_TIMEOUT.
+//
+// Recovery rationale (per CLAUDE.md "Asymmetric pre-conditions"):
+// pre-takeoff stuck → cheap to DISARM and abort (drone on ground,
+// motors at idle) → NEVER LOITER pre-takeoff (LOITER is the mid-flight
+// response).
+//
+// All tests use ScopedMockClock to drive timeouts in microseconds.
+// ═══════════════════════════════════════════════════════════
+class MissionStateTickPreflightTimeoutTest : public ::testing::Test {
+protected:
+    // ScopedMockClock must be installed BEFORE MissionStateTick — the
+    // planner's timing primitives query drone::util::get_clock().
+    drone::util::ScopedMockClock mock_clock_guard;
+
+    // Small but realistic config: 2s WARN, 5s timeout, 3s armable
+    // stability window (production default).  Layer 4 settle gate
+    // disabled (separate fixture covers it).
+    StateTickConfig config = [] {
+        StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
+        c.preflight_armable_stable_s  = 3.0f;
+        c.takeoff_settle_observations = 0;  // Layer 4 disabled (other fixture)
+        c.preflight_warn_s            = 2;
+        c.preflight_timeout_s         = 5;
+        return c;
+    }();
+    MissionStateTick              state_tick{config};
+    MockPublisher<TrajectoryCmd>  traj_pub;
+    MockPublisher<PayloadCommand> payload_pub;
+    MissionFSM                    fsm;
+    StaticObstacleLayer           obstacle_layer;
+    std::vector<FCCallRecord>     fc_calls;
+
+    FCSendFn send_fc = [this](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+
+    void SetUp() override {
+        fsm.load_mission({{10, 0, 5, 0, 2, 3, true}});
+        fsm.on_arm();  // → PREFLIGHT
+    }
+
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite").value();
+    std::unique_ptr<IObstacleAvoider> avoider_ =
+        create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
+
+    void do_tick(const Pose& pose, const FCState& fc_state) {
+        DetectedObjectList            objects{};
+        drone::util::FrameDiagnostics diag(0);
+        state_tick.tick(fsm, pose, fc_state, objects, *planner_, nullptr, *avoider_, obstacle_layer,
+                        traj_pub, payload_pub, send_fc, 0, diag);
+    }
+};
+
+// Layer 1 trigger — `fc_state.armable=false` indefinitely.  Past the
+// timeout, the planner emits DISARM, transitions FSM → IDLE, and sets
+// the single-shot event flag.  Verifies the SAFETY-CRITICAL path: a
+// drone with PX4 stuck in preflight (EKF2 hung, MAVSDK silently lost,
+// etc.) does NOT sit on the ground forever with no operator alert.
+TEST_F(MissionStateTickPreflightTimeoutTest, Layer1NeverReleasesFiresTimeoutAndDisarms) {
+    auto pose          = make_pose(0, 0, 0);
+    auto fc_unready    = make_fc(false, 0);  // armable=false forever
+    fc_unready.armable = false;
+
+    // Tick 1: starts the PREFLIGHT-held timer at t=0.
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+    EXPECT_TRUE(fc_calls.empty());
+    EXPECT_FALSE(state_tick.consume_preflight_timeout_event())
+        << "Timeout event fired before the timeout elapsed.";
+
+    // Advance to just past the 5s timeout boundary.
+    mock_clock_guard.mock().advance_ms(5100);
+
+    // Tick 2: timeout fires.  Planner DISARMs, FSM → IDLE, event raised.
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE)
+        << "FSM did NOT transition to IDLE after timeout — drone stays held in "
+           "PREFLIGHT with no operator alert (the bug this issue exists to fix).";
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::DISARM)
+        << "Planner did NOT emit DISARM on timeout — pre-takeoff abort path broken.";
+    EXPECT_TRUE(state_tick.consume_preflight_timeout_event())
+        << "Single-shot event flag NOT set — FAULT_FC_PREFLIGHT_TIMEOUT will never "
+           "propagate to GCS.";
+    // Event consumed exactly once.
+    EXPECT_FALSE(state_tick.consume_preflight_timeout_event());
+}
+
+// Layer 4 trigger — `fc_state.armed=true` but attitude never settles.
+// Tests the SECOND of the two PREFLIGHT hold paths.  PR #763's Layer 4
+// gate currently holds forever on a never-settled FC (pinned by
+// `SettleGateNeverSettlesHoldsPreflight`); #718 closes that gap with
+// the same DISARM + abort.
+TEST_F(MissionStateTickPreflightTimeoutTest, Layer4NeverSettlesFiresTimeoutAndDisarms) {
+    // Override config to enable Layer 4 + give a high tilt limit so
+    // we deliberately keep it never-settled via roll > limit.
+    config.takeoff_settle_observations = 5;
+    config.takeoff_max_tilt_deg        = 5.0f;
+    state_tick                         = MissionStateTick{config};
+    fsm.load_mission({{10, 0, 5, 0, 2, 3, true}});
+    fsm.on_arm();  // re-enter PREFLIGHT after fixture rebuild
+
+    auto pose       = make_pose(0, 0, 0);
+    auto fc_tilted  = make_fc(true, 0);  // armed
+    fc_tilted.roll  = 0.30f;             // ~17° — past the 5° limit, never settles
+    fc_tilted.pitch = 0.0f;
+
+    // Tick 1: starts timer.
+    do_tick(pose, fc_tilted);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Advance past timeout.
+    mock_clock_guard.mock().advance_ms(5100);
+
+    // Tick 2: timeout fires from the Layer 4 hold path.
+    do_tick(pose, fc_tilted);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE)
+        << "Layer 4 timeout did NOT fire — drone armed at idle with attitude "
+           "never settling sits forever (the asymmetric-cost failure mode "
+           "this issue addresses for post-ARM).";
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::DISARM);
+    EXPECT_TRUE(state_tick.consume_preflight_timeout_event());
+}
+
+// WARN log fires at `preflight_warn_s` BEFORE the full timeout — gives
+// operators a visible escalation runway.  We can't directly assert on
+// log output but we CAN assert the FSM is still in PREFLIGHT at the
+// warn-but-not-yet-timeout boundary.
+TEST_F(MissionStateTickPreflightTimeoutTest, WarnThresholdElapsesButNotYetTimeout) {
+    auto pose          = make_pose(0, 0, 0);
+    auto fc_unready    = make_fc(false, 0);
+    fc_unready.armable = false;
+
+    do_tick(pose, fc_unready);  // start timer
+
+    // Advance past warn (2s) but before timeout (5s).
+    mock_clock_guard.mock().advance_ms(3000);
+    do_tick(pose, fc_unready);
+
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "FSM transitioned to IDLE at the warn threshold — timeout fired early.";
+    EXPECT_TRUE(fc_calls.empty()) << "DISARM emitted at warn threshold — timeout fired early.";
+    EXPECT_FALSE(state_tick.consume_preflight_timeout_event());
+}
+
+// PR #775 review (test-unit + test-quality + Copilot P1 — rename):
+// previously named `Layer1RecoveryBeforeTimeoutDoesNotFire`, which lied —
+// the test actually asserts the timeout WINS the race when total elapsed
+// (debounce + recovery delay) exceeds `preflight_timeout_s`.  Renamed to
+// match what it actually exercises: safety-first ordering where the
+// timeout check at the top of tick_preflight precedes the ARM path deeper
+// in the function.
+TEST_F(MissionStateTickPreflightTimeoutTest, Layer1TimeoutWinsOverPendingArmInRaceWindow) {
+    auto pose          = make_pose(0, 0, 0);
+    auto fc_unready    = make_fc(false, 0);
+    fc_unready.armable = false;
+    auto fc_ready      = make_fc(false, 0);  // armable=true
+
+    // 3 seconds with armable=false.
+    do_tick(pose, fc_unready);
+    mock_clock_guard.mock().advance_ms(3000);
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // armable recovers.  The Layer 1 debounce needs 3.0s of continuous
+    // armable=true to fire ARM.  Both that AND the preflight-timeout
+    // window are now ticking against `now_ns`.
+    mock_clock_guard.mock().advance_ms(100);
+    do_tick(pose, fc_ready);
+
+    // Hold armable=true for 3.1s to satisfy the debounce.  Total elapsed
+    // since first PREFLIGHT tick: 3000 + 100 + 3100 = 6.2s, which IS past
+    // the 5s preflight_timeout_s.  BUT: the timeout-and-ARM race is the
+    // realistic failure mode here.  This test asserts the timeout WINS
+    // when both conditions are met simultaneously in a single tick, since
+    // the timeout check runs BEFORE the ARM path.  If a future change
+    // wires the ARM check first, the test will need to flip — that's
+    // a design decision, not a regression.  For now, assert the safety-
+    // first ordering: timeout takes precedence.
+    mock_clock_guard.mock().advance_ms(3100);
+    do_tick(pose, fc_ready);
+
+    EXPECT_EQ(fsm.state(), MissionState::IDLE)
+        << "Expected timeout to win the timeout-vs-ARM race (safety-first); "
+           "got "
+        << static_cast<int>(fsm.state()) << " — review the ordering in tick_preflight.";
+}
+
+// Recovery before timeout — Layer 1 fast case (within budget).
+// `armable=false` briefly, then becomes stable in time.  Debounce
+// satisfies before the timeout, ARM fires, no timeout event.
+TEST_F(MissionStateTickPreflightTimeoutTest, Layer1FastRecoveryArmFiresNoTimeout) {
+    auto pose          = make_pose(0, 0, 0);
+    auto fc_unready    = make_fc(false, 0);
+    fc_unready.armable = false;
+    auto fc_ready      = make_fc(false, 0);  // armable=true
+
+    // Tick 1: armable=false at t=0.
+    do_tick(pose, fc_unready);
+
+    // 100ms later: armable recovers.
+    mock_clock_guard.mock().advance_ms(100);
+    do_tick(pose, fc_ready);
+
+    // 3.1s later: debounce window satisfied (total 3.2s, well under 5s
+    // timeout).  ARM fires.
+    mock_clock_guard.mock().advance_ms(3100);
+    do_tick(pose, fc_ready);
+
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);  // still PREFLIGHT, awaiting armed
+    EXPECT_FALSE(state_tick.consume_preflight_timeout_event())
+        << "Timeout event fired despite ARM firing within budget — "
+           "the timer didn't reset when ARM succeeded (likely the "
+           "outer-tick state-exit detector + per-path reset have a gap).";
+}
+
+// `preflight_timeout_s = 0` disables the escalation — legacy hold-
+// forever behaviour preserved for headless dev / unit test fixtures.
+TEST(MissionStateTickPreflightTimeoutConfigTest, ZeroTimeoutDisablesEscalation) {
+    drone::util::ScopedMockClock mock_clock;
+
+    StateTickConfig c{10.0f, 1.5f, 0.5f, 5};
+    c.preflight_armable_stable_s  = 0.0f;
+    c.takeoff_settle_observations = 0;
+    c.preflight_warn_s            = 0;
+    c.preflight_timeout_s         = 0;  // disabled
+    MissionStateTick              state_tick{c};
+    MockPublisher<TrajectoryCmd>  traj_pub;
+    MockPublisher<PayloadCommand> payload_pub;
+    MissionFSM                    fsm;
+    StaticObstacleLayer           obstacle_layer;
+    std::vector<FCCallRecord>     fc_calls;
+    FCSendFn                      send_fc = [&](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+    auto planner = create_path_planner("dstar_lite").value();
+    auto avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
+
+    fsm.load_mission({{10, 0, 5, 0, 2, 3, true}});
+    fsm.on_arm();
+
+    auto pose          = make_pose(0, 0, 0);
+    auto fc_unready    = make_fc(false, 0);
+    fc_unready.armable = false;
+
+    // 1 hour of armable=false — far past any reasonable timeout.
+    DetectedObjectList            objects{};
+    drone::util::FrameDiagnostics diag(0);
+    state_tick.tick(fsm, pose, fc_unready, objects, *planner, nullptr, *avoider, obstacle_layer,
+                    traj_pub, payload_pub, send_fc, 0, diag);
+    mock_clock.mock().advance_s(3600);
+    state_tick.tick(fsm, pose, fc_unready, objects, *planner, nullptr, *avoider, obstacle_layer,
+                    traj_pub, payload_pub, send_fc, 0, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "With preflight_timeout_s=0 the escalation must be disabled — "
+           "FSM should stay PREFLIGHT indefinitely (legacy behaviour).";
+    EXPECT_TRUE(fc_calls.empty())
+        << "DISARM emitted despite preflight_timeout_s=0 — disable path broken.";
+    EXPECT_FALSE(state_tick.consume_preflight_timeout_event());
+}
+
+// Re-entry to PREFLIGHT (after IDLE → PREFLIGHT cycle) starts a fresh
+// timer.  The outer-tick state-exit detector resets `preflight_held_since_ns_`
+// when the FSM leaves PREFLIGHT; re-entry should observe `sentinel=0` and
+// start fresh.  Without this, a quick IDLE→PREFLIGHT bounce would
+// inherit the previous window's elapsed time and fire the timeout
+// immediately on the next entry.
+TEST_F(MissionStateTickPreflightTimeoutTest, ReentryToPreflightStartsFreshTimer) {
+    auto pose          = make_pose(0, 0, 0);
+    auto fc_unready    = make_fc(false, 0);
+    fc_unready.armable = false;
+
+    // Fire the timeout first to exercise the abort path.
+    do_tick(pose, fc_unready);
+    mock_clock_guard.mock().advance_ms(5100);
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
+    (void)state_tick.consume_preflight_timeout_event();  // clear the flag
+    fc_calls.clear();
+
+    // Re-enter PREFLIGHT (simulated GCS re-arm).
+    fsm.on_arm();
+    ASSERT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Tick 1 of new PREFLIGHT: timer starts fresh.  Despite the prior
+    // elapsed time (8s+ in mock-clock domain), the NEW window starts at
+    // `now_ns`.
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Advance 4s — within the new window's 5s timeout.  Still in PREFLIGHT.
+    mock_clock_guard.mock().advance_ms(4000);
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT)
+        << "Re-entry inherited stale timer — fired timeout after only 4s of "
+           "the new PREFLIGHT window (outer-tick state-exit detector bug).";
+
+    // Advance another 1.2s — total 5.2s in new window.  NOW fires.
+    mock_clock_guard.mock().advance_ms(1200);
+    do_tick(pose, fc_unready);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE)
+        << "Second-cycle timeout did not fire at expected time.";
+}

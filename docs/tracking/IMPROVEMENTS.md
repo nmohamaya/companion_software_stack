@@ -16,6 +16,32 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-15 (PR #775 review deferrals — test/code-quality P2/P3 follow-ups)
+
+#### DISARM-vs-FSM ordering not asserted in Layer 4 timeout tests
+
+- **P2** (`tests/test_mission_state_tick.cpp`) — `Layer4NeverSettlesFiresTimeoutAndDisarms` asserts both `fsm.state() == IDLE` AND `fc_calls[0].cmd == DISARM`, but never verifies DISARM was emitted BEFORE the FSM transitioned.  If a future change reorders to `fsm.on_landed(); send_fc(DISARM)`, motors stay armed in IDLE state for one tick — silent safety regression that both assertions still pass.  Add a sequence-counter assertion or use a mock `FCSendFn` that captures the FSM state at send-time.  **When to do it:** next time the Layer 4 tests are touched, or before any reordering of `tick_preflight`'s timeout-fired path.  **Cross-ref:** PR #775 review-test-quality P2.
+
+#### No warn→timeout single-timeline test
+
+- **P2** (`tests/test_mission_state_tick.cpp`) — `WarnThresholdElapsesButNotYetTimeout` and `Layer1NeverReleasesFiresTimeoutAndDisarms` test the two boundaries independently.  No test walks t=0 → t=warn (still PREFLIGHT) → t=timeout (DISARM) on one fixture.  A regression that resets the warn-tracking timer at the warn-log boundary would not be caught.  Add `Layer1WarnPromotionThenTimeoutOnSameTimeline` that exercises both boundaries in sequence.  **Cross-ref:** PR #775 review-test-quality P2.
+
+#### Outer-state-exit detector not isolated for non-timeout PREFLIGHT exit
+
+- **P2** (`tests/test_mission_state_tick.cpp`) — `ReentryToPreflightStartsFreshTimer` exercises re-entry after the timeout fires, but the "GCS aborts PREFLIGHT mid-window before timeout, then re-enters PREFLIGHT" path is not isolated.  Add `PreflightTimerResetsOnNonTimeoutExitViaGCSAbort`.  **Cross-ref:** PR #775 review-test-quality P2 + test-unit P3 (analogous gap).
+
+#### Weak thread-safety assertion in PlannerStallHandler concurrency test
+
+- **P3** (`tests/test_planner_stall_handler.cpp`) — `ConsumeEventIsThreadSafeAcrossWatchdogAndPlanningLoop` asserts `EXPECT_GE(consumed.load(), 1)` which is satisfied by any single successful consume — far too loose.  A regression from `release/acquire` → `relaxed` would almost certainly still pass on x86-64 (TSO).  Tighten to `consumed >= kIterations / 10` and run under TSan in CI to make ordering bugs detectable.  **Cross-ref:** PR #775 review-test-quality P3.
+
+#### LatencyProfiler trace copy under mutex (string allocations)
+
+- **P3** (`common/util/include/util/latency_profiler.h`) — `collect_traces_locked()` copies up to 4096 `LatencyTrace` objects (each with a `std::string stage`) while holding `mtx_`.  Currently bounded + watchdog-thread-only so non-blocking, but if the profiler is ever extended to higher trace rates, consider `string_view` or fixed-size char array in `LatencyTrace` to eliminate per-trace allocation.  **Cross-ref:** PR #775 review-performance P3.
+
+#### `StateTickConfig` field count growth
+
+- **P3** (`process4_mission_planner/include/planner/mission_state_tick.h`) — `StateTickConfig` is at 17 fields across 3 logical groups (basic FSM, Layer 1/4 debounce, preflight timeout).  Codebase pattern: split when fields exceed ~20.  When the next preflight/Layer-N config knob is added, consider extracting `StateTickConfig::PreflightConfig` nested struct.  **Cross-ref:** PR #775 review-code-quality P3.
+
 ### 2026-05-15 (recovered from stash@{0} — scenario-runner / stack-coverage audit, originally 2026-05-01 / 2026-04-30)
 
 #### `tests/run_scenario.sh` missing `requires_cosys_airsim` skip gate

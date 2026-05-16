@@ -1136,6 +1136,62 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 ---
 
+### Fix #718 — PREFLIGHT held forever on stuck `armable` or never-settling attitude; no operator alert (Issue #718, partial #765)
+
+**Date fixed:** 2026-05-15
+**Severity:** High (silent-failure mode — drone sits on the ground with no escalation)
+**Status:** FIXED
+**Files:** `process4_mission_planner/include/planner/mission_state_tick.h`,
+           `process4_mission_planner/include/planner/fault_manager.h`,
+           `process4_mission_planner/include/planner/planner_stall_handler.h` (NEW),
+           `process4_mission_planner/src/main.cpp`,
+           `common/ipc/include/ipc/ipc_types.h`,
+           `common/util/include/util/config_keys.h`,
+           `config/default.json`,
+           `tests/test_mission_state_tick.cpp` (+7),
+           `tests/test_fault_manager.cpp` (+4),
+           `tests/test_planner_stall_handler.cpp` (NEW, +7)
+
+**What:** The cold-start hardening defense system (Layers 1–4, Epic #740) added gates that *detect* anomalies and *hold* PREFLIGHT until predicates clear, but had no action if a gate held indefinitely. Three observed failure modes:
+- **Layer 1** (`fc_state.armable` never stably true — Issues #717/#741): PX4 EKF2 stuck, MAVSDK subscription silently lost, or hardware sensor genuinely faulty → FSM held in PREFLIGHT forever with only the 1 Hz `[Planner] Waiting for FC preflight` log; no GCS-visible alert.
+- **Layer 4** (attitude/velocity never settle post-ARM — Issue #740 PR #763): drone *armed* at idle indefinitely with the per-excursion WARN log being the only signal. Asymmetric pre-condition violation: armed-at-idle is a higher-cost failure than not-armed.
+- **NAVIGATE-time** `planning_loop` stall (Issue #765, observed during PR #763 validation): the `ThreadWatchdog` already detected the stuck thread but only logged — no fault escalation, no recovery action, PX4 eventually disarmed on setpoint timeout (loss-of-vehicle risk in flight).
+
+**Error messages (searchable):**
+- `[Planner] Waiting for FC preflight (armable=false)` (1 Hz INFO, no escalation)
+- `[Planner] Armed but attitude not settled` (WARN per excursion, no escalation)
+- `[Watchdog] Thread 'planning_loop' stuck for 5.3s` (detection only, no action)
+- `Heartbeat suppressed — last NEW trajectory is 30212ms stale; P4 may have died` (the consequence)
+
+**Reproduce:**
+1. `git checkout 9ebfdc8` (integration HEAD pre-#718)
+2. Run `02_obstacle_avoidance` with EKF2 health forced false → drone sits in PREFLIGHT until scenario timeout (~150 s) with no FAULT_FC_PREFLIGHT_TIMEOUT bit on the GCS.
+3. Or: run validation suite from PR #763 (5 runs); 1 of 5 (run 3 of `2026-05-15_152906_FAIL/`) shows the mid-flight P4 stall → PX4 failsafe disarm with no FAULT_PLANNER_STALL.
+
+**Why (Root Cause):**
+The Layers 1–4 work added the gating logic but stopped short of the recovery action. Architectural gap: `FaultManager` had no PREFLIGHT-timeout fault type, and `ThreadWatchdog::set_stuck_callback` was instantiated but no callback was installed in P4 main.cpp (so stuck detection went nowhere). Per CLAUDE.md "Asymmetric pre-conditions for asymmetric-cost actions": pre-takeoff stuck → cheap to DISARM and abort; mid-flight stuck → never disarm (LOITER and let RTL chain take over).
+
+**Fix:**
+- Added `MissionStateTick::tick_preflight()` stuck-timer: tracks continuous time held in PREFLIGHT; at `preflight_warn_s` (default 30 s) promotes the wait log from INFO to WARN; at `preflight_timeout_s` (default 60 s) emits `FCCommandType::DISARM`, transitions FSM → IDLE via `fsm.on_landed()`, and raises a single-shot event flag consumed by main.cpp on the next `FaultManager.evaluate()` to set `FAULT_FC_PREFLIGHT_TIMEOUT` for GCS visibility.
+- Added `PlannerStallHandler` installed as the `ThreadWatchdog::set_stuck_callback`: on stuck-detection logs the `LatencyProfiler` snapshot + diagnostic context, and (only for the watched `planning_loop` thread) sets a thread-safe atomic event flag consumed by main.cpp to set `FAULT_PLANNER_STALL` → FaultManager escalates to LOITER. Vehicle is in the air — never DISARM.
+- 60 s / 5 s thresholds give 2.5× and 1× margin respectively over worst-case observations from the PR #763 validation sweep (~22 s pre-takeoff, ~5 s watchdog default critical threshold).
+
+**Deferred from #765 acceptance** (tracked in #765 follow-up):
+- Stack-trace capture via `pthread_kill(SIGUSR1)` + `backtrace_symbols` — async-signal-safety mechanics non-trivial; optimised-build C++ stack traces often inscrutable. First-recurrence dump (LatencyProfiler snapshot + thread context) is more actionable for triage.
+- Mutex-snapshot ("which locks does the stuck thread hold") — needs codebase-wide instrumented mutex wrappers; separate epic.
+- N=10 reproduction sweep — empirical, runs *after* this PR merges so the diagnostic dump is available to capture evidence.
+
+**Tests added (+18):**
+- `MissionStateTickPreflightTimeoutTest` (×6 + 1 config) — Layer 1 / Layer 4 timeout fires DISARM + FSM transition, WARN-before-timeout, fast recovery, timeout-vs-ARM race ordering, re-entry starts fresh timer, `preflight_timeout_s=0` disables.
+- `FaultManagerTest` (×4) — `set_preflight_timeout()` raises `FAULT_FC_PREFLIGHT_TIMEOUT` with WARN action, `set_planner_stall()` raises `FAULT_PLANNER_STALL` with LOITER action, both faults coexist (LOITER wins escalation rank), `reset()` clears both.
+- `test_planner_stall_handler.cpp` (×7, new file) — atomic event-flag consume semantics, watched-vs-non-watched thread filter, multi-event latch, diagnostic-dump-with-profiler path, callback wiring, thread-safety under 1000-iteration contention.
+
+All 18 tests pass deterministically via `ScopedMockClock` (no `sleep_for`).
+
+**Found by:** `review-fault-recovery` agent during PR #717 review (Layer 1 gap); same agent on PR #763 (Layer 4 gap); empirical observation during PR #763 validation (mid-flight #765 stall).
+
+---
+
 ### Fix #503 — Drone Stalled at Scenario-30 WP3 with No Avoider Output (Issue #503)
 
 **Date fixed:** 2026-04-18

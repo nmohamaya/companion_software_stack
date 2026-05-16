@@ -298,6 +298,20 @@ enum class FaultType : uint32_t {
     FAULT_VIO_DEGRADED     = 1 << 10,  // VIO quality degraded → LOITER
     FAULT_VIO_LOST         = 1 << 11,  // VIO tracking lost → RTL
     FAULT_STUCK            = 1 << 12,  // stuck-detector escalated to LOITER (Issue #503)
+    /// Issue #718 — PREFLIGHT held past preflight_timeout_s without
+    /// release.  Fires for both Layer 1 (`armable` never stably true)
+    /// and Layer 4 (post-ARM attitude/velocity never settle).  The
+    /// planner's tick_preflight already triggered DISARM + transitioned
+    /// FSM → IDLE; this fault bit is propagated to GCS for operator
+    /// visibility.
+    FAULT_FC_PREFLIGHT_TIMEOUT = 1 << 13,
+    /// Issues #718 / #765 — ThreadWatchdog detected a critical-path
+    /// thread (planning_loop) stuck for planner_stall_loiter_s.
+    /// FaultManager escalates to LOITER (vehicle is in the air — never
+    /// disarm).  Distinct from FAULT_STUCK which is the navigation
+    /// stuck-detector (#503) firing on lack of progress, not on a
+    /// blocked planner thread.
+    FAULT_PLANNER_STALL = 1 << 14,
 };
 
 /// Bitwise operators for FaultType bitmask usage with uint32_t.
@@ -342,6 +356,13 @@ inline std::string fault_flags_string(uint32_t flags) {
         {static_cast<uint32_t>(FaultType::FAULT_VIO_DEGRADED), "FAULT_VIO_DEGRADED"},
         {static_cast<uint32_t>(FaultType::FAULT_VIO_LOST), "FAULT_VIO_LOST"},
         {static_cast<uint32_t>(FaultType::FAULT_STUCK), "FAULT_STUCK"},
+        // PR #775 review fix (security + data-plumbing P2): the two new
+        // fault bits introduced by Issue #718 must be in kFlags[] or they
+        // fall through to "FAULT_UNKNOWN(0x2000/0x4000)" in operator logs
+        // and GCS dashboards — defeating the named-bit visibility purpose.
+        {static_cast<uint32_t>(FaultType::FAULT_FC_PREFLIGHT_TIMEOUT),
+         "FAULT_FC_PREFLIGHT_TIMEOUT"},
+        {static_cast<uint32_t>(FaultType::FAULT_PLANNER_STALL), "FAULT_PLANNER_STALL"},
     };
     uint32_t known = 0;
     for (const auto& f : kFlags) {
