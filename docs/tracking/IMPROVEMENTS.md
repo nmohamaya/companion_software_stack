@@ -16,6 +16,16 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-15 (recovered from stash@{0} — scenario-runner / stack-coverage audit, originally 2026-05-01 / 2026-04-30)
+
+#### `tests/run_scenario.sh` missing `requires_cosys_airsim` skip gate
+
+- **P2** — `tests/run_scenario.sh` skips scenarios with `"requires_gazebo": true` but has no equivalent gate for `"requires_cosys_airsim": true`.  Scenarios 29, 30, and 33 set `requires_cosys_airsim` (not `requires_gazebo`), so `--all` will attempt to launch them on any machine, fail at stack startup (no Cosys-AirSim backend), and count them as failed rather than skipping cleanly.  Fix: add a second skip block in `run_scenario.sh` (around line 354) that reads `requires_cosys_airsim` and exits 0 with a SKIP message, mirroring the existing Gazebo gate.  Until fixed, always pass `--tier 1` to limit the run to genuine Tier 1 scenarios.
+
+#### 17 scenarios missing `_comment_static_obstacles` audit annotation
+
+- **P3** — 17 of 30 scenario JSON files have `"static_obstacles": []` without a `_comment_static_obstacles` key explaining why the array is empty.  The audit policy (CLAUDE.md "Stack Coverage Audit") requires an explanatory comment for every empty array.  Without it, a reviewer cannot distinguish "intentional: fault-injection scenario" from "accidental: HD-map was forgotten."  Add `_comment_static_obstacles` to scenarios 03, 04, 06, 07, 09, 10, 11, 12, 13, 14, 15, 16, 21, 23, 24, 25, 28.  Templates: `"_comment_static_obstacles": "Empty — fault-injection/smoke-test scenario; mission is interrupted before planner is significantly exercised."` for fault-injection group; `"Empty — no HD-map; perception-driven avoidance at runtime."` for Gazebo perception group (21, 28).  Verified present and correct in 01, 17, 18, 19, 27, 29, 30, 33 (9 scenarios already compliant).  Note: scenario numbering may have shifted since the original audit (April 30) — verify the offender list against current scenario IDs before fixing.
+
 ### 2026-05-13 (PR #752 review-fix follow-ups)
 
 #### Decide whether VIO `LOST` state should also withhold pose publication
