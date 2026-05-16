@@ -1285,3 +1285,48 @@ Pattern B becomes a one-liner; Pattern A doesn't fit cleanly because its compari
 **Backend-independence note (#740 follow-up):** the duplication does NOT introduce a backend-specific failure mode. Both patterns are agnostic to the active HAL backend (Gazebo MAVSDK, Cosys SimpleFlight, Cosys + PX4 HIL, real hardware) because they consume IPC types (Pose, FCState) produced by the HAL layer. What varies per-backend is the *probability* of each pattern firing and the *appropriate tuning value* (slack, window), both of which are already config-driven via `drone::Config`. Deferring extraction doesn't expose us to sim-vs-hardware divergence — it exposes us to maintenance drift only.
 
 **Date:** 2026-05-13 (PR #741 review code-quality P2 advisory — DR-NNN audit trail)
+
+---
+
+## DR-048: `FAULT_PLANNER_STALL` is FSM-state-agnostic — same fault bit drives DISARM on the ground and LOITER in the air
+
+**Context:** PR #775 (Issue #718 + partial #765) added `PlannerStallHandler` and `FAULT_PLANNER_STALL` (`1 << 14`) — a single fault bit raised whenever the `ThreadWatchdog` declares the planner-tick thread stuck. P4's response to that bit is asymmetric by FSM state:
+
+- **Pre-flight (PREFLIGHT/READY_TO_ARM)** — stuck planner means the drone is on the ground but its mission loop is dead. Safe action: **DISARM**.
+- **In-flight (TAKING_OFF / NAVIGATING / RTL / LANDING / any airborne state)** — disarming kills the motors and drops the airframe. Safe action: **LOITER** (autopilot maintains altitude/position via the FC failsafe, allowing operator intervention).
+
+The fault bit itself does NOT carry the FSM context. The handler raises the bit; `MissionStateTick`'s next pass reads the FSM state and the bit, then chooses DISARM vs LOITER.
+
+**Considered alternative — split into two bits:**
+
+```cpp
+FAULT_PLANNER_STALL_GROUND = (1 << 14),   // → DISARM
+FAULT_PLANNER_STALL_AIR    = (1 << 15),   // → LOITER
+```
+
+PR #775 rollup review (review-api-contract P3) flagged this as a "dual-purpose semantic" — one bit, two distinct operator-visible behaviours, fault telemetry can't tell from the bit alone which response fired.
+
+**For splitting (rejected):**
+
+- GCS / telemetry analyst can derive response from the fault bit without the FSM snapshot.
+- Audit logs / black-box recorder have unambiguous "what happened" rather than "stuck planner — response depended on state at the time".
+- Future fault bits driving asymmetric responses (e.g. `FAULT_FC_PREFLIGHT_TIMEOUT`, `FAULT_BATTERY_CRITICAL`) might benefit from the same split, creating a consistent convention.
+
+**For one bit (our decision):**
+
+1. **The fault is the *cause*, not the *response*.** The planner-tick thread being stuck is a single fact about the system. Splitting it into two bits encodes the FSM-state-snapshot into the fault model, which couples the fault layer to the FSM layer. Today FSM has 9 states; tomorrow if NAVIGATING splits into NAVIGATING_TO_WAYPOINT and NAVIGATING_TO_RTL, do we need 3 bits? 4?
+2. **The response *is* recoverable from the existing data.** Every fault flag co-occurs with an FSM state in the IPC snapshot (FaultSnapshot includes the active FSM state). GCS analyst sees `fault_flags=PLANNER_STALL` AND `fsm_state=NAVIGATING` → "this triggered LOITER, not DISARM". No information loss.
+3. **The same pattern already exists for `FAULT_VIO_LOST` and `FAULT_FC_LINK_LOST`** — both raise a single bit and let FSM decide the response (LOITER in-flight, DISARM on the ground for VIO_LOST; nothing on the ground but RTL in-flight for FC_LINK_LOST). Splitting only PLANNER_STALL would create an inconsistency with the rest of the fault catalogue.
+4. **Splitting requires the *raiser* to know the FSM state.** Today `PlannerStallHandler::on_thread_stuck()` runs in the watchdog scan thread and doesn't see the FSM. Splitting would force the handler to either subscribe to FSM updates (new IPC dependency, race window) or defer the raise until the next tick (defeats the purpose — the tick thread is stuck). The current pattern decouples raiser from interpreter, which is the right boundary.
+
+**Decision:** Keep `FAULT_PLANNER_STALL` as a single FSM-state-agnostic bit. The response asymmetry (DISARM pre-flight, LOITER in-flight) lives in `MissionStateTick::evaluate_fault_response()`, which is the right place for state-aware response selection. Document this convention in `common/ipc/include/ipc/ipc_types.h` (the FAULT_PLANNER_STALL doc comment already notes the dual response in PR #775).
+
+**Audit-trail recovery:** GCS / black-box analyst can answer "what response fired?" by joining `FaultSnapshot.flags & FAULT_PLANNER_STALL` with `MissionStateSnapshot.fsm_state` at the same timestamp. Both are already published. No new telemetry needed.
+
+**Revisit when:**
+
+- A real GCS feature lands that needs response-selection at fault-bit granularity (e.g. operator filter UI). At that point either add a derived `last_fault_response` field to `FaultSnapshot` (cheaper than splitting bits) or revisit this DR.
+- A new FSM state has a *third* response to planner-stall (not DISARM, not LOITER — something genuinely new). At three responses, the single-bit-multi-response argument weakens; revisit then.
+- The same single-bit-with-state-dependent-response pattern accumulates a fourth instance (today: VIO_LOST, FC_LINK_LOST, PLANNER_STALL). At four, codify the convention explicitly in `docs/design/API.md` rather than relying on individual DR entries.
+
+**Date:** 2026-05-16 (PR #776 rollup review-api-contract P3 — DR-NNN audit trail)

@@ -306,7 +306,8 @@ enum class FaultType : uint32_t {
     /// visibility.
     FAULT_FC_PREFLIGHT_TIMEOUT = 1 << 13,
     /// Issues #718 / #765 — ThreadWatchdog detected a critical-path
-    /// thread (planning_loop) stuck for planner_stall_loiter_s.
+    /// thread (planning_loop) stuck for longer than its configured
+    /// `heartbeat_timeout_s` (default 5 s for critical threads).
     /// FaultManager escalates to LOITER (vehicle is in the air — never
     /// disarm).  Distinct from FAULT_STUCK which is the navigation
     /// stuck-detector (#503) firing on lack of progress, not on a

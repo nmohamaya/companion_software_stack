@@ -156,8 +156,18 @@ for k in keys:
         break
 if not found:
     print(default)
+elif isinstance(val, bool):
+    # PR #776 review fix (Copilot): JSON booleans must print as `true`/`false`,
+    # not Python's `True`/`False`.  Without this, bash callers comparing
+    # `"$val" == "true"` always evaluate false even when the JSON value is
+    # `true` — silently disabling boolean-gated features (e.g., the #744
+    # contact-sensor gate at line ~660 of this script — every scenario run
+    # had the gate inactive pre-fix).
+    print('true' if val else 'false')
+elif isinstance(val, (dict, list)):
+    print(json.dumps(val))
 else:
-    print(val if not isinstance(val, (dict, list)) else json.dumps(val))
+    print(val)
 PYEOF
 }
 

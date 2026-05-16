@@ -74,7 +74,7 @@ All executables land in `build/bin/`.
 
 **After any clean rebuild (`rm -rf build/*`):**
 1. Reconfigure with the canonical command above
-2. Verify test count: `ctest -N --test-dir build | grep "Total Tests:"` → must show **1259** (see [tests/TESTS.md](tests/TESTS.md) for current baseline)
+2. Verify test count: `ctest -N --test-dir build | grep "Total Tests:"` → must match the current baseline recorded in [tests/TESTS.md](tests/TESTS.md) (the **Total** row). The literal number is intentionally not duplicated here — every PR that adds tests would otherwise drift this file and turn the check into false confidence.
 
 ## Test Commands
 
@@ -108,7 +108,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches baseline? (currently **1707** — see [tests/TESTS.md](tests/TESTS.md))
+- [ ] Test count matches the baseline in [tests/TESTS.md](tests/TESTS.md)? (the literal number is not duplicated here — TESTS.md is the single source of truth)
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 

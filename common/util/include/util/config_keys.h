@@ -630,9 +630,17 @@ inline constexpr const char* MAX_STUCK_COUNT   = "mission_planner.stuck_detector
 // Fault Manager (used by P4)
 // ═══════════════════════════════════════════════════════════
 namespace fault_manager {
-inline constexpr const char* POSE_STALE_TIMEOUT_MS = "fault_manager.pose_stale_timeout_ms";
-inline constexpr const char* BATTERY_WARN_PERCENT  = "fault_manager.battery_warn_percent";
-inline constexpr const char* BATTERY_CRIT_PERCENT  = "fault_manager.battery_crit_percent";
+inline constexpr const char* POSE_STALE_TIMEOUT_MS   = "fault_manager.pose_stale_timeout_ms";
+inline constexpr const char* BATTERY_WARN_PERCENT    = "fault_manager.battery_warn_percent";
+inline constexpr const char* BATTERY_RTL_PERCENT     = "fault_manager.battery_rtl_percent";
+inline constexpr const char* BATTERY_CRIT_PERCENT    = "fault_manager.battery_crit_percent";
+inline constexpr const char* FC_LINK_LOST_TIMEOUT_MS = "fault_manager.fc_link_lost_timeout_ms";
+inline constexpr const char* FC_LINK_RTL_TIMEOUT_MS  = "fault_manager.fc_link_rtl_timeout_ms";
+inline constexpr const char* LOITER_ESCALATION_TIMEOUT_S =
+    "fault_manager.loiter_escalation_timeout_s";
+inline constexpr const char* VIO_QUALITY_LOITER_THRESHOLD =
+    "fault_manager.vio_quality_loiter_threshold";
+inline constexpr const char* VIO_QUALITY_RTL_THRESHOLD = "fault_manager.vio_quality_rtl_threshold";
 }  // namespace fault_manager
 
 // ═══════════════════════════════════════════════════════════

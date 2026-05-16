@@ -514,6 +514,68 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 
 ---
 
+### 2026-05-16 — PR #776 rollup review deferrals (cold-start hardening epic)
+
+The PR #776 (integration→main rollup of the cold-start hardening epic) review surfaced these items as P3 — valid suggestions we agreed with but chose not to bundle into the rollup. Each entry preserves the originating-review audit trail.
+
+#### 1. `std::to_string` in pose-stale escalation log (perf, hot path)
+
+- **Priority:** P3
+- **Category:** code quality / performance
+- **Source:** deferred from `review-performance` agent on PR #776 rollup review (pre-existing — not introduced by the epic, but flagged in the merged diff)
+- **Current state:** `process4_mission_planner/include/planner/fault_manager.h` emits `DRONE_LOG_WARN("Pose stale " + std::to_string(...) + "ms")` inside the 50 Hz fault-evaluate path. The string concatenation allocates per evaluate-cycle even when the fault is not active.
+- **Proposed fix:** switch to `DRONE_LOG_WARN("Pose stale {}ms", ms)` (fmt-style structured logging, already supported by the spdlog backend) — zero allocation on the non-trigger path.
+- **When worth doing:** when fault_manager telemetry shows the per-tick allocation cost in a profiler, or as part of a broader DRONE_LOG_* fmt-migration sweep.
+- **Why deferred:** pre-existing code, not introduced by the cold-start epic. Fixing in this rollup would expand the diff with no functional change to the epic itself.
+
+#### 2. `FAULT_FC_` vs `FAULT_PLANNER_` prefix inconsistency in fault catalogue
+
+- **Priority:** P3
+- **Category:** api-contract / naming
+- **Source:** deferred from `review-api-contract` agent on PR #776 rollup review
+- **Current state:** `common/ipc/include/ipc/ipc_types.h` fault flags use mixed prefixes — `FAULT_FC_PREFLIGHT_TIMEOUT`, `FAULT_FC_LINK_LOST` (FC-prefixed because the cause is the flight controller side) versus `FAULT_PLANNER_STALL`, `FAULT_VIO_LOST` (subsystem-prefixed). A reader can't infer the convention from the names alone.
+- **Proposed fix:** either drop the `FC_` infix to make all flags subsystem-prefixed (`FAULT_PREFLIGHT_TIMEOUT`, `FAULT_LINK_LOST`), OR add a doc-comment table at the top of the FaultFlags enum mapping each flag to its subsystem/owner. Option B is the no-code-churn fix.
+- **When worth doing:** when a new fault flag lands and the author has to pause to decide which convention to follow, OR if a GCS-side telemetry consumer is built that needs to filter by subsystem.
+- **Why deferred:** renaming touches >30 callsites across P4, P5, P7 + GCS protocol + scenario JSON expectations. Out of scope for a rollup PR.
+
+#### 3. `docs/tracking/BUG_FIXES.md` Fix #718 entry — file list completeness
+
+- **Priority:** P3
+- **Category:** docs (audit trail accuracy)
+- **Source:** deferred from `review-api-contract` agent on PR #776 rollup review
+- **Current state:** the Fix #718 entry in BUG_FIXES.md lists the planner_stall_handler files but omits the FaultManager constructor additions (`POSE_STALE_TIMEOUT_MS`, etc.) and the IPC type additions (FAULT_PLANNER_STALL bit).
+- **Proposed fix:** append the missing files to the Fix #718 entry's "Files changed" list.
+- **When worth doing:** in the next docs sweep, or when an audit (cert, post-mortem) traces a finding back through BUG_FIXES.md and the missing files matter.
+- **Why deferred:** BUG_FIXES.md is for the audit trail, not the diff. Cross-referencing files is a polish item.
+
+#### 4. `tests/TESTS.md` delta footnote attribution precision
+
+- **Priority:** P3
+- **Category:** docs (test inventory)
+- **Source:** deferred from `test-unit` agent on PR #776 rollup review
+- **Current state:** the latest TESTS.md update notes "+18 tests for cold-start hardening" but doesn't break down which test file added which count. A future maintainer can't tell from the footnote whether the 18 came from PR #743 (Layer 1+2) or PR #763 (Layer 4) or PR #775 (Layer 5).
+- **Proposed fix:** split the cold-start delta into per-PR footnotes:
+  - PR #741/#743 — Layer 1 ARM debounce (+N tests in `test_mission_state_tick.cpp`)
+  - PR #744/#750 — Layer 3 contact-sensor gate (+N tests in `test_contact_sensor_gate.cpp`)
+  - PR #752 — Layer 2 P3 INITIALIZING-skip (+N tests in `test_p3_pose_init.cpp`)
+  - PR #763 — Layer 4 settle gate (+N tests in `test_post_arm_settle.cpp`)
+  - PR #775 — Layer 5 planner-stall (+N tests in `test_planner_stall_handler.cpp`)
+- **When worth doing:** in the next TESTS.md sweep, or when a maintainer trying to git-bisect a test-count regression needs the attribution.
+- **Why deferred:** TESTS.md format is currently rolled-up-by-month. Per-PR attribution is a format change, not a rollup change.
+
+#### 5. End-to-end Layer 1→4 chain composition integration test
+
+- **Priority:** P3
+- **Category:** test-infra (integration coverage gap)
+- **Source:** deferred from `test-scenario` agent on PR #776 rollup review
+- **Current state:** each cold-start layer has unit tests for its individual gate (Layer 1 ARM debounce, Layer 2 INITIALIZING-skip, Layer 3 contact-sensor + stale-pose, Layer 4 attitude/velocity settle). There is no single integration test that runs a process-level fixture through all five gates in sequence with realistic cold-start timing (EKF2 flicker → INITIALIZING resolve → contact-sensor settle → ARM → settle gate → TAKEOFF).
+- **Proposed fix:** add `tests/integration/test_cold_start_chain.cpp` that drives a `MissionStateTick` instance through the full pre-flight sequence with a mocked `FCState` source that replays the recorded cold-start traces from the 5/5 smoke sweep on PR #763.
+- **When worth doing:** when a real bug crosses two layers (e.g. Layer 4 settles but Layer 2 hasn't really resolved) and we wish we had a regression test for the chain. File as a follow-up issue under epic #727 closeout.
+- **Why deferred:** integration test infrastructure (fixture, traces) is non-trivial; the 5/5 Gazebo sweep already validated the chain end-to-end at the scenario level for the epic merge.
+- **Action:** file as a new GitHub issue tagged `area:tests` `epic:727-followup` after the rollup merges.
+
+---
+
 ## Resolved
 
 ### 2026-04-30

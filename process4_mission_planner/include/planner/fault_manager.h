@@ -14,6 +14,7 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -90,42 +91,48 @@ public:
     /// @param cfg  Drone config — reads "fault_manager.*" keys.
     template<typename Config>
     explicit FaultManager(const Config& cfg) {
+        // PR #776 review fix (Copilot — codebase-convention P2): all cfg.get
+        // callsites now use `drone::cfg_key::fault_manager::*` constants
+        // instead of raw string literals.  Matches the policy enforced by
+        // the review-data-plumbing rule (PR #773): a typo in a constant
+        // becomes a compile error; a typo in a string literal silently
+        // returns `default`.
+        //
         // PR #775 review fix (security P2 — CLAUDE.md §"Unguarded
-        // signed→unsigned casts on durations/sizes/counts"):
-        // every cfg.get<int> result is clamped to non-negative BEFORE
-        // the static_cast<uint64_t>, otherwise a tampered config with
-        // a negative integer (e.g. `"fault_manager.fc_link_lost_timeout_ms": -1`)
-        // wraps to ~584 years and silently disables the fault.
+        // signed→unsigned casts on durations/sizes/counts"): every
+        // cfg.get<int> result is clamped to non-negative BEFORE the
+        // static_cast<uint64_t>, otherwise a tampered config with a
+        // negative integer (e.g. `"fault_manager.fc_link_lost_timeout_ms":
+        // -1`) wraps to ~584 years and silently disables the fault.
+        namespace fk = drone::cfg_key::fault_manager;
+
         config_.pose_stale_timeout_ns =
             static_cast<uint64_t>(
-                std::max(0, cfg.template get<int>("fault_manager.pose_stale_timeout_ms", 500))) *
+                std::max(0, cfg.template get<int>(fk::POSE_STALE_TIMEOUT_MS, 500))) *
             1'000'000ULL;
 
-        config_.battery_warn_percent = cfg.template get<float>("fault_manager.battery_warn_percent",
-                                                               30.0f);
-        config_.battery_rtl_percent  = cfg.template get<float>("fault_manager.battery_rtl_percent",
-                                                               20.0f);
-        config_.battery_crit_percent = cfg.template get<float>("fault_manager.battery_crit_percent",
-                                                               10.0f);
+        config_.battery_warn_percent = cfg.template get<float>(fk::BATTERY_WARN_PERCENT, 30.0f);
+        config_.battery_rtl_percent  = cfg.template get<float>(fk::BATTERY_RTL_PERCENT, 20.0f);
+        config_.battery_crit_percent = cfg.template get<float>(fk::BATTERY_CRIT_PERCENT, 10.0f);
 
         config_.fc_link_lost_timeout_ns =
             static_cast<uint64_t>(
-                std::max(0, cfg.template get<int>("fault_manager.fc_link_lost_timeout_ms", 3000))) *
+                std::max(0, cfg.template get<int>(fk::FC_LINK_LOST_TIMEOUT_MS, 3000))) *
             1'000'000ULL;
 
         config_.fc_link_rtl_timeout_ns =
             static_cast<uint64_t>(
-                std::max(0, cfg.template get<int>("fault_manager.fc_link_rtl_timeout_ms", 15000))) *
+                std::max(0, cfg.template get<int>(fk::FC_LINK_RTL_TIMEOUT_MS, 15000))) *
             1'000'000ULL;
 
         config_.loiter_escalation_timeout_ns =
-            static_cast<uint64_t>(std::max(
-                0, cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30))) *
+            static_cast<uint64_t>(
+                std::max(0, cfg.template get<int>(fk::LOITER_ESCALATION_TIMEOUT_S, 30))) *
             1'000'000'000ULL;
 
         {
-            int loiter_q = cfg.template get<int>("fault_manager.vio_quality_loiter_threshold", 1);
-            int rtl_q    = cfg.template get<int>("fault_manager.vio_quality_rtl_threshold", 0);
+            int loiter_q = cfg.template get<int>(fk::VIO_QUALITY_LOITER_THRESHOLD, 1);
+            int rtl_q    = cfg.template get<int>(fk::VIO_QUALITY_RTL_THRESHOLD, 0);
             config_.vio_quality_loiter_threshold =
                 static_cast<uint32_t>(std::clamp(loiter_q, 0, 3));
             config_.vio_quality_rtl_threshold = static_cast<uint32_t>(std::clamp(rtl_q, 0, 3));
@@ -257,9 +264,11 @@ public:
 
         // ── 8b. Planner stall (Issues #718 / #765) ───────────
         // ThreadWatchdog detected the planning_loop thread stuck for
-        // more than planner_stall_loiter_s.  Vehicle is in the air —
-        // never disarm; LOITER lets the existing loiter-escalation
-        // timer take over if the stall persists.
+        // longer than its own `heartbeat_timeout_s` (default 5 s for
+        // critical threads — there is no separate `planner_stall_*` key;
+        // see config_keys.h comment for the rationale).  Vehicle is in
+        // the air — never disarm; LOITER lets the existing loiter-
+        // escalation timer take over if the stall persists.
         if (planner_stall_) {
             result.active_faults |= FAULT_PLANNER_STALL;
             escalate(result, FaultAction::LOITER, "planner thread stalled");
