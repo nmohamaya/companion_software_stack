@@ -15,6 +15,7 @@
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
+#include "planner/planner_stall_handler.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/config_keys.h"
 #include "util/correlation.h"
@@ -28,14 +29,55 @@
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
+#include <algorithm>  // std::clamp, std::max
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <optional>
 #include <thread>
+#include <type_traits>  // std::is_floating_point_v (validate_and_clamp helper)
 
 using namespace drone::planner;
+
+namespace {
+
+/// Issue #740 / PR #763 review (api-contract + code-quality P2): single
+/// validate-and-clamp helper for tunable config values.  Replaces the
+/// near-identical 4-stanza pattern that grew from 1 (PR #743 added
+/// `preflight_armable_stable_s`) to 4 (PR #763 added the three
+/// `takeoff_settle_*` keys), and would have grown to N for every future
+/// tunable.
+///
+/// Reads `key` via `cfg.get<T>` with `default_val` fallback, then defends
+/// against (a) non-finite floats and (b) out-of-range values by emitting a
+/// WARN naming the human-readable key + observed value + allowed range,
+/// and returning a clamp into `[min_val, max_val]`.  Non-finite inputs
+/// fall back to `default_val` *before* the clamp so a NaN config doesn't
+/// silently fold to the lower bound.
+template<typename T>
+T validate_and_clamp(const drone::Config& cfg, const char* key, T default_val, T min_val, T max_val,
+                     const char* human_name) {
+    T    raw       = cfg.get<T>(key, default_val);
+    bool finite_ok = true;
+    if constexpr (std::is_floating_point_v<T>) {
+        finite_ok = std::isfinite(raw);
+    }
+    if (!finite_ok || raw < min_val || raw > max_val) {
+        if constexpr (std::is_floating_point_v<T>) {
+            DRONE_LOG_WARN("[Planner] {} {:.3g} outside [{:.3g}, {:.3g}] (or non-finite) — "
+                           "clamping (default {:.3g} substituted on non-finite input).",
+                           human_name, raw, min_val, max_val, default_val);
+        } else {
+            DRONE_LOG_WARN("[Planner] {} {} outside [{}, {}] — clamping.", human_name, raw, min_val,
+                           max_val);
+        }
+        raw = std::clamp(finite_ok ? raw : default_val, min_val, max_val);
+    }
+    return raw;
+}
+
+}  // namespace
 
 static std::atomic<bool> g_running{true};
 
@@ -69,30 +111,18 @@ int main(int argc, char* argv[]) {
     if (!ctx_result.is_ok()) return ctx_result.error();
     auto& ctx = ctx_result.value();
 
-    // Issue #720 — subscriber-side stale-message filter for Pose.
+    // Issue #720 / #722 — stale-message filter is now applied at the
+    // ZenohSubscriber wrapper level (default-on, applies to every
+    // timestamped IPC topic, not just pose).  The per-site filter that
+    // used to live here (Issue #721) is subsumed by the wrapper.  See
+    // `common/ipc/include/ipc/zenoh_subscriber.h::on_sample` and the
+    // adjacent constructor docstring for the design rationale (100 ms
+    // slack, validate()-gated coverage, opt-out for replay tests).
     //
-    // Zenoh's IPC layer can deliver the last-published pose from a previous
-    // P3 session before the fresh publisher emits its first new message
-    // (e.g. on session-restart with a gap > a few seconds).  Treating that
-    // historic pose as fresh causes FaultManager to compute a multi-minute
-    // staleness and raise FAULT_POSE_STALE → LOITER before the drone has
-    // even ascended.  Drop any pose whose publisher timestamp predates this
-    // planner process.
-    //
-    // Provably correct because P3 sets `p.timestamp` via the project
-    // mockable clock (see ivio_backend.h::on_odom + simulated backend +
-    // Cosys backend — all read steady_clock under the hood).  A pose with
-    // `timestamp_ns < planner_birth_ns` cannot have been published by the
-    // current P3 process.  Allow a 100 ms backwards slack for the rare case
-    // where P3 booted slightly before P4 and published its first pose
-    // during P4's MessageBus init.
-    //
-    // Uses `drone::util::get_clock().now_ns()` per the project convention
-    // documented in util/iclock.h:24-37 — keeps the clock domain mockable
-    // for tests and consistent with FaultManager's `now_ns` reads.
-    const uint64_t     planner_birth_ns  = drone::util::get_clock().now_ns();
-    constexpr uint64_t kPoseBirthSlackNs = 100'000'000ULL;  // 100 ms
-    bool               stale_pose_logged = false;
+    // Effect: this planner subscribes to `drone/slam/pose` with the
+    // default `filter_pre_birth_messages = true` — any pose stamped
+    // before this process's `get_clock().now_ns()` birth (minus 100 ms
+    // slack) is dropped at the wrapper, never reaches `pose_sub->receive()`.
 
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
@@ -437,6 +467,87 @@ int main(int argc, char* argv[]) {
     tick_cfg.collision_hover_duration_s = collision_hover_duration;
     tick_cfg.stuck_detector             = stuck_cfg;
     tick_cfg.avoider_influence_radius_m = avoider_influence_radius;
+    // Issue #740 (epic #727) — ARM-gate debounce window + Layer 4 post-ARM
+    // settle gate.  Defensive-clamp-on-load policy via the
+    // `validate_and_clamp` helper (anonymous namespace at top of this file)
+    // — see PR #741 / PR #743 review for the rationale on why every tunable
+    // gets validated at load: NaN/inf would silently disable safety gates;
+    // values > the documented max suggest sensor mis-config (warranting
+    // investigation, not a wider tuning range).  The helper collapses what
+    // grew from 1 stanza (PR #743) to 4 stanzas (this PR) into one place.
+    //
+    // **`takeoff_settle_observations` — special-case clamp** (security P3
+    // from the PR #763 review): the gate's `=0` value is the documented
+    // *disable* sentinel.  Generic clamp-to-min-0 would silently fold a
+    // typo'd negative ("-3" via copy-paste) into the disable sentinel.
+    // Below: clamp negatives to 1 instead of 0; emit a separate WARN if
+    // the resolved value is exactly 0 so an operator can never silently
+    // ship a Layer-4-disabled production config.
+    tick_cfg.preflight_armable_stable_s = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S, 3.0f, 0.0f, 30.0f,
+        "preflight_armable_stable_s");
+
+    constexpr int kMaxSettleObs = 1000;
+    int           settle_obs_raw =
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::TAKEOFF_SETTLE_OBSERVATIONS, 30);
+    if (settle_obs_raw < 0) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations {} is negative — clamping to 1. "
+                       "(0 is the disable sentinel; a negative typo MUST NOT silently disable "
+                       "the Layer 4 settle gate.)",
+                       settle_obs_raw);
+        settle_obs_raw = 1;
+    } else if (settle_obs_raw > kMaxSettleObs) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations {} > {} — clamping. "
+                       "Values that high suggest sensor mis-config rather than a tuning need.",
+                       settle_obs_raw, kMaxSettleObs);
+        settle_obs_raw = kMaxSettleObs;
+    }
+    if (settle_obs_raw == 0) {
+        DRONE_LOG_WARN("[Planner] takeoff_settle_observations = 0 — Layer 4 settle gate "
+                       "DISABLED (legacy immediate-takeoff-on-armed).  Intended ONLY for "
+                       "headless dev configs and unit-test fixtures; production should set "
+                       ">= 1 (default 30).  See `mission_state_tick.h::tick_preflight` for the "
+                       "asymmetric-rotor-spin-up failure mode this gate prevents (Issue #740 / "
+                       "#746 evidence).");
+    }
+    tick_cfg.takeoff_settle_observations = settle_obs_raw;
+    tick_cfg.takeoff_max_tilt_deg =
+        validate_and_clamp<float>(ctx.cfg, drone::cfg_key::mission_planner::TAKEOFF_MAX_TILT_DEG,
+                                  5.0f, 0.0f, 45.0f, "takeoff_max_tilt_deg");
+    tick_cfg.takeoff_max_velocity_mps = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::TAKEOFF_MAX_VELOCITY_MPS, 0.3f, 0.0f, 5.0f,
+        "takeoff_max_velocity_mps");
+
+    // Issue #718 — PREFLIGHT timeout escalation tunables.  Both
+    // default to "0 disables the escalation" so headless dev configs
+    // and the existing unit-test fixture keep the legacy hold-forever
+    // behaviour.  Production defaults (set in config/default.json):
+    // warn=30s, timeout=60s — gives 2.5x margin over the worst-case
+    // ~22s preflight wait observed in the PR #763 smoke sweep.
+    tick_cfg.preflight_warn_s = validate_and_clamp<int>(
+        ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_WARN_S, 30, 0, 600, "preflight_warn_s");
+    tick_cfg.preflight_timeout_s =
+        validate_and_clamp<int>(ctx.cfg, drone::cfg_key::mission_planner::PREFLIGHT_TIMEOUT_S, 60,
+                                0, 1800, "preflight_timeout_s");
+    if (tick_cfg.preflight_timeout_s > 0 &&
+        tick_cfg.preflight_warn_s >= tick_cfg.preflight_timeout_s) {
+        // PR #775 review fix (security P3): WARN-only used to leave the
+        // invariant unenforced — a tampered or misconfigured
+        // `preflight_warn_s: 1800, preflight_timeout_s: 30` would let
+        // both values through unchanged and the operator-visible
+        // escalation runway would be silently meaningless.  Now we
+        // clamp `preflight_warn_s` to `preflight_timeout_s - 1` so the
+        // WARN log is guaranteed to fire at least one tick before the
+        // DISARM escalation.
+        const int clamped_warn = std::max(0, tick_cfg.preflight_timeout_s - 1);
+        DRONE_LOG_WARN("[Planner] preflight_warn_s ({}) >= preflight_timeout_s ({}) — "
+                       "clamping preflight_warn_s to {} (preflight_timeout_s - 1) so the WARN "
+                       "log fires before the timeout escalation.  Update config to "
+                       "preflight_warn_s < preflight_timeout_s to silence this warning.",
+                       tick_cfg.preflight_warn_s, tick_cfg.preflight_timeout_s, clamped_warn);
+        tick_cfg.preflight_warn_s = clamped_warn;
+    }
+
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
@@ -619,7 +730,25 @@ int main(int argc, char* argv[]) {
     drone::systemd::notify_ready();
 
     // ── Thread heartbeat + watchdog + health publisher ──────
+    //
+    // PR #775 review fix (P1, memory-safety + concurrency + api-contract
+    // converged): `PlannerStallHandler` MUST be declared BEFORE
+    // `ThreadWatchdog` so that destruction order (LIFO) is:
+    //   1. `~ThreadWatchdog()` runs first — sets running_=false and
+    //      joins the scan thread.  After this point, no further
+    //      stuck-callback invocations are possible.
+    //   2. `~PlannerStallHandler()` runs second — the destroyed
+    //      `stalled_` atomic + `watched_thread_name_` string can no
+    //      longer be touched by a dangling callback.
+    //
+    // The previous order (watchdog first, handler second) caused the
+    // scan thread to fire the lambda with a dangling `this` during the
+    // ~1 s window between handler destruction and watchdog join.  The
+    // handler's own docstring (planner_stall_handler.h §"Capture-by-this")
+    // already states the contract; this comment exists to lock the
+    // declaration order against a future-reorder regression.
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
+    PlannerStallHandler         stall_handler("planning_loop");
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
         drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
@@ -642,6 +771,12 @@ int main(int argc, char* argv[]) {
     }
     drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
                                                                     : nullptr;
+    // Install the watchdog stuck-callback now that `profiler_ptr` is
+    // known.  Callback fires on the watchdog scan thread when any
+    // registered thread is detected stuck; the handler logs the
+    // diagnostic dump and sets the FAULT_PLANNER_STALL event flag
+    // only for the watched thread (planning_loop).
+    watchdog.set_stuck_callback(stall_handler.make_callback(profiler_ptr));
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Execution order contract:
@@ -664,32 +799,11 @@ int main(int argc, char* argv[]) {
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
-        bool             got_pose = pose_sub->receive(pose);
-        // Issue #720 — drop poses published before this planner process
-        // started.  Zenoh's last-value cache can deliver a stale pose from
-        // a previous P3 session before the fresh publisher emits its first
-        // message; treating it as fresh would let FaultManager compute a
-        // multi-minute staleness and escalate to LOITER mid-takeoff.  See
-        // `planner_birth_ns` declaration for the full rationale.
-        //
-        // PR #721 Copilot review — overflow-safe subtraction form: avoids
-        // the uint64_t addition `timestamp_ns + slack` which could wrap
-        // for `timestamp_ns` near UINT64_MAX.  The guarded subtraction
-        // `(planner_birth_ns - pose.timestamp_ns)` only runs when
-        // `pose.timestamp_ns < planner_birth_ns`, so the subtraction
-        // is well-defined.
-        if (got_pose && pose.timestamp_ns > 0 && pose.timestamp_ns < planner_birth_ns &&
-            (planner_birth_ns - pose.timestamp_ns) > kPoseBirthSlackNs) {
-            if (!stale_pose_logged) {
-                DRONE_LOG_WARN("[Planner] Discarded stale pose from previous publisher "
-                               "session (age vs planner_start: {} ms) — waiting for fresh "
-                               "pose from current P3 SLAM/VIO (Issue #720)",
-                               (planner_birth_ns - pose.timestamp_ns) / 1'000'000ULL);
-                stale_pose_logged = true;
-            }
-            got_pose = false;
-            pose     = drone::ipc::Pose{};  // clear so downstream sees no-pose-this-tick
-        }
+        // Issue #720 / #722 — the stale-message filter is now applied at the
+        // ZenohSubscriber wrapper level (default-on).  The pose subscriber
+        // above uses default `filter_pre_birth_messages = true`, so pre-birth
+        // poses from a previous P3 session never reach this `receive()` call.
+        bool got_pose = pose_sub->receive(pose);
         if (got_pose) {
             // Issue #698 Fix #1 — keep the cross-veto gate's pose cache fresh.
             // Cheap (vector + quaternion conjugate); safe to call every tick
@@ -824,9 +938,14 @@ int main(int argc, char* argv[]) {
             health_sub->receive(sys_health);
         }
 
-        auto now_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                std::chrono::steady_clock::now().time_since_epoch())
-                                                .count());
+        // Issue #767: source via drone::util::get_clock() so the pose-staleness
+        // gate (inline below + FaultManager.evaluate at line ~943) shares a
+        // clock domain with the P3 producer (process3_slam_vio_nav/src/main.cpp,
+        // also migrated in this PR).  Without this, MockClock-driven tests of
+        // the staleness gate compute age = (real_wall - mocked_stamp), which is
+        // meaningless.  Other steady_clock::now() callsites in this file are
+        // tracked by the bulk-migration sweep (clock-modernisation epic #766).
+        auto now_ns = drone::util::get_clock().now_ns();
 
         // ── 2. Pose staleness check (SAFETY CRITICAL, inline) ──
         if (pose.timestamp_ns > 0 && (now_ns - pose.timestamp_ns) > kPoseStaleThresholdNs) {
@@ -877,6 +996,15 @@ int main(int argc, char* argv[]) {
         }
 
         // ── 5. Fault evaluate ───────────────────────────────
+        // Issue #718 — consume the PREFLIGHT-timeout event from the
+        // state-tick (set when `tick_preflight` fires the stuck-timer
+        // escalation) and the planner-stall event from the watchdog
+        // callback handler.  Latched-once: each event flag is cleared
+        // by consume, and FaultManager's escalation-only policy keeps
+        // the fault bit raised until `reset()` runs (next mission).
+        fault_mgr.set_preflight_timeout(state_tick.consume_preflight_timeout_event());
+        fault_mgr.set_planner_stall(stall_handler.consume_event());
+
         auto fault = [&]() {
             drone::util::ScopedDiagTimer              t(diag, "FaultEval");
             std::optional<drone::util::ScopedLatency> bench_fault;

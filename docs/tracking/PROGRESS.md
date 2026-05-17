@@ -3607,4 +3607,291 @@ Two-part fix (per #714):
 
 ---
 
-*Last updated after Improvement #94 (PR #725). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #95 — Cold-Start ARM-Gate Stability Debounce (Epic #740 / #727 Layer 1, PR #741)
+
+**Date:** 2026-05-13
+**Category:** Bug Fix — Flight safety (cold-start)
+**Issue:** [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (epic, Layer 1) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (root-cause investigation)
+**PR:** [#741](https://github.com/nmohamaya/companion_software_stack/pull/741)
+
+**What:**
+
+`tick_preflight()` armed on the first tick where `fc_state.armable == true`. PX4's `health_all_ok` can flicker true momentarily on Gazebo cold-start while EKF2 attitude is still settling (gyro/accel bias estimates wandering for the first 1-15 s after spawn). Arming on a single-tick flicker produces asymmetric mixer commands → asymmetric rotor spin-up → drone tips on the ground at takeoff. Reproduced today on **3 of 6 live-takeoff scenario runs** across scenarios 02, 17, 18, 25, 26 (#727 evidence matrix).
+
+Fix: require **N consecutive seconds** of continuous `armable=true` before sending ARM. Any drop back to false resets the stability tracker, so a brief flicker has to be followed by a full fresh window of stable armable before ARM can fire. Default window: 3.0 s, exposed as `mission_planner.preflight_armable_stable_s` via `drone::Config`.
+
+**Files modified:**
+
+- `process4_mission_planner/include/planner/mission_state_tick.h` — new `StateTickConfig::preflight_armable_stable_s` field + `armable_first_seen_ns_` member + debounce gate in `tick_preflight()`. Uses `drone::util::get_clock().now_ns()` for mockable time. Underflow-safe (clock-backward treated as fresh first-observation).
+- `common/util/include/util/config_keys.h` — new `PREFLIGHT_ARMABLE_STABLE_S` constant.
+- `process4_mission_planner/src/main.cpp` — plumb the config key into `tick_cfg.preflight_armable_stable_s`.
+- `config/default.json` — `mission_planner.preflight_armable_stable_s = 3.0` with rationale comment.
+- `tests/test_mission_state_tick.cpp` — +4 tests using `ScopedMockClock` (`MissionStateTickDebounceTest` × 3 + `MissionStateTickDebounceConfigTest` × 1).
+- `tests/TESTS.md` — count + suite rows updated.
+- `CLAUDE.md` + `docs/guides/CPP_PATTERNS_GUIDE.md` — adopted four new safety-critical C++ rules surfaced by this work (FSM-transition debounce, cold-start data hygiene, asymmetric pre-conditions, mockable time).
+- `docs/tracking/IMPROVEMENTS.md` — logged two P3 test-discipline items noticed in passing (ScopedMockClock fixture ordering; bulk migration of remaining `steady_clock::now()` direct usage).
+
+**Why:**
+
+Layer 1 of the cold-start hardening epic (#740). Composes with three more layers: PR-B (#722 wrapper-level Zenoh stale-message filter — defence-in-depth), PR-C (scenario flight-quality gates — observability so we know fixes work), PR-D (P3 INITIALIZING pose-publish guard — eliminates wrong-pose-at-first-waypoint).
+
+**Test count:** +4 (`test_mission_state_tick.cpp` 24 → 28). Full `ctest -N` on this branch: 2054 → 2058. All 28 tests in the file pass; format clean.
+
+**Empirical validation pending:** cold-start sweep on the integration branch after Wave 1 lands. Per #727 evidence matrix, success criterion = <5% rotor-asymmetry rate across 20 cold-starts of scenarios 02, 17, 18, 25, 26 (vs. ~50% observed today).
+
+---
+
+### Improvement #96 — Cold-Start ARM-Gate Review-Fix Follow-Up (PR #741 review fixes + mixed-clock migration, PR #743)
+
+**Date:** 2026-05-13
+**Category:** Hardening — Review fixes + testability
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (cold-start hardening), follow-up to merged [#741](https://github.com/nmohamaya/companion_software_stack/pull/741)
+**PR:** #743 (open against `feature/cold-start-hardening`)
+
+**What:**
+
+PR #741 (Improvement #95) merged before the review pipeline ran.  This follow-up closes the audit loop with a post-merge 9-agent + Copilot review (recorded as a comment on #741 for the audit trail) and a focused follow-up PR that addresses every P2 finding inline plus the highest-leverage P3.
+
+Changes by category:
+
+**P2 #1 — Config validation** (3 convergent finders: memory-safety + security + Copilot).  Added `std::isfinite` + `std::clamp(0.0, 30.0)` clamp at the `cfg.get<float>(PREFLIGHT_ARMABLE_STABLE_S)` load site in `process4_mission_planner/src/main.cpp:443`.  Mirrors the existing `voxel_input_min_confidence` clamp-on-load pattern.  Without this, `+inf` / huge values produced float→uint64_t UB; NaN silently disabled the gate.
+
+**P2 #2 — Missing `#include <algorithm>`** (Copilot).  Added to `mission_state_tick.h` for the `std::max` use introduced by PR #741.
+
+**P3 high-leverage — Mixed clock sources** (4 convergent finders: fault-recovery + test-unit + test-quality + code-quality).  Migrated `last_arm_time_` and `last_wait_log_time_` from `std::chrono::steady_clock::time_point` to `uint64_t` ns sourced from `drone::util::get_clock().now_ns()`.  Both throttles now share a single clock domain with `armable_first_seen_ns_`, so `ScopedMockClock`-driven unit tests can exercise the full PREFLIGHT timing path deterministically (previously the retry path was only mockable for the debounce window, not for the retry interval).  Sentinel `0` means "never fired" — first observation always passes the threshold check.
+
+**P2 #3 + #4 — Test coverage gaps** (filled by the mixed-clock migration above).  New tests in `tests/test_mission_state_tick.cpp`:
+
+- `ArmableClockRewindRestartsWindow` — pins the underflow-guard at `mission_state_tick.h:319` (false-green protection: a buggy refactor dropping `now_ns < first_seen` would otherwise still pass all 4 existing debounce tests).
+- `DebounceAndRetryComposeAtProductionDefaults` — exercises the interaction between the #740 stability debounce and the #716 ARM-retry throttle at production `stable_s = 3.0`.
+- `ArmableStableAtExactWindowBoundaryFiresArm` (P3) — pins the `<` (strictly-less-than) comparison semantics at exact-equality (3.0s == window_ns counts as elapsed).
+- `ArmedTransitionResetsStabilityWindowForReentry` (P3) — pins the `armable_first_seen_ns_ = 0` reset on the `fc_state.armed=true` early return, exercising the re-PREFLIGHT path that the existing tests bypass via `make_default_test_config()`.
+
+**P2 #5 + #6 — Doc drift.**  TESTS.md P4 row 224 → 232 (was 224 in #741 due to missing summary-row update; #741 added 4, #743 adds 4 more = +8 total).  PROGRESS.md entry (this entry).
+
+**P3 various — Doc polish.**  Added "0.0 disables / 3.0s default" wording to the `tick_preflight()` doc block (api-contract finding).
+
+**Routing-rule clarification (responding to user feedback).**  CLAUDE.md `Where deferred items are logged` rule was over-applying DR-NNN to review-comment declines.  Clarified the fork: "considered and chose otherwise" → DR-NNN; "valid but deferred" → IMPROVEMENTS.md with cross-reference to the originating review.
+
+**Deferred to backlog (with explicit triggers):**
+
+- DR-047 — `StabilityWindow` / `BirthGuard` helper extraction (revisit when #718 lands a third similar pattern).  Filed [#742](https://github.com/nmohamaya/companion_software_stack/issues/742) as a follow-up with junior-engineer implementation guidance.
+- IMPROVEMENTS.md — sibling `cfg_key` constants for `arm_retry_s` / `wait_log_s`, `hardware*.json` propagation, repeated `StateTickConfig` positional ctor.  All P3, all backlog with revisit triggers.
+
+**Files modified:**
+
+- `process4_mission_planner/include/planner/mission_state_tick.h` — `#include <algorithm>`, migrate `last_arm_time_` + `last_wait_log_time_` to ns, doc-block update.
+- `process4_mission_planner/src/main.cpp` — config-load validation clamp.
+- `tests/test_mission_state_tick.cpp` — 4 new tests.
+- `tests/TESTS.md` — P4 row 224 → 232, total 2078 → 2082, suite description updated.
+- `docs/tracking/DESIGN_RATIONALE.md` — DR-047 (StabilityWindow extraction deferral).
+- `docs/tracking/IMPROVEMENTS.md` — 3 P3 backlog items.
+- `docs/tracking/PROGRESS.md` — this entry.
+- `CLAUDE.md` — clarify deferral-routing rule.
+
+**Test count:** +4 (`test_mission_state_tick.cpp` 28 → 32).  Full `ctest -N`: 2058 → 2062 on this branch.  All 32 tests in the file pass; format clean.
+
+---
+
+### Improvement #97 — Scenario Flight-Quality Gate: Contact-Sensor Detection (Epic #740 Layer 3 Gate 1, PR #744)
+
+**Date:** 2026-05-13
+**Category:** Test Infrastructure — Observability gate
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (cold-start hardening), Layer 3 Gate 1; related to [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (cold-start root-cause investigation)
+**PR:** #744 (open against `feature/cold-start-hardening`)
+**Numbering note:** depends on PR #743 (Improvements #95, #96) landing first; if PR-C lands earlier, renumber to #97.
+
+**What:**
+
+Adds a runtime flight-quality gate to `tests/run_scenario_gazebo.sh` that captures Gazebo's `/world/<name>/contacts` topic during the scenario run and asserts no drone-vs-obstacle physical contact occurred.  Closes the **observability gap** surfaced by [#727 evidence](https://github.com/nmohamaya/companion_software_stack/issues/727#issuecomment-4432892812): scenario 26 (Tier 2 / Gazebo) and sometimes 18 were reporting PASS while the drone visibly collided with cylinders / objects in the Gazebo GUI.  (Scenario 25 also exhibited false-PASS in #727 evidence, but it is Tier 1 / `requires_gazebo: false` and runs under `run_scenario.sh` — not this runner — so this gate does not cover it; a separate Tier-1 gate is a follow-up.)  Pass criteria today validate log content and FSM transitions, not physical flight quality — this gate is the canary that tells us whether Layer 1 (PR #741 ARM-gate debounce) and Layers 2/4 (forthcoming) actually fixed the cold-start failure mode.
+
+**How it works:**
+
+1. After the companion stack startup phase, the runner extracts the world name from `$GZ_WORLD` SDF (`<world name="...">`) and starts a background `gz topic -e -t /world/<name>/contacts` capture redirected to `${SCENARIO_LOG_DIR}/gz_contacts.log`.
+2. At Phase 5 (Verification), the capture is stopped and `tests/lib_check_contacts.py` parses the gz-topic-text-format log for `contact { ... }` blocks where one collider matches the drone-model substring (default `x500_companion`) and the other is NOT allowlisted (default `ground_plane`; configurable via scenario JSON).
+3. Any drone-vs-non-ground contact → FAIL the scenario run, printed as a deduplicated list of `(drone_collider, other_collider)` pairs.
+
+**What this catches (per #727 evidence):**
+
+- Scenario 26 (and any other Tier-2 Gazebo scenario) false-PASS — drone hitting objects during NAVIGATE / RTL phases.
+- Future regressions where path-planning produces collisions the existing log-pattern checks miss, on any Gazebo-tier scenario.
+
+**What this does NOT catch (scope of this gate):**
+
+- Tier-1 / Cosys-AirSim scenarios (e.g. 25) — they run under `tests/run_scenario.sh`, not `tests/run_scenario_gazebo.sh`, so the gate's `gz topic -e` capture is never started.  An equivalent Tier-1 gate is a separate follow-up.
+
+**What this does NOT catch (out of scope for MVP):**
+
+- Drone-vs-ground crashes during takeoff (rotor-asymmetry failure mode) — requires altitude / attitude correlation; deferred to `max_attitude_error_during_arming` gate (#740 Layer 3 follow-up).  Layer 1 (PR #741) prevents this failure mode at the source, so this gate doesn't need to catch it.
+- Pose-consistency mismatches between published `slam/pose` and PX4's `LOCAL_POSITION_NED` — separate gate (#740 Layer 3 follow-up).
+
+**Files modified:**
+
+- `tests/run_scenario_gazebo.sh` — adds `WORLD_NAME` extraction, `CONTACT_CAPTURE_PID` lifecycle, contact-sensor verification step in Phase 5, cleanup in `cleanup_scenario` trap.
+- `tests/lib_check_contacts.py` — new Python helper.  Header-only-style state machine that parses gz-topic text format without needing a `gz-msgs` Python dependency.  Supports `--drone-pattern`, `--allowlist`, `--max-events` CLI flags.  4 verification paths tested with synthetic input: clean PASS (only ground contact), FAIL on cylinder collision, empty file PASS, missing file rc=2.
+- `tests/TESTS.md` — documents the new `flight_quality_gates.*` JSON config keys.
+
+**Configuration (scenario JSON):**
+
+```json
+{
+  "flight_quality_gates": {
+    "contact_sensor_enabled": true,
+    "contact_allowlist": ["landing_pad"],
+    "contact_drone_pattern": "x500_companion"
+  }
+}
+```
+
+All three keys are optional; sensible defaults match the cold-start hardening epic's intent.  To opt-out per scenario (e.g. tests that intentionally land on objects), set `contact_sensor_enabled: false`.
+
+**Why:**
+
+Layer 3 of the cold-start hardening epic.  Without this gate, we can't tell whether Layer 1's debounce (PR #741) actually fixed the cold-start failures or just got lucky on physics seed — the existing pass criteria mask physical flight problems.  After Wave 1 (PRs #741, #743, #744) lands on the integration branch, a cold-start sweep with this gate enabled becomes the authoritative measurement of whether the fix worked.
+
+**Empirical validation pending:** cold-start sweep on integration branch.  Per #727 evidence, success criterion = <5% rotor-asymmetry rate AND zero drone-vs-obstacle contact events across 20 cold-starts of Tier-2 Gazebo scenarios 02, 17, 18, 26.  (Scenario 25 is Tier 1 and runs separately — covered by the Tier-1 follow-up gate, not this PR.)
+
+---
+
+### Improvement #98 — Wrapper-Level Zenoh Stale-Message Filter (closes #722, PR #750)
+
+**Date:** 2026-05-13
+**Category:** Hardening — IPC defense-in-depth
+**Issue:** [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) (closed by this PR) / part of epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Wave 2
+**PR:** #750 (open against `feature/cold-start-hardening`)
+
+**What:**
+
+Lifts PR #721's per-site stale-pose filter (in `process4_mission_planner/src/main.cpp`) to the `ZenohSubscriber<T>` wrapper level.  Every IPC topic with a `timestamp_ns` field now gets the protection automatically, not just pose.  Closes the class-of-bugs hole that #722 identified: Zenoh's last-value cache delivers historic messages from previous publisher sessions to any newly-connected subscriber.
+
+**How it works:**
+
+1. New SFINAE `has_timestamp_ns<T>` detector at compile time (mirrors `has_validate<T>`).
+2. `ZenohSubscriber<T>` records `subscriber_birth_ns_` from `drone::util::get_clock().now_ns()` at construction.
+3. In `on_sample()`, after `deserialize` + `validate()`, drops messages where `temp->timestamp_ns + kBirthSlackNs < subscriber_birth_ns_` (100 ms slack matches PR #721).
+4. Log-once per subscriber via atomic compare-exchange — no spam if Zenoh replays many cached messages.
+5. Configurable opt-out (`filter_pre_birth_messages = false`) for tests that use synthetic timestamps.
+
+**Two-commit pattern (per #722 plan):**
+
+- **Commit 1** — Adds the wrapper-level filter + 4 new unit tests + threads opt-out parameter through `MessageBus::subscribe<T>` API + migrates 22 existing IPC tests to opt out (they use synthetic `timestamp_ns` for wire-format coverage, not staleness semantics).
+- **Commit 2** — Reverts the per-site filter in `process4_mission_planner/src/main.cpp` (PR #721) which is now subsumed.  Demonstrates the relationship in git log and shrinks P4 main.cpp.
+
+**Files modified:**
+
+- `common/ipc/include/ipc/zenoh_subscriber.h` — new `has_timestamp_ns` SFINAE, `subscriber_birth_ns_`, `kBirthSlackNs`, `log_stale_once`, filter logic in `on_sample()`, new constructor parameter.
+- `common/ipc/include/ipc/zenoh_message_bus.h` — `filter_pre_birth` parameter threaded through `subscribe<T>` + `subscribe_lazy<T>`.
+- `common/ipc/include/ipc/message_bus.h` — `filter_pre_birth` parameter threaded through `subscribe<T>` + `subscribe_optional<T>`.
+- `tests/test_zenoh_coverage.cpp` — 4 new `ZenohStaleMessageFilter` tests + 8 existing direct-constructor sites migrated.
+- `tests/test_zenoh_ipc.cpp` — 19 subscribe sites + 14 direct-constructor sites migrated.
+- `tests/test_message_bus.cpp` — 3 subscribe sites migrated.
+- `process4_mission_planner/src/main.cpp` — commit 2 removes the per-site filter declarations (`planner_birth_ns`, `kPoseBirthSlackNs`, `stale_pose_logged`) and the per-tick check; both replaced by a comment pointing to the wrapper.
+
+**Test count:** +4 (`test_zenoh_coverage.cpp`).  Full `ctest -N`: **2062** (was 2058 on `feature/cold-start-hardening` integration HEAD).  All 2062 tests pass; format clean.
+
+**Why:**
+
+Wave 2 of the cold-start hardening epic (#740).  Layer 1 (PR #741) catches RTF-independent ARM-gate failures.  This wave catches a different failure family — Zenoh last-value cache delivering historic data from previous sessions — that's also RTF-independent but distinct from the EKF2-flicker mechanism.  Composes with PR-D (forthcoming) which closes the third leg: P3 publishing `INITIALIZING` pose with fresh timestamps.
+
+After this PR + PR-D land, every safety-critical IPC topic has automatic defense-in-depth against the three known cold-start IPC hazards.
+
+---
+
+### Improvement #99 — P3 INITIALIZING Pose-Publish Guard (Epic #740 Layer 2, PR #752)
+
+**Date:** 2026-05-13
+**Category:** Hardening — IPC publisher-side staleness defense
+**Issue:** Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) Layer 2 / related to [#727](https://github.com/nmohamaya/companion_software_stack/issues/727)
+**PR:** #752 (open against `feature/cold-start-hardening`)
+**Numbering note:** depends on PRs #743, #744, #745 landing first; renumber if order changes.
+
+**What:**
+
+When a VIO backend (e.g. `GazeboVIOBackend`) is in `INITIALIZING` state, it returns a default-constructed `Pose{}` from `process_frame()` — see `process3_slam_vio_nav/include/slam/ivio_backend.h:385-405`.  Before this PR, the `vio_pipeline_thread` wrote that zero-pose to `pose_buffer` regardless of health, and `pose_publisher_thread` published it on `drone/slam/pose`.  Today the default `Pose` happens to have `timestamp = 0`, which falls out as `timestamp_ns = 0` downstream — so the wrapper-level stale-message filter (PR #745 closing #722) lets it through as a sentinel, and downstream code sees no real data.  This is **fragile**: any future backend that stamps a fresh `timestamp_ns` in the INITIALIZING branch (Cosys backend variants come to mind) would slip past every filter and feed the planner a fresh-stamped zero-pose.
+
+Fix: pin the contract at the publisher side.  `vio_pipeline_thread` now skips `pose_buffer.write()` entirely when `output.health == VIOHealth::INITIALIZING`.  Downstream subscribers see no-pose-this-tick (which they already handle) instead of a fresh-stamped zero-pose.
+
+**Symptom this prevents (#727 evidence):**
+
+Scenario 02 cold-start run 3 (2026-05-12): drone visibly 25 m west of WP0 after takeoff.  Root cause was related to P3 publishing zero-pose early in startup; planner's `try_record_home()` filter caught it via the `pose.timestamp_ns == 0` guard.  A future backend that stamps `now_ns()` in the INITIALIZING branch could produce fresh-stamped zero-poses that slip past every existing filter; this PR closes that latent hole at the source.
+
+**Files modified:**
+
+- `process3_slam_vio_nav/src/main.cpp` — added the `if (output.health == VIOHealth::INITIALIZING)` skip branch in `vio_pipeline_thread`.  Logs once on first skip, increments a diagnostic counter.
+- `docs/tracking/IMPROVEMENTS.md` — logged a P3 follow-up: `vio_pipeline_thread` is currently not unit-testable as a free function.  Refactoring it into a thin glue layer + a testable `should_publish_vio_output()` helper would close the coverage gap.  Deferred to next opportunistic touch.
+
+**Test count:** unchanged (the new branch isn't unit-tested today — see IMPROVEMENTS.md).  Integration coverage via Gazebo scenario sweep (#727 reproduction matrix).  Full ctest 2058/2058 pass.
+
+**Why:**
+
+Wave 2 Layer 2 of the cold-start hardening epic.  Composes with:
+
+- Layer 1 (PR #741, merged) — ARM-gate debounce prevents arming-while-EKF2-still-settling.
+- Layer 2 (this PR) — publisher-side staleness guard prevents `INITIALIZING` fresh-stamped zero-pose.
+- Layer 3 Gate 1 (PR #744) — contact-sensor observability gate measures whether the layers work.
+- Wave 2 PR-B (PR #745) — wrapper-level Zenoh stale-filter (subscriber-side defense-in-depth).
+- Layer 4 (#746) — RTF-aware extension to be empirically informed after Wave 1+2 land.
+
+After this PR + PR #745 land, every safety-critical IPC topic has automatic defense-in-depth against the three known cold-start IPC hazards: Zenoh last-value cache (PR #745, subscriber-side), EKF2 momentary-OK flicker (PR #741, planner-side), and `INITIALIZING` fresh-stamped zero-pose (this PR, publisher-side).
+
+
+---
+
+### Improvement #100 — Post-ARM Pre-TAKEOFF Attitude/Velocity Settle Gate (Epic #740 Layer 4, PR #763)
+
+**Date:** 2026-05-14
+**Category:** Bug Fix — Flight safety (cold-start)
+**Issue:** [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) (epic, Layer 4) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) (root-cause investigation) / [#746](https://github.com/nmohamaya/companion_software_stack/issues/746) (Layer 4 sub-issue, smoke-sweep evidence)
+
+**What:**
+
+The Wave 1+2 cold-start smoke sweep (#746 comment, 2026-05-14) **falsified Layer 1's hypothesis**. The asymmetric rotor spin-up + sideways-skid takeoff still reproduced with Wave 1+2 merged — and the logs showed why: the #741 `armable` debounce engaged correctly every run, but `armable` (MAVSDK `health_all_ok`) fired at wildly nondeterministic times across runs (0.1 s / 10 s / 25 s after PREFLIGHT), and in one run it latched stably-true 22 s before PX4's commander would actually accept an ARM. Debouncing `armable` for 3 s doesn't help when the signal is stably-wrong.
+
+Refined root cause: PX4 arms the instant its EKF2 checks scrape past threshold — at which point the attitude estimate hasn't converged. PX4's attitude controller then commands differential (front-pair vs rear-pair) thrust to "correct" a phantom pitch error, inducing a *real* pitch moment → the drone skids sideways instead of climbing (#746 run-1 VIO trace: 11.8 m sideways at <1 m altitude, 8 s after arming).
+
+Layer 4 inserts a **post-ARM, pre-TAKEOFF settle gate** in `tick_preflight`: after `fc_state.armed` goes true, hold until the FC-reported attitude + velocity estimate proves stable — `|roll|` and `|pitch|` within `takeoff_max_tilt_deg`, `sqrt(vx²+vy²+vz²)` within `takeoff_max_velocity_mps` — for `takeoff_settle_observations` *consecutive* `FCState` observations. Any excursion resets the counter (the estimate must settle continuously, not cumulatively).
+
+**RTF-immune by design:** the gate counts observations, not wall-seconds. The companion runs on wall-clock; Gazebo+PX4-SITL run on sim-time — a wall-timed gate under real-time-factor < 1 would under-wait in sim-time. Counting `FCState` observations sidesteps the clock domain entirely: PX4 paces `FCState` publication in sim-time, so N observations is N observations regardless of RTF, and the gate behaves identically in SITL and on real hardware. No new MAVLink plumbing — `FCState` already carries `roll/pitch/yaw/vx/vy/vz`.
+
+**How it works:**
+
+1. `tick_preflight`'s `if (fc_state.armed)` branch no longer transitions immediately. It evaluates attitude/velocity against the thresholds; settled → `++armed_settle_count_`, excursion → reset to 0.
+2. When `armed_settle_count_` reaches `takeoff_settle_observations` → `fsm.on_takeoff()`.
+3. `armed_settle_count_` is also reset whenever `fc_state.armed` is false (disarm / re-PREFLIGHT).
+4. **Disable path:** `takeoff_settle_observations = 0` collapses to legacy immediate-takeoff-on-armed (headless dev / unit-test fixtures).
+
+**Files modified:**
+
+- `process4_mission_planner/include/planner/mission_state_tick.h` — 3 new `StateTickConfig` fields, `armed_settle_count_` member, the settle gate in `tick_preflight`.
+- `common/util/include/util/config_keys.h` — `TAKEOFF_SETTLE_OBSERVATIONS`, `TAKEOFF_MAX_TILT_DEG`, `TAKEOFF_MAX_VELOCITY_MPS`.
+- `process4_mission_planner/src/main.cpp` — config load + defensive clamps (mirrors the #743 `preflight_armable_stable_s` clamp pattern).
+- `config/default.json` — `mission_planner.takeoff_settle_observations = 30`, `takeoff_max_tilt_deg = 5.0`, `takeoff_max_velocity_mps = 0.3` with rationale comment.
+- `tests/test_mission_state_tick.cpp` — 4 new tests (`MissionStateTickTakeoffSettleTest` × 3 + `MissionStateTickTakeoffSettleConfigTest` × 1). No `ScopedMockClock` needed — the gate is observation-counted.
+- `tests/TESTS.md` — count + suite rows updated.
+
+**Test count:** +7 (`test_mission_state_tick.cpp` 32 → 39). Initial 4 (`SettleGateHoldsUntilNConsecutiveObservations`, `SettleGateExcursionResetsCounter`, `SettleGateResetsWhenDisarmed`, `ZeroObservationsDisablesGate`) plus 3 from the PR #763 review-fix round (`SettleGateVelocityExcursionResetsCounter`, `SettleGateNonFiniteResetsCounter`, `SettleGateNeverSettlesHoldsPreflight`). All 39 tests in the file pass; full build clean (`-Werror`); format clean.
+
+**PR #763 review-fix follow-ups (Pass 1 + Pass 2 + Copilot, addressed in-PR):**
+
+- **API contract (P1):** clarified the `preflight_arm_retry_s` / `preflight_wait_log_s` docstring — they are NOT runtime-configurable despite the field-name hint; wiring them through `drone::Config` is tracked in IMPROVEMENTS.md.
+- **Coverage (P2 ×2 — convergent test-unit + test-quality):** added the missing velocity-excursion + non-finite-FC-estimate (NaN) tests so both branches of the `attitude_settled` predicate are covered.
+- **Fault recovery (P2):** excursion log promoted INFO → WARN — drone is armed and attitude is moving outside thresholds, that's a degraded condition. Added a "never-settles holds PREFLIGHT" test pinning the fail-safe contract; the corresponding *escalation* (timeout → disarm-with-fault) is intentionally deferred to **#718** (which already tracks the same gap for the Layer 1 armable debounce — both gates share one escalation design).
+- **Code quality (P2):** extracted `validate_and_clamp<T>` helper in `process4_mission_planner/src/main.cpp` collapsing 4 near-identical clamp stanzas into a single template; promoted `kRadToDeg` to `common/util/include/util/math_constants.h` (consumed by both `cosys_radar.h` and the Layer 4 gate).
+- **Member docstring (P2):** `armed_settle_count_` reset paths fully enumerated.
+- **Security (P3):** negative `takeoff_settle_observations` now clamps to **1**, not 0 — protects the `=0` disable sentinel from a typo'd negative silently disabling the gate; added a startup WARN if the resolved value is exactly 0 so an accidental production-disable is loud.
+- Doc-bookkeeping (P3): TESTS.md mission row `~287→~291`, this entry's "PR pending" → "PR #763".
+
+**Deferred to follow-up work:**
+
+- Block extraction (the ~50-line armed-block in `tick_preflight`) → **#718** — the right shape will be clearer once the timeout-escalation logic lands inside the same block.
+- Wiring `preflight_arm_retry_s` / `preflight_wait_log_s` to `drone::Config` → already tracked in `docs/tracking/IMPROVEMENTS.md` (filed from PR #741 review).
+
+**Why:**
+
+Layer 4 of the cold-start hardening epic (#740) — and the one the #746 smoke sweep proved is actually load-bearing. Layer 1 (#741) remains useful as a coarse "FC is talking and claims ready" filter, but Layer 4 is the *direct* takeoff-safety gate: don't commit the motors until the FC's own attitude/velocity estimate proves it's settled. It acts on the direct signal (FC attitude), not a proxy (`health_all_ok`) or a downstream symptom (rotor sync).
+
+**Empirical validation pending:** re-run the 4-scenario cold-start smoke sweep with Layer 4 enabled — confirm the settle gate delays `on_takeoff()` until attitude is stable and the sideways-skid is reduced.
+
+---
+
+*Last updated after Improvement #100 (Epic #740 Layer 4). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

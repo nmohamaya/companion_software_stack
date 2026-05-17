@@ -73,6 +73,24 @@ public:
     /// @param frame        The stereo frame from the camera.
     /// @param imu_samples  IMU readings accumulated since the last call.
     /// @return Ok(VIOOutput) on success, Err(VIOError) on critical failure.
+    ///
+    /// **Publisher-side contract (Issue #740 Layer 2 / #727).**
+    /// When `output.health == VIOHealth::INITIALIZING`, the value of
+    /// `output.pose` is backend-defined and MUST NOT be published downstream:
+    ///   - `GazeboVIOBackend` / `GazeboFullVIOBackend` / `CosysVIOBackend`
+    ///     return a default-zero `Pose{}` until the first valid sensor
+    ///     reading arrives (`pose_valid_` flips to true).
+    ///   - `SimulatedVIOBackend` returns a generated non-zero pose even
+    ///     during INITIALIZING (its first `min_init_frames_` frames),
+    ///     because the pose is synthesised analytically — but downstream
+    ///     consumers still must not treat that pose as a real
+    ///     measurement until health transitions to DEGRADED or NOMINAL.
+    /// The publisher in `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread`
+    /// enforces this by skipping `pose_buffer.write()` while
+    /// `output.health == INITIALIZING`.  Backend authors implementing this
+    /// interface MUST preserve this contract: any frame for which the
+    /// backend's internal state is "not yet valid" must return
+    /// `INITIALIZING`, regardless of what `output.pose` contains.
     virtual VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
                                                const std::vector<ImuSample>&  imu_samples) = 0;
 

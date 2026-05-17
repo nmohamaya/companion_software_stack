@@ -50,6 +50,13 @@ P7 supervises all other processes. Restart ordering follows the dependency graph
 - [ ] **Dependency graph respected on restart** — when P7 restarts a process, its dependencies must be healthy first
 - [ ] **systemd `WatchdogSec` and `BindsTo` consistent** with code behavior — if code changes watchdog timing, systemd units must match
 - [ ] **Error context preserved** — `Result<T,E>` error types carry enough context for debugging (not just "failed")
+- [ ] **Guards that suppress writes have downstream invariant implications.** When a PR adds a conditional `if (state == X) { skip_write(); }` (or `return early` before a publish, or suppresses a `mark_*()` call), trace what existing consumers assumed about the write cadence — particularly:
+  - **Stale-detection thresholds** (`stale_pose_ns`, `last_msg_age_s`) that fire based on time-since-last-write — the new write-suppression window may push consumers past their stale threshold the first time it fires.
+  - **Buffer-priming assumptions** in the consumer (e.g. double-buffer expectations that both slots get populated quickly).
+  - **"We've been seeing data for N frames" heuristics** elsewhere in the stack that may now hit zero frames during the suppression window.
+
+  This is the dual of the `review-concurrency` write-cadence-change rule: that one looks at the writer-side change, this one looks at the downstream consumers and the fault-recovery / degradation paths that may now trigger spuriously.
+  Ref: Issue #727 (cold-start hardening) — INITIALIZING-skip guard in `process3_slam_vio_nav/src/main.cpp` widened a pre-existing first-publish race in `PoseDoubleBuffer` (`process3_slam_vio_nav/src/main.cpp::PoseDoubleBuffer::read()`); same pattern applies to any new "skip publishing while X" guard added to a publishing thread anywhere in `process[1-7]_*`.
 - [ ] **Asymmetric pre-conditions for asymmetric-cost actions** (Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740)) — irreversible / destructive actions (ARM motors, TAKEOFF, LAND, geofence-breach RTL, fault-induced LOITER→RTL promotion) MUST have stricter pre-conditions than reversible ones (hover-in-place, replan, log warning).  Cost of premature ARM = ground damage / lost vehicle; cost of premature LOITER = a pause that recovers when the gate clears.  When fault-action selection is ambiguous, prefer LOITER + log over RTL + LAND.  Authoritative rule text: CLAUDE.md > Asymmetric pre-conditions for asymmetric-cost actions.
 
 ### P3 — Medium (fix in follow-up)

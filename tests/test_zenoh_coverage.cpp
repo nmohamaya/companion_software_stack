@@ -298,14 +298,14 @@ TEST(ZenohPublisherBranch, PublishWhenNotReadyIsNoop) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ZenohSubscriberBranch, ReceiveWithNoDataReturnsFalse) {
-    ZenohSubscriber<Pose> sub("drone/test/cov_no_data_sub");
+    ZenohSubscriber<Pose> sub("drone/test/cov_no_data_sub", true, nullptr, false);
     Pose                  msg{};
     EXPECT_FALSE(sub.receive(msg));
 }
 
 TEST(ZenohSubscriberBranch, ReceiveWithTimestamp) {
     ZenohPublisher<Pose>  pub("drone/test/cov_ts_sub");
-    ZenohSubscriber<Pose> sub("drone/test/cov_ts_sub");
+    ZenohSubscriber<Pose> sub("drone/test/cov_ts_sub", true, nullptr, false);
 
     // Wait for pub/sub discovery
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -323,7 +323,7 @@ TEST(ZenohSubscriberBranch, ReceiveWithTimestamp) {
 
 TEST(ZenohSubscriberBranch, ReceiveWithoutTimestampPtr) {
     ZenohPublisher<Pose>  pub("drone/test/cov_no_ts_ptr");
-    ZenohSubscriber<Pose> sub("drone/test/cov_no_ts_ptr");
+    ZenohSubscriber<Pose> sub("drone/test/cov_no_ts_ptr", true, nullptr, false);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -343,17 +343,17 @@ TEST(ZenohSubscriberBranch, LatencyTrackingDisabled) {
 }
 
 TEST(ZenohSubscriberBranch, IsConnected) {
-    ZenohSubscriber<Pose> sub("drone/test/cov_connected");
+    ZenohSubscriber<Pose> sub("drone/test/cov_connected", true, nullptr, false);
     EXPECT_TRUE(sub.is_connected());
 }
 
 TEST(ZenohSubscriberBranch, TopicName) {
-    ZenohSubscriber<Pose> sub("drone/test/cov_topic_sub");
+    ZenohSubscriber<Pose> sub("drone/test/cov_topic_sub", true, nullptr, false);
     EXPECT_EQ(sub.topic_name(), "drone/test/cov_topic_sub");
 }
 
 TEST(ZenohSubscriberBranch, LogLatencyIfDueNoSamples) {
-    ZenohSubscriber<Pose> sub("drone/test/cov_latency_nosamp", true);
+    ZenohSubscriber<Pose> sub("drone/test/cov_latency_nosamp", true, nullptr, false);
     // No messages received yet → should return false (not enough samples)
     EXPECT_FALSE(sub.log_latency_if_due());
 }
@@ -366,7 +366,7 @@ TEST(ZenohSubscriberBranch, LogLatencyIfDueNoSamples) {
 // only timestamp transitions add samples.
 TEST(ZenohSubscriberBranch, ReceiveDoesNotAccumulateSamplesOnQuietTopic) {
     ZenohPublisher<Pose>  pub("drone/test/cov_quiet_no_accum");
-    ZenohSubscriber<Pose> sub("drone/test/cov_quiet_no_accum");
+    ZenohSubscriber<Pose> sub("drone/test/cov_quiet_no_accum", true, nullptr, false);
 
     Pose msg{};
     msg.timestamp_ns = 7;
@@ -555,4 +555,168 @@ TEST(LivelinessBranch, MonitorDuplicatePutIsNotNewCallback) {
         auto count = std::count(alive_names.begin(), alive_names.end(), "cov_dup_put");
         EXPECT_EQ(count, 1) << "Duplicate PUT should not trigger callback again";
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issue #722 — wrapper-level stale-message filter
+//
+// Verifies the ZenohSubscriber<T> defense-in-depth that drops messages
+// whose publisher timestamp predates the subscriber's birth.  Closes
+// the class-of-bugs hole that PR #721's per-site filter (in P4
+// mission_planner) covered for `Pose` only.  Now every subscriber on
+// every timestamped IPC topic gets the protection automatically.
+// ═══════════════════════════════════════════════════════════
+
+namespace {
+
+// Helper: spin-poll until receive() succeeds or timeout.  Used by all
+// four ZenohStaleMessageFilter tests below.  Returns true if a message
+// was received.
+template<typename T>
+bool poll_until_received(ZenohSubscriber<T>& sub, T& out, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (sub.receive(out)) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
+}  // namespace
+
+// A subscriber with `filter_pre_birth_messages=true` (the production
+// default) drops messages whose `timestamp_ns` predates its birth by
+// more than 100 ms.  This is the exact protection PR #721 installed
+// at the call site for the pose topic — Issue #722 lifts it to the
+// wrapper level so every timestamped IPC topic benefits.
+TEST(ZenohStaleMessageFilter, DropsPreBirthMessagesWhenFilterEnabled) {
+    // PR #750 Copilot review: the original test used a literal
+    // `timestamp_ns = 1'000'000'000ULL` (1 second on the steady_clock
+    // epoch) and assumed the subscriber's birth would always be
+    // "orders of magnitude larger".  On a freshly-booted host with low
+    // CLOCK_MONOTONIC uptime, that assumption fails and the test could
+    // false-pass.  Robust pattern: capture `now_ns()` *before*
+    // constructing the subscriber, sleep > kBirthSlackNs (100 ms), then
+    // publish using the captured pre-birth value.  The gap between
+    // captured-stamp and subscriber-birth is guaranteed to exceed slack
+    // regardless of absolute clock epoch.
+    const uint64_t pre_birth_ns = drone::util::get_clock().now_ns();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // > 100ms slack
+
+    ZenohPublisher<Pose> pub("drone/test/stale_filter_pre");
+    // filter_pre_birth_messages defaults to true.
+    ZenohSubscriber<Pose> sub("drone/test/stale_filter_pre");
+
+    // Brief settle for Zenoh discovery.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Publish the historic message — should be dropped by the filter.
+    Pose stale{};
+    stale.timestamp_ns   = pre_birth_ns;  // captured pre-birth, deterministically stale
+    stale.translation[0] = 7.0;
+    stale.quality        = 2;
+    pub.publish(stale);
+
+    // Wait long enough for delivery to definitely have completed if it
+    // were going to happen — then assert it didn't.
+    Pose received{};
+    EXPECT_FALSE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
+        << "Pre-birth message was NOT dropped (Issue #722 regression).  "
+           "Zenoh's last-value cache would deliver multi-minute-old poses "
+           "to a freshly-restarted P4, which previously triggered "
+           "FAULT_POSE_STALE → LOITER mid-takeoff.";
+
+    // Positive delivery control: prove the subscriber+publisher pair is
+    // actually wired up by sending a FRESH message and verifying delivery.
+    // Without this control, the negative assertion above could false-
+    // green if Zenoh discovery never completed (e.g. session contention
+    // under `ctest -j` even with RESOURCE_LOCK).
+    Pose fresh{};
+    fresh.timestamp_ns   = drone::util::get_clock().now_ns();
+    fresh.translation[0] = 7.5;
+    fresh.quality        = 2;
+    pub.publish(fresh);
+
+    ASSERT_TRUE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
+        << "Positive delivery control failed — subscriber never received the "
+           "fresh follow-up message.  Negative `EXPECT_FALSE` above is therefore "
+           "untrustworthy (false-green on a broken subscription).";
+    EXPECT_DOUBLE_EQ(received.translation[0], 7.5);
+    EXPECT_NE(received.timestamp_ns, pre_birth_ns)
+        << "Subscriber received the STALE message after all — filter is broken.";
+}
+
+// With the filter explicitly disabled (test mode), the same stale message
+// flows through unfiltered.  Confirms the opt-out path works — tests with
+// synthetic timestamps depend on this.
+TEST(ZenohStaleMessageFilter, AcceptsPreBirthMessagesWhenFilterDisabled) {
+    ZenohPublisher<Pose> pub("drone/test/stale_filter_off");
+    // filter_pre_birth_messages = false
+    ZenohSubscriber<Pose> sub("drone/test/stale_filter_off", true, nullptr, false);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    Pose stale{};
+    stale.timestamp_ns   = 1'000'000'000ULL;  // 1 second past epoch
+    stale.translation[0] = 42.0;
+    stale.quality        = 2;
+    pub.publish(stale);
+
+    Pose received{};
+    ASSERT_TRUE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
+        << "Filter opt-out (filter_pre_birth_messages=false) did not pass the "
+           "message through — tests with synthetic timestamps cannot opt out.";
+    EXPECT_DOUBLE_EQ(received.translation[0], 42.0);
+    EXPECT_EQ(received.timestamp_ns, 1'000'000'000ULL);
+}
+
+// A fresh, post-birth message must pass through even with the filter on —
+// the filter must not be over-aggressive.  Real production publishers
+// stamp `timestamp_ns = drone::util::get_clock().now_ns()` which is
+// always post-birth (since the subscriber recorded its birth strictly
+// before the publisher's publication time).
+TEST(ZenohStaleMessageFilter, AcceptsFreshMessagesWhenFilterEnabled) {
+    ZenohPublisher<Pose> pub("drone/test/stale_filter_fresh");
+    // filter_pre_birth_messages defaults to true (production setting).
+    ZenohSubscriber<Pose> sub("drone/test/stale_filter_fresh");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    Pose fresh{};
+    // Stamp `now_ns` which is post the subscriber's birth above.
+    fresh.timestamp_ns   = drone::util::get_clock().now_ns();
+    fresh.translation[0] = 3.14;
+    fresh.quality        = 2;
+    pub.publish(fresh);
+
+    Pose received{};
+    ASSERT_TRUE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
+        << "Filter incorrectly dropped a fresh (post-birth) message — over-"
+           "aggressive filter would prevent normal IPC.";
+    EXPECT_DOUBLE_EQ(received.translation[0], 3.14);
+}
+
+// Messages with `timestamp_ns == 0` (the sentinel for "publisher didn't
+// stamp" / default-constructed) pass through regardless of the filter —
+// downstream code is responsible for its own staleness logic on those.
+// This is critical because some IPC types (e.g. one-shot commands) may
+// not stamp at publish time and we don't want the wrapper filter to
+// reject them.
+TEST(ZenohStaleMessageFilter, AcceptsZeroTimestampSentinel) {
+    ZenohPublisher<Pose>  pub("drone/test/stale_filter_zero_ts");
+    ZenohSubscriber<Pose> sub("drone/test/stale_filter_zero_ts");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    Pose unstamped{};
+    unstamped.timestamp_ns   = 0;  // sentinel
+    unstamped.translation[0] = 1.5;
+    unstamped.quality        = 1;
+    pub.publish(unstamped);
+
+    Pose received{};
+    ASSERT_TRUE(poll_until_received(sub, received, std::chrono::milliseconds(500)))
+        << "Filter dropped a `timestamp_ns == 0` sentinel message — this "
+           "would prevent IPC for types that don't publish-stamp.";
+    EXPECT_EQ(received.timestamp_ns, 0u);
 }

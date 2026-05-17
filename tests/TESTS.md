@@ -50,7 +50,7 @@
 | `ipc` | Zenoh IPC primitives, message bus, wire format, serializer | ~296 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~86 |
 | `perception` | Kalman tracker, fusion engine (UKF+camera+radar), color contour, YOLOv8 | ~189 |
-| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D, geofence, event bus | ~287 |
+| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D, geofence, event bus | ~291 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, MAVLink, and plugin HAL backends | ~137 |
 | `payload` | GimbalController servo simulation | ~34 |
@@ -101,7 +101,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
 | [P2 — Perception](#p2--perception) | 6 | 219 | Kalman filter + Hungarian solver + per-class motion model, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID+covariance depth+height priors+radar-learned heights), color contour, YOLOv8, world transform |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 224 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D (+ per-class overrides) |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 236 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D (+ per-class overrides) |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 53 | CPU/memory/thermal monitoring, ISysInfo abstraction, ProcessManager supervisor |
@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **100 C++ + 5 shell + 1 Python** | **2074 (no SDK, 8 Cosys-SDK tests skipped) / 2082 (+SDK) + 42 + 29 + 250+** | Active baseline as of `9d9c6e3` (PR #725, 2026-05-12). Recent deltas on `feature/perception-v2-integration` since PR #704: PR #711 net −7 (deletes `test_voxel_obstacle_surface.cpp` + 12 avoider dead-weight tests after empirical Cosys scenario 33 validation, DR-043); PR #717 +2 (`PreflightWaitsWhenFCNotArmable`, `PreflightSendsARMWhenFCBecomesArmable`); PR #725 +1 net (`SearchFailureWithBlockedCachedPathHovers` added, `SearchFailureKeepsLastGoodPath` updated for Issue #698 cached-path validation). For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **102 C++ + 5 shell + 1 Python** | **2112 (no SDK, 8 Cosys-SDK tests skipped) / 2120 (+SDK) + 42 + 29 + 250+** | Current PR: Issues #718 + #765 (cold-start defense escalation) +20 tests across 3 files (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→47, new `test_planner_stall_handler.cpp` with 7 tests). Latch-persistence + fault_flags_string registry tests added in PR #775 review-fix round. Recent deltas on `feature/cold-start-hardening`: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3, **this PR +20**. For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -209,6 +209,28 @@ SHM zero-copy, and session management.  Tests are split into *always-compiled*
 | `MessageBusFactory` | 4 | Config-driven bus creation (`"shm"` vs `"zenoh"`) |
 
 **Key files under test:** `ipc/zenoh_message_bus.h`, `ipc/zenoh_publisher.h`, `ipc/zenoh_subscriber.h`, `ipc/zenoh_session.h`, `ipc/zenoh_service_client.h`, `ipc/zenoh_service_server.h`, `ipc/message_bus_factory.h`
+
+---
+
+### test_zenoh_coverage.cpp — 38 tests
+
+**What it tests:** Targeted branch-coverage tests for Zenoh internals —
+error paths, fallback branches, and edge cases not reached by the happy-
+path tests in `test_zenoh_ipc.cpp` and `test_zenoh_network.cpp`.  All
+tests require `HAVE_ZENOH`; under SHM-only builds the file compiles to a
+single stub test.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `ZenohNetworkConfigBranch` | 9 | `from_app_config()` JSON field branches, `to_json()` endpoint serialization |
+| `ZenohSubscriberBranch` | 8 | Size-mismatch `on_sample`, latency conditional, validate-fail path |
+| `ZenohSessionBranch` | 6 | Configure-after-open guards |
+| `ZenohServiceBranch` | 5 | `poll` when empty, `send_response` with bad correlation id, no-match poll |
+| `ZenohStaleMessageFilter` | 4 | Issue #722 wrapper-level stale-message filter — pre-birth drop, opt-out, fresh accept, zero-timestamp sentinel pass-through |
+| `ZenohPublisherBranch` | 3 | SHM-disabled fallback, constructor error count |
+| `LivelinessBranch` | 3 | Destructor branch, `extract_process_name` fallback |
+
+**Key files under test:** `ipc/zenoh_subscriber.h`, `ipc/zenoh_publisher.h`, `ipc/zenoh_network_config.h`, `ipc/zenoh_session.h`, `ipc/zenoh_service_client.h`, `ipc/zenoh_service_server.h`, `ipc/zenoh_liveliness.h`
 
 ---
 
@@ -644,7 +666,7 @@ flight mission lifecycle plus the Issue #503 stuck detector.
 
 ---
 
-### test_fault_manager.cpp — 41 tests
+### test_fault_manager.cpp — 47 tests
 
 **What it tests:** `FaultManager` graceful degradation engine — config-driven
 fault evaluation with escalation-only policy.
@@ -697,20 +719,79 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 24 tests
+### test_mission_state_tick.cpp — 46 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
 states (PREFLIGHT, TAKEOFF, NAVIGATE, NAVIGATE_UNSTUCK, RTL, LAND) with
 tracking variables.  Issue #716 added ARM-gating on FC preflight readiness
-(`fc_state.armable`) and four PREFLIGHT-gate tests.
+(`fc_state.armable`) and four PREFLIGHT-gate tests.  Issue #740 (epic #727
+Layer 1) added the cold-start stability debounce on `armable` and four
+`MissionStateTickDebounceTest` / `MissionStateTickDebounceConfigTest`
+cases driven by `ScopedMockClock`.  PR #743 (review-fixes for #741) added
+4 more debounce tests pinning the clock-rewind guard, retry × debounce
+composition at production defaults, exact-window boundary semantics, and
+the armed-transition reset path.  Issue #740 Layer 4 added the post-ARM,
+pre-TAKEOFF settle gate (observation-counted, RTF-immune) and four
+`MissionStateTickTakeoffSettleTest` / `MissionStateTickTakeoffSettleConfigTest`
+cases.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `MissionStateTickTest` | 20 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, NAVIGATE_UNSTUCK disarm-abort (#503), RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π], **Issue #716 PREFLIGHT ARM gating**: waits when `fc_state.armable=false`, fires ARM on armable transition true, does not resend ARM within retry interval, handles armable true→false→true flicker without spurious re-arm |
+| `MissionStateTickDebounceTest` | 7 | **Issue #740 ARM-gate stability debounce**: flicker resets the stability window (no premature ARM after EKF2 blip); continuous armable for the full window fires ARM exactly once; continuous armable below the window does not fire ARM. **PR #743 additions**: clock-rewind safety guard (false-green protection against unsigned-subtraction underflow); ARM-retry × debounce compose correctly at production defaults (no duplicate ARM within 3s retry, second ARM after 3s+); exact-window boundary semantics (3.0s == window_ns counts as elapsed); armed-transition resets `armable_first_seen_ns_` for future re-PREFLIGHT |
+| `MissionStateTickDebounceConfigTest` | 1 | Zero-window config disables the debounce (preserves legacy single-tick behaviour for headless dev / non-Gazebo tests) |
+| `MissionStateTickTakeoffSettleTest` | 6 | **Issue #740 Layer 4 post-ARM settle gate**: takeoff held until N consecutive settled (level + near-zero-velocity) FCState observations, fires exactly on the Nth; tilt excursion mid-window resets the counter; **velocity excursion** mid-window resets (PR #763 review); **non-finite (NaN) FC estimate** counts as excursion, isolating the `std::isfinite` guard (PR #763 review); a disarm mid-window clears the counter so a re-arm must re-accumulate the full N; **never-settles** holds PREFLIGHT indefinitely (fail-safe, escalation tracked in #718) |
+| `MissionStateTickTakeoffSettleConfigTest` | 1 | `takeoff_settle_observations = 0` disables the Layer 4 gate (legacy immediate takeoff on first armed observation) |
+| `MissionStateTickPreflightTimeoutTest` | 6 | **Issue #718 — PREFLIGHT timeout escalation**: Layer 1 (`armable` never stably true) AND Layer 4 (post-ARM attitude/velocity never settle) both trigger DISARM + FSM → IDLE + single-shot `FAULT_FC_PREFLIGHT_TIMEOUT` event after `preflight_timeout_s` wall-clock; WARN-log fires at `preflight_warn_s` before the timeout (escalation runway visibility); fast recovery (ARM fires within budget) does NOT trigger the timeout; the timeout WINS the timeout-vs-ARM race when both conditions are satisfied in the same tick (safety-first ordering); re-entry to PREFLIGHT after a prior timeout starts a fresh timer (outer-tick state-exit detector reset path). Drives all timing via `ScopedMockClock`. |
+| `MissionStateTickPreflightTimeoutConfigTest` | 1 | `preflight_timeout_s = 0` disables the escalation entirely (legacy hold-forever behaviour preserved for headless dev configs + unit-test fixtures). |
 | `MissionStateTickUnstuckTest` | 2 | NAVIGATE_UNSTUCK escalation behaviour (#503) |
 | `Issue624YawRefreshTest` | 2 | Post-avoider yaw-towards-velocity refresh (#624) |
 
 **Key files under test:** `planner/mission_state_tick.h`
+
+---
+
+### test_planner_stall_handler.cpp — 7 tests
+
+**What it tests:** [`drone::planner::PlannerStallHandler`](../process4_mission_planner/include/planner/planner_stall_handler.h) — the `ThreadWatchdog::set_stuck_callback` handler installed by P4 main.cpp ([#718](https://github.com/nmohamaya/companion_software_stack/issues/718) + partial [#765](https://github.com/nmohamaya/companion_software_stack/issues/765)). Responsibilities: log diagnostic dump (LatencyProfiler snapshot + thread name) when any registered thread is detected stuck; set the `FAULT_PLANNER_STALL` event flag ONLY for the watched thread (`planning_loop` by default — other threads are logged but don't trigger LOITER escalation, they're handled by their own paths / process restart).
+
+| Test | What is validated |
+|------|-------------------|
+| `ConsumeEventIsFalseInitially` | No stall events — `consume_event()` and `peek_event()` both return false |
+| `WatchedThreadStallSetsEventFlag` | A stuck-event for the watched thread sets the flag; `consume_event()` returns true exactly once (single-shot semantics) |
+| `NonWatchedThreadStallDoesNotSetEventFlag` | Stuck-events for OTHER threads (e.g. `fc_state_subscriber`) get logged but do NOT raise `FAULT_PLANNER_STALL` — only `planning_loop` escalates to LOITER |
+| `MultipleStuckEventsLatchToSingleConsume` | 3 stuck-events collapse to one `consume_event()` returning true (intentional: FaultManager's escalation-only policy handles persistence, no need to re-raise each tick) |
+| `DiagnosticDumpWithProfilerDoesNotCrash` | The LatencyProfiler-snapshot dump path (called with a non-null profiler) runs cleanly — no exceptions, no asan trips |
+| `MakeCallbackProducesValidStuckCallback` | The callback object returned by `make_callback()` correctly captures the handler (the watchdog scan thread fires the callback; the handler must outlive it) |
+| `ConsumeEventIsThreadSafeAcrossWatchdogAndPlanningLoop` | The `std::atomic<bool>` with explicit acquire/release ordering keeps the setter-thread (watchdog scan) + consumer-thread (planning loop) coherent under 1000-iteration contention |
+
+**Why these tests matter:** The handler is the bridge between `ThreadWatchdog` (fires on the scan thread) and `FaultManager` (consumes on the planning loop thread). The atomic ordering MUST be right or stall events get lost in the race; the watched-thread filter MUST be right or every stuck thread escalates to LOITER (which is wrong — non-planner threads have their own recovery paths). Pre-#718, the watchdog only logged on stuck-detection — there was no escalation. This handler is the first time a stuck `planning_loop` actually triggers a fault response.
+
+**Deferred from #765 acceptance** (tracked in the issue for follow-up): stack-trace capture via `pthread_kill(SIGUSR1)` + `backtrace_symbols` (async-signal-safety mechanics non-trivial), mutex-snapshot ("which locks does the stuck thread hold" — needs codebase-wide instrumented mutex wrappers).
+
+**Key files under test:** `process4_mission_planner/include/planner/planner_stall_handler.h`, `common/util/include/util/thread_watchdog.h`, `common/util/include/util/latency_profiler.h`
+
+---
+
+### test_clock_migration_767.cpp — 3 tests
+
+**What it tests:** Documentation tests for the [#767](https://github.com/nmohamaya/companion_software_stack/issues/767) tactical clock migration (sub-issue of clock-modernisation epic [#766](https://github.com/nmohamaya/companion_software_stack/issues/766)). Three production sites were migrated from direct `std::chrono::steady_clock::now()` to `drone::util::get_clock()` so they share a clock domain with the existing `get_clock()` consumers and with future `MockClock` / `GazeboSimClock` ([#769](https://github.com/nmohamaya/companion_software_stack/issues/769)) / `FCSystemTimeClock` ([#770](https://github.com/nmohamaya/companion_software_stack/issues/770)) backends:
+
+1. P3 cosys-passthrough pose stamp at `process3_slam_vio_nav/src/main.cpp:376` (producer of `pose.timestamp_ns`).
+2. P5 `fc_tx_thread` heartbeat suppressor at `process5_comms/src/main.cpp:165, 263, 298` (`now_init`, `now_send`, `now` driving the period + stale-bound gates around `evaluate_heartbeat`).
+3. P4 pose-staleness consumer at `process4_mission_planner/src/main.cpp:887` (the inline `now_ns` feeding both the SAFETY-CRITICAL inline staleness check at line 891 and `FaultManager.evaluate(... now_ns ...)` at line 943).
+
+**Honest scope statement.** These tests do NOT regression-lock the migrated production lines — the sites are inside long thread loops that aren't extracted into separately-linkable functions, so a unit test cannot detect a revert from `get_clock()` back to `steady_clock::now()` at any specific call site. The PR review for #767 surfaced this gap (review-test-quality + Copilot, multiple-agent agreement); the honest framing here is documentation, not pretend-regression-lock. Real call-site coverage would need a static text-grep CI gate (tracked under the bulk-migration enforcement issue), an integration test running each process with mockable instrumentation, or a refactor extracting the time source into a separately-testable seam. All three are out of scope for the tactical migration tracked here.
+
+| Suite / Test | What is verified |
+|--------------|------------------|
+| `ClockMigration767Test::P3PoseStampReadsActiveClock` | `pose.timestamp_ns = get_clock().now_ns()` reads the active clock — picks up `ScopedMockClock` initial value and advances on `advance_ms()`. Demonstrates the producer-side abstraction works. |
+| `ClockMigration767Test::P4FaultManagerStaleCheckIsMockClockDriven` | **End-to-end producer (P3 stamp) ↔ consumer (P4 `FaultManager.evaluate`) coherence.** The actual `FaultManager` code path is exercised — not the inline check in P4 main.cpp's loop, which is not extracted. Drives `FAULT_POSE_STALE` from inactive to active via `advance_ms(501)` against the configured 500 ms `pose_stale_timeout_ns`. This is the architectural unlock — pre-migration the consumer's `now_ns` was raw `steady_clock`, so this end-to-end mock-clock scenario was impossible. |
+| `ClockMigration767Test::P5HeartbeatStaleBoundIsMockClockDriven` | Mirrors the production heartbeat wiring with the **production constants** (`kHeartbeatPeriod{40}` and `kMaxHeartbeatStaleMs{5000}` from `process5_comms/src/main.cpp:154-155`). Drives `None → Send → SuppressStale` through `advance_ms(50)` + `advance_ms(4'951)` in microseconds. Pre-migration this gate was only exercisable via `sleep_for(>5'001 ms)` — CI-hostile. |
+
+**Why these tests matter:** Pre-migration the producer/consumer sides of the pose-staleness fault path used different clock APIs — coherent in production (both reduce to the same syscall) but split under any future MockClock / GazeboSimClock backend. The P4 staleness test specifically demonstrates the end-to-end mock-clock coherence the migration was added to enable. The heartbeat test uses production constants so a future regression that changes the production threshold without updating the test will fail.
+
+**Key files under test:** `process3_slam_vio_nav/src/main.cpp`, `process5_comms/src/main.cpp`, `process4_mission_planner/src/main.cpp`, `process4_mission_planner/include/planner/fault_manager.h`, `process5_comms/include/comms/heartbeat_decision.h`, `common/util/include/util/iclock.h`
 
 ---
 
@@ -1458,6 +1539,7 @@ via `fault_injector`, and verifies pass criteria against actual process logs.
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
 - `shm_segments_exist` — SHM segments that must be present at verification time (legacy; skipped when `EFFECTIVE_IPC == zenoh`, which is the sole backend)
+- **`flight_quality_gates.contact_sensor_enabled`** (Issue #740 Layer 3 Gate 1, PR #744) — when `true` (default), the runner subscribes to Gazebo's `/world/<name>/contacts` topic during the scenario and asserts no drone-vs-obstacle physical contact occurred.  `flight_quality_gates.contact_allowlist` (array, default `[]`) adds extra acceptable colliders alongside the built-in `ground_plane`; `flight_quality_gates.contact_drone_pattern` (string, default `"x500_companion"`) sets the drone-model substring matcher.  Closes the observability gap surfaced by #727 (scenarios 25 / 26 reported PASS while the drone visibly collided with cylinders in the Gazebo GUI).  Parser implementation in `tests/lib_check_contacts.py`.
 
 All 18 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
 to catch unexpected collisions (Fix #40).

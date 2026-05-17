@@ -142,7 +142,7 @@ TEST(MessageBusFactory, BusSubscribeViaMessageBus) {
     auto pub   = bus.advertise<Pose>(topic);
     ASSERT_NE(pub, nullptr);
 
-    auto sub = bus.subscribe<Pose>(topic, 5, 50);
+    auto sub = bus.subscribe<Pose>(topic, 5, 50, false);
     ASSERT_NE(sub, nullptr);
     EXPECT_TRUE(sub->is_connected());
 }
@@ -174,7 +174,7 @@ TEST(ZenohPublisher, Constructs) {
 }
 
 TEST(ZenohSubscriber, Constructs) {
-    ZenohSubscriber<ZenohTestPayload> sub("drone/test/construct_sub");
+    ZenohSubscriber<ZenohTestPayload> sub("drone/test/construct_sub", true, nullptr, false);
     EXPECT_EQ(sub.topic_name(), "drone/test/construct_sub");
     // Zenoh subscription is immediately valid (data arrives asynchronously)
     EXPECT_TRUE(sub.is_connected());
@@ -228,7 +228,7 @@ bool publish_until_received(drone::ipc::ZenohPublisher<T>& pub, const T& msg,
 
 TEST(ZenohPubSub, SmallMessageRoundTrip) {
     ZenohPublisher<ZenohTestPayload>  pub("drone/test/small_rt");
-    ZenohSubscriber<ZenohTestPayload> sub("drone/test/small_rt");
+    ZenohSubscriber<ZenohTestPayload> sub("drone/test/small_rt", true, nullptr, false);
 
     ZenohTestPayload sent{42, 3.14f, {}};
     std::strncpy(sent.tag, "hello", sizeof(sent.tag));
@@ -245,7 +245,7 @@ TEST(ZenohPubSub, SmallMessageRoundTrip) {
 
 TEST(ZenohPubSub, ShmPoseRoundTrip) {
     ZenohPublisher<Pose>  pub("drone/test/pose_rt");
-    ZenohSubscriber<Pose> sub("drone/test/pose_rt");
+    ZenohSubscriber<Pose> sub("drone/test/pose_rt", true, nullptr, false);
 
     Pose sent{};
     sent.timestamp_ns   = 123456789;
@@ -266,7 +266,7 @@ TEST(ZenohPubSub, ShmPoseRoundTrip) {
 
 TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
     ZenohPublisher<VideoFrame>  pub("drone/test/video_rt");
-    ZenohSubscriber<VideoFrame> sub("drone/test/video_rt");
+    ZenohSubscriber<VideoFrame> sub("drone/test/video_rt", true, nullptr, false);
 
     // Heap-allocate — VideoFrame is ~6 MB, too large for the stack.
     auto sent                                      = std::make_unique<VideoFrame>();
@@ -294,9 +294,9 @@ TEST(ZenohPubSub, MultipleTopics) {
     ZenohPublisher<ZenohTestPayload>  pub1("drone/test/multi/a");
     ZenohPublisher<ZenohTestPayload>  pub2("drone/test/multi/b");
     ZenohPublisher<ZenohTestPayload>  pub3("drone/test/multi/c");
-    ZenohSubscriber<ZenohTestPayload> sub1("drone/test/multi/a");
-    ZenohSubscriber<ZenohTestPayload> sub2("drone/test/multi/b");
-    ZenohSubscriber<ZenohTestPayload> sub3("drone/test/multi/c");
+    ZenohSubscriber<ZenohTestPayload> sub1("drone/test/multi/a", true, nullptr, false);
+    ZenohSubscriber<ZenohTestPayload> sub2("drone/test/multi/b", true, nullptr, false);
+    ZenohSubscriber<ZenohTestPayload> sub3("drone/test/multi/c", true, nullptr, false);
 
     ZenohTestPayload m1{1, 1.0f, {}};
     ZenohTestPayload m2{2, 2.0f, {}};
@@ -313,7 +313,7 @@ TEST(ZenohPubSub, MultipleTopics) {
 }
 
 TEST(ZenohPubSub, NoData) {
-    ZenohSubscriber<ZenohTestPayload> sub("drone/test/no_data");
+    ZenohSubscriber<ZenohTestPayload> sub("drone/test/no_data", true, nullptr, false);
     // Zenoh subscription is immediately valid (data arrives asynchronously)
     EXPECT_TRUE(sub.is_connected());
     ZenohTestPayload msg;
@@ -322,7 +322,7 @@ TEST(ZenohPubSub, NoData) {
 
 TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
     ZenohPublisher<ZenohTestPayload>  pub("drone/test/seq");
-    ZenohSubscriber<ZenohTestPayload> sub("drone/test/seq");
+    ZenohSubscriber<ZenohTestPayload> sub("drone/test/seq", true, nullptr, false);
 
     // First message — handles discovery latency via retry loop.
     ZenohTestPayload m1{10, 0.0f, {}};
@@ -352,14 +352,14 @@ TEST(ZenohMessageBus, AdvertiseCreatesPublisher) {
 
 TEST(ZenohMessageBus, SubscribeCreatesSubscriber) {
     ZenohMessageBus bus;
-    auto            sub = bus.subscribe<Pose>("/slam_pose");
+    auto            sub = bus.subscribe<Pose>("/slam_pose", 50, 200, false);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
 
 TEST(ZenohMessageBus, SubscribeLazyCreatesSubscriber) {
     ZenohMessageBus bus;
-    auto            sub = bus.subscribe_lazy<Pose>("/slam_pose");
+    auto            sub = bus.subscribe_lazy<Pose>("/slam_pose", false);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
@@ -367,7 +367,7 @@ TEST(ZenohMessageBus, SubscribeLazyCreatesSubscriber) {
 TEST(ZenohMessageBus, RoundTripViaFactory) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<ZenohTestPayload>("/detected_objects");
-    auto            sub = bus.subscribe<ZenohTestPayload>("/detected_objects");
+    auto            sub = bus.subscribe<ZenohTestPayload>("/detected_objects", 50, 200, false);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
@@ -427,7 +427,7 @@ static bool publish_until_received_iface(
 TEST(ZenohMigration, Pose_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<Pose>(topics::SLAM_POSE);
-    auto            sub = bus.subscribe<Pose>(topics::SLAM_POSE);
+    auto            sub = bus.subscribe<Pose>(topics::SLAM_POSE, 50, 200, false);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(pub->topic_name(), "drone/slam/pose");
@@ -458,7 +458,7 @@ TEST(ZenohMigration, Pose_RoundTrip) {
 TEST(ZenohMigration, FCState_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<FCState>(topics::FC_STATE);
-    auto            sub = bus.subscribe<FCState>(topics::FC_STATE);
+    auto            sub = bus.subscribe<FCState>(topics::FC_STATE, 50, 200, false);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(pub->topic_name(), "drone/comms/fc_state");
@@ -492,7 +492,7 @@ TEST(ZenohMigration, FCState_RoundTrip) {
 TEST(ZenohMigration, FCCommand_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<FCCommand>(topics::FC_COMMANDS);
-    auto            sub = bus.subscribe<FCCommand>(topics::FC_COMMANDS);
+    auto            sub = bus.subscribe<FCCommand>(topics::FC_COMMANDS, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/comms/fc_command");
 
     FCCommand sent{};
@@ -516,7 +516,7 @@ TEST(ZenohMigration, FCCommand_RoundTrip) {
 TEST(ZenohMigration, MissionStatus_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<MissionStatus>(topics::MISSION_STATUS);
-    auto            sub = bus.subscribe<MissionStatus>(topics::MISSION_STATUS);
+    auto            sub = bus.subscribe<MissionStatus>(topics::MISSION_STATUS, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/mission/status");
 
     MissionStatus sent{};
@@ -547,7 +547,7 @@ TEST(ZenohMigration, MissionStatus_RoundTrip) {
 TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<TrajectoryCmd>(topics::TRAJECTORY_CMD);
-    auto            sub = bus.subscribe<TrajectoryCmd>(topics::TRAJECTORY_CMD);
+    auto            sub = bus.subscribe<TrajectoryCmd>(topics::TRAJECTORY_CMD, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/mission/trajectory");
 
     TrajectoryCmd sent{};
@@ -578,7 +578,7 @@ TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
 TEST(ZenohMigration, GCSCommand_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<GCSCommand>(topics::GCS_COMMANDS);
-    auto            sub = bus.subscribe<GCSCommand>(topics::GCS_COMMANDS);
+    auto            sub = bus.subscribe<GCSCommand>(topics::GCS_COMMANDS, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/comms/gcs_command");
 
     GCSCommand sent{};
@@ -603,7 +603,7 @@ TEST(ZenohMigration, GCSCommand_RoundTrip) {
 TEST(ZenohMigration, DetectedObjects_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<DetectedObjectList>(topics::DETECTED_OBJECTS);
-    auto            sub = bus.subscribe<DetectedObjectList>(topics::DETECTED_OBJECTS);
+    auto sub = bus.subscribe<DetectedObjectList>(topics::DETECTED_OBJECTS, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/perception/detections");
 
     DetectedObjectList sent{};
@@ -638,7 +638,7 @@ TEST(ZenohMigration, DetectedObjects_RoundTrip) {
 TEST(ZenohMigration, PayloadCommand_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<PayloadCommand>(topics::PAYLOAD_COMMANDS);
-    auto            sub = bus.subscribe<PayloadCommand>(topics::PAYLOAD_COMMANDS);
+    auto            sub = bus.subscribe<PayloadCommand>(topics::PAYLOAD_COMMANDS, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/mission/payload_command");
 
     PayloadCommand sent{};
@@ -664,7 +664,7 @@ TEST(ZenohMigration, PayloadCommand_RoundTrip) {
 TEST(ZenohMigration, PayloadStatus_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<PayloadStatus>(topics::PAYLOAD_STATUS);
-    auto            sub = bus.subscribe<PayloadStatus>(topics::PAYLOAD_STATUS);
+    auto            sub = bus.subscribe<PayloadStatus>(topics::PAYLOAD_STATUS, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/payload/status");
 
     PayloadStatus sent{};
@@ -692,7 +692,7 @@ TEST(ZenohMigration, PayloadStatus_RoundTrip) {
 TEST(ZenohMigration, SystemHealth_RoundTrip) {
     ZenohMessageBus bus;
     auto            pub = bus.advertise<SystemHealth>(topics::SYSTEM_HEALTH);
-    auto            sub = bus.subscribe<SystemHealth>(topics::SYSTEM_HEALTH);
+    auto            sub = bus.subscribe<SystemHealth>(topics::SYSTEM_HEALTH, 50, 200, false);
     EXPECT_EQ(pub->topic_name(), "drone/monitor/health");
 
     SystemHealth sent{};
@@ -733,11 +733,11 @@ TEST(ZenohMigration, MultiChannel_Simultaneous) {
     auto health_pub = bus.advertise<SystemHealth>(topics::SYSTEM_HEALTH);
     auto status_pub = bus.advertise<MissionStatus>(topics::MISSION_STATUS);
 
-    auto pose_sub   = bus.subscribe<Pose>(topics::SLAM_POSE);
-    auto fc_sub     = bus.subscribe<FCState>(topics::FC_STATE);
-    auto traj_sub   = bus.subscribe<TrajectoryCmd>(topics::TRAJECTORY_CMD);
-    auto health_sub = bus.subscribe<SystemHealth>(topics::SYSTEM_HEALTH);
-    auto status_sub = bus.subscribe<MissionStatus>(topics::MISSION_STATUS);
+    auto pose_sub   = bus.subscribe<Pose>(topics::SLAM_POSE, 50, 200, false);
+    auto fc_sub     = bus.subscribe<FCState>(topics::FC_STATE, 50, 200, false);
+    auto traj_sub   = bus.subscribe<TrajectoryCmd>(topics::TRAJECTORY_CMD, 50, 200, false);
+    auto health_sub = bus.subscribe<SystemHealth>(topics::SYSTEM_HEALTH, 50, 200, false);
+    auto status_sub = bus.subscribe<MissionStatus>(topics::MISSION_STATUS, 50, 200, false);
 
     Pose pose_s{};
     pose_s.timestamp_ns = 1;
@@ -778,7 +778,7 @@ TEST(ZenohMigration, MultiChannel_Simultaneous) {
 
 TEST(ZenohMigration, HighRate_Pose) {
     ZenohPublisher<Pose>  pub("drone/test/highrate_pose");
-    ZenohSubscriber<Pose> sub("drone/test/highrate_pose");
+    ZenohSubscriber<Pose> sub("drone/test/highrate_pose", true, nullptr, false);
 
     // Wait for discovery
     {
@@ -824,7 +824,7 @@ TEST(ZenohMigration, FactorySubscribeOptional) {
     // may publish on GCS_COMMANDS.
     std::string unique_key = std::string("/factory_opt_test_") + std::to_string(::getpid());
     auto        bus        = create_message_bus("zenoh");
-    auto        sub        = bus.subscribe_optional<GCSCommand>(unique_key);
+    auto        sub        = bus.subscribe_optional<GCSCommand>(unique_key, false);
     ASSERT_NE(sub, nullptr);
     // No publisher exists — receive should return false but not crash
     GCSCommand cmd{};
@@ -896,7 +896,7 @@ TEST(ZenohShmPublish, SmallMessageUsesBytes) {
     static_assert(sizeof(Pose) <= kShmPublishThreshold, "Pose should be below SHM threshold");
 
     ZenohPublisher<Pose>  pub("drone/test/shm_small_path");
-    ZenohSubscriber<Pose> sub("drone/test/shm_small_path");
+    ZenohSubscriber<Pose> sub("drone/test/shm_small_path", true, nullptr, false);
 
     Pose sent{};
     sent.timestamp_ns = 42;
@@ -919,7 +919,7 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
                   "VideoFrame should be above SHM threshold");
 
     ZenohPublisher<VideoFrame>  pub("drone/test/shm_video_path");
-    ZenohSubscriber<VideoFrame> sub("drone/test/shm_video_path");
+    ZenohSubscriber<VideoFrame> sub("drone/test/shm_video_path", true, nullptr, false);
 
     // Record baseline counters before publish
     const auto shm_before   = pub.shm_publish_count();
@@ -967,7 +967,7 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
                   "StereoFrame should be above SHM threshold");
 
     ZenohPublisher<StereoFrame>  pub("drone/test/shm_stereo_path");
-    ZenohSubscriber<StereoFrame> sub("drone/test/shm_stereo_path");
+    ZenohSubscriber<StereoFrame> sub("drone/test/shm_stereo_path", true, nullptr, false);
 
     const auto shm_before   = pub.shm_publish_count();
     const auto bytes_before = pub.bytes_publish_count();
@@ -1004,7 +1004,7 @@ TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
     // End-to-end: factory → advertise VideoFrame → subscribe → roundtrip
     auto bus = create_message_bus("zenoh");
     auto pub = bus.advertise<VideoFrame>(topics::VIDEO_MISSION_CAM);
-    auto sub = bus.subscribe<VideoFrame>(topics::VIDEO_MISSION_CAM);
+    auto sub = bus.subscribe<VideoFrame>(topics::VIDEO_MISSION_CAM, 50, 200, false);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
@@ -1040,7 +1040,7 @@ TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
 TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
     auto bus = create_message_bus("zenoh");
     auto pub = bus.advertise<StereoFrame>(topics::VIDEO_STEREO_CAM);
-    auto sub = bus.subscribe<StereoFrame>(topics::VIDEO_STEREO_CAM);
+    auto sub = bus.subscribe<StereoFrame>(topics::VIDEO_STEREO_CAM, 50, 200, false);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
@@ -1080,7 +1080,7 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
     }
 
     ZenohPublisher<VideoFrame>  pub("drone/test/shm_sustained_video");
-    ZenohSubscriber<VideoFrame> sub("drone/test/shm_sustained_video");
+    ZenohSubscriber<VideoFrame> sub("drone/test/shm_sustained_video", true, nullptr, false);
 
     auto frame      = std::make_unique<VideoFrame>();
     frame->width    = 1920;

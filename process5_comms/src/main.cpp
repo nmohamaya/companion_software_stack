@@ -14,6 +14,7 @@
 #include "util/config_keys.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
 #include "util/process_context.h"
 #include "util/realtime.h"
 #include "util/sd_notify.h"
@@ -45,11 +46,25 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
         auto hb = fc.receive_state();
 
         drone::ipc::FCState state{};
-        state.timestamp_ns       = hb.timestamp_ns;
-        state.battery_voltage    = hb.battery_voltage;
-        state.battery_remaining  = hb.battery_percent;
-        state.rel_alt            = hb.altitude_rel;
-        state.vx                 = hb.ground_speed;
+        state.timestamp_ns      = hb.timestamp_ns;
+        state.battery_voltage   = hb.battery_voltage;
+        state.battery_remaining = hb.battery_percent;
+        state.rel_alt           = hb.altitude_rel;
+        // Issue #740 Layer 4 (PR #763 Copilot review fix): wire the HAL's
+        // full attitude + NED velocity through to the IPC FCState so the
+        // planner's post-ARM settle gate can read real FC-reported
+        // estimates.  Previously only `ground_speed` was wired (as
+        // `state.vx`) and `roll`/`pitch`/`yaw`/`vy`/`vz` defaulted to
+        // zero — making the Layer 4 predicate (`|roll|<5°` && `|pitch|<5°`
+        // && `|v|<0.3`) trivially-true on the ground and the gate
+        // degenerate to a fixed N-observation delay.  Now the gate
+        // actually checks EKF2 attitude convergence as advertised.
+        state.roll               = hb.roll;
+        state.pitch              = hb.pitch;
+        state.yaw                = hb.yaw;
+        state.vx                 = hb.vx;
+        state.vy                 = hb.vy;
+        state.vz                 = hb.vz;
         state.satellites_visible = hb.satellites;
         state.flight_mode        = hb.flight_mode;
         state.armed              = hb.armed;
@@ -147,7 +162,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
     // timestamp design had `last_traj_send` updating on every
     // heartbeat resend, so the 5 s stale-bound never fired even when
     // P4 had been silent for hours.
-    const auto                            now_init      = std::chrono::steady_clock::now();
+    const auto                            now_init      = drone::util::get_clock().now();
     std::chrono::steady_clock::time_point last_send     = now_init;
     std::chrono::steady_clock::time_point last_new_traj = now_init;
 
@@ -245,7 +260,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                 // — update both timestamps.  last_send drives the
                 // heartbeat-period gate; last_new_traj resets the
                 // stale-bound (P4 is alive and producing fresh cmds).
-                const auto now_send = std::chrono::steady_clock::now();
+                const auto now_send = drone::util::get_clock().now();
                 last_send           = now_send;
                 last_new_traj       = now_send;
                 sent_this_tick      = true;
@@ -280,7 +295,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
         // a new trajectory cmd from P4.  Heartbeat replays do not
         // reset it, so a permanently-silent P4 will eventually trip the
         // bound regardless of how often the heartbeat fires.
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = drone::util::get_clock().now();
         const auto since_last_send =
             std::chrono::duration_cast<std::chrono::milliseconds>(now - last_send);
         const auto since_last_new_traj =

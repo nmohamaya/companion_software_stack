@@ -65,7 +65,7 @@ TEST(MessageBusTest, AdvertiseAndSubscribe) {
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 
-    auto sub = bus.subscribe<TestPayload>(topic);
+    auto sub = bus.subscribe<TestPayload>(topic, 50, 200, false);
     ASSERT_NE(sub, nullptr);
     EXPECT_TRUE(sub->is_connected());
 }
@@ -74,7 +74,7 @@ TEST(MessageBusTest, PubSubRoundTrip) {
     auto topic = unique_topic("/test_mbus_rt");
     auto bus   = create_message_bus("zenoh");
     auto pub   = bus.advertise<TestPayload>(topic);
-    auto sub   = bus.subscribe<TestPayload>(topic);
+    auto sub   = bus.subscribe<TestPayload>(topic, 50, 200, false);
 
     TestPayload sent{42, 3.14f, {}};
     std::strncpy(sent.tag, "test", sizeof(sent.tag));
@@ -96,7 +96,7 @@ TEST(MessageBusTest, WithIpcTypes) {
     auto pub   = bus.advertise<Pose>(topic);
     ASSERT_TRUE(pub->is_ready());
 
-    auto sub = bus.subscribe<Pose>(topic);
+    auto sub = bus.subscribe<Pose>(topic, 50, 200, false);
     ASSERT_TRUE(sub->is_connected());
 
     Pose pose{};

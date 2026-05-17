@@ -785,3 +785,179 @@ TEST(FaultManagerTest, VIOQualityIgnoredBeforeFirstPose) {
     EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
     EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Issue #718 — set_preflight_timeout() + FAULT_FC_PREFLIGHT_TIMEOUT
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, PreflightTimeoutRaisesFaultBitAndWarnAction) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    // No event set — no fault.
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_FALSE(r1.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+
+    // Set the event — fault bit raised, action escalates to WARN.
+    // (WARN is cosmetic for GCS: planner has already DISARMed + FSM → IDLE.)
+    mgr.set_preflight_timeout(true);
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_TRUE(r2.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT)
+        << "set_preflight_timeout(true) did not propagate to FAULT_FC_PREFLIGHT_TIMEOUT";
+    EXPECT_EQ(r2.recommended_action, FaultAction::WARN)
+        << "Expected WARN action (cosmetic — drone is already on the ground)";
+}
+
+// PR #775 review fix (fault-recovery + test-quality + api-contract P1):
+// set_preflight_timeout is now a one-way LATCH.  Once raised, the bit
+// persists in active_faults across subsequent evaluate() calls until
+// reset().  This ensures GCS polling at 500 ms–1 s reliably observes
+// the FAULT_FC_PREFLIGHT_TIMEOUT bit despite the planner ticking at
+// 10 Hz.  Pre-fix: bit visible for exactly ONE tick then cleared by
+// the next `set_preflight_timeout(false)` call from main.cpp's
+// `set_preflight_timeout(consume_event())` pattern.
+TEST(FaultManagerTest, PreflightTimeoutLatchPersistsAcrossEvaluatesUntilReset) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    mgr.set_preflight_timeout(true);
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_TRUE(r1.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+    EXPECT_EQ(r1.recommended_action, FaultAction::WARN);
+
+    // Simulate the production calling pattern: main.cpp calls
+    // `set_preflight_timeout(consume_event())` every tick.  After the
+    // one-shot consume_event() returns true once, it returns false on
+    // every subsequent tick.  The latch MUST ignore the false so the
+    // flag stays raised — GCS keeps seeing the bit.
+    mgr.set_preflight_timeout(false);
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_TRUE(r2.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT)
+        << "FAULT_FC_PREFLIGHT_TIMEOUT dropped from active_faults after "
+           "set_preflight_timeout(false) — the latch is not OR-style. GCS "
+           "polling at 500 ms–1 s will miss the fault bit (one-tick-"
+           "visibility bug from PR #775 review).";
+    EXPECT_EQ(r2.recommended_action, FaultAction::WARN);
+
+    // Reset clears the high-water mark (e.g. after landing / new mission).
+    mgr.reset();
+    auto r3 = mgr.evaluate(health, fc, now - 50 * MS, now + 2 * MS);
+    EXPECT_EQ(r3.recommended_action, FaultAction::NONE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issues #718 / #765 — set_planner_stall() + FAULT_PLANNER_STALL
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, PlannerStallRaisesFaultBitAndEscalatesToLoiter) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    // No stall event — nominal.
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_FALSE(r1.active_faults & FAULT_PLANNER_STALL);
+
+    // Set the stall event — fault bit + LOITER action (NEVER disarm in air).
+    mgr.set_planner_stall(true);
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_TRUE(r2.active_faults & FAULT_PLANNER_STALL)
+        << "set_planner_stall(true) did not propagate to FAULT_PLANNER_STALL";
+    EXPECT_EQ(r2.recommended_action, FaultAction::LOITER)
+        << "Expected LOITER action — asymmetric pre-condition rule (vehicle "
+           "is in the air; disarm would mean falling out of the sky)";
+}
+
+TEST(FaultManagerTest, PlannerStallAndPreflightTimeoutCoexist) {
+    // Both events simultaneously — should raise BOTH fault bits, and the
+    // recommended action should be the HIGHER of WARN (preflight) and
+    // LOITER (planner stall) = LOITER per the escalation-only policy.
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    mgr.set_preflight_timeout(true);
+    mgr.set_planner_stall(true);
+
+    auto result = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_TRUE(result.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+    EXPECT_TRUE(result.active_faults & FAULT_PLANNER_STALL);
+    EXPECT_EQ(result.recommended_action, FaultAction::LOITER)
+        << "Both faults raised, expected LOITER (higher than WARN) to win the "
+           "escalation rank.";
+
+    // reset() clears both flags.
+    mgr.reset();
+    auto r2 = mgr.evaluate(health, fc, now - 50 * MS, now + 1 * MS);
+    EXPECT_FALSE(r2.active_faults & FAULT_FC_PREFLIGHT_TIMEOUT);
+    EXPECT_FALSE(r2.active_faults & FAULT_PLANNER_STALL);
+}
+
+// PR #775 review fix (test-quality P1 — production-pattern test gap):
+// main.cpp calls `set_planner_stall(stall_handler.consume_event())` every
+// tick.  consume_event() returns true ONCE per stuck-detection then false.
+// Without the latch fix, the FAULT_PLANNER_STALL bit would drop from
+// active_faults the next tick.  This test pins the latch contract for
+// the planner-stall path (analog of PreflightTimeoutLatchPersistsAcrossEvaluatesUntilReset).
+TEST(FaultManagerTest, PlannerStallLatchPersistsAcrossEvaluatesUntilReset) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;
+
+    mgr.set_planner_stall(true);
+    auto r1 = mgr.evaluate(health, fc, now - 50 * MS, now);
+    EXPECT_TRUE(r1.active_faults & FAULT_PLANNER_STALL);
+    EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
+
+    // Production pattern: subsequent ticks call set_planner_stall(false)
+    // because consume_event() is one-shot.  Latch MUST preserve the bit.
+    for (int i = 0; i < 100; ++i) {
+        mgr.set_planner_stall(false);
+        auto rN = mgr.evaluate(health, fc, now - 50 * MS, now + (1 + i) * MS);
+        ASSERT_TRUE(rN.active_faults & FAULT_PLANNER_STALL)
+            << "FAULT_PLANNER_STALL lost after " << (1 + i)
+            << " ticks — latch broken, GCS will miss the cause-bit identity.";
+        ASSERT_EQ(rN.recommended_action, FaultAction::LOITER);
+    }
+
+    // reset() is the only path to clear the latch.
+    mgr.reset();
+    auto r_post = mgr.evaluate(health, fc, now - 50 * MS, now + 200 * MS);
+    EXPECT_FALSE(r_post.active_faults & FAULT_PLANNER_STALL);
+    EXPECT_EQ(r_post.recommended_action, FaultAction::NONE);
+}
+
+// PR #775 review fix (data-plumbing + security P2 — fault_flags_string
+// registry was missing the 2 new fault bits).  Without this test, a
+// future fault-bit addition can silently regress to FAULT_UNKNOWN(0xN)
+// in operator logs / GCS dashboards.
+TEST(FaultFlagsStringTest, NewFaultBitsHaveSymbolicNames) {
+    const std::string preflight_s =
+        drone::ipc::fault_flags_string(static_cast<uint32_t>(FAULT_FC_PREFLIGHT_TIMEOUT));
+    EXPECT_NE(preflight_s.find("FAULT_FC_PREFLIGHT_TIMEOUT"), std::string::npos)
+        << "fault_flags_string did not include FAULT_FC_PREFLIGHT_TIMEOUT — got: " << preflight_s;
+    EXPECT_EQ(preflight_s.find("FAULT_UNKNOWN"), std::string::npos)
+        << "fault_flags_string fell back to FAULT_UNKNOWN — kFlags[] is missing the entry.";
+
+    const std::string stall_s =
+        drone::ipc::fault_flags_string(static_cast<uint32_t>(FAULT_PLANNER_STALL));
+    EXPECT_NE(stall_s.find("FAULT_PLANNER_STALL"), std::string::npos)
+        << "fault_flags_string did not include FAULT_PLANNER_STALL — got: " << stall_s;
+    EXPECT_EQ(stall_s.find("FAULT_UNKNOWN"), std::string::npos);
+
+    // Both bits together — should produce a comma-separated list with
+    // BOTH symbolic names (no FAULT_UNKNOWN fallback).
+    const std::string both_s =
+        drone::ipc::fault_flags_string(static_cast<uint32_t>(FAULT_FC_PREFLIGHT_TIMEOUT) |
+                                       static_cast<uint32_t>(FAULT_PLANNER_STALL));
+    EXPECT_NE(both_s.find("FAULT_FC_PREFLIGHT_TIMEOUT"), std::string::npos);
+    EXPECT_NE(both_s.find("FAULT_PLANNER_STALL"), std::string::npos);
+    EXPECT_EQ(both_s.find("FAULT_UNKNOWN"), std::string::npos);
+}

@@ -16,6 +16,152 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-15 (PR #775 review deferrals — test/code-quality P2/P3 follow-ups)
+
+#### DISARM-vs-FSM ordering not asserted in Layer 4 timeout tests
+
+- **P2** (`tests/test_mission_state_tick.cpp`) — `Layer4NeverSettlesFiresTimeoutAndDisarms` asserts both `fsm.state() == IDLE` AND `fc_calls[0].cmd == DISARM`, but never verifies DISARM was emitted BEFORE the FSM transitioned.  If a future change reorders to `fsm.on_landed(); send_fc(DISARM)`, motors stay armed in IDLE state for one tick — silent safety regression that both assertions still pass.  Add a sequence-counter assertion or use a mock `FCSendFn` that captures the FSM state at send-time.  **When to do it:** next time the Layer 4 tests are touched, or before any reordering of `tick_preflight`'s timeout-fired path.  **Cross-ref:** PR #775 review-test-quality P2.
+
+#### No warn→timeout single-timeline test
+
+- **P2** (`tests/test_mission_state_tick.cpp`) — `WarnThresholdElapsesButNotYetTimeout` and `Layer1NeverReleasesFiresTimeoutAndDisarms` test the two boundaries independently.  No test walks t=0 → t=warn (still PREFLIGHT) → t=timeout (DISARM) on one fixture.  A regression that resets the warn-tracking timer at the warn-log boundary would not be caught.  Add `Layer1WarnPromotionThenTimeoutOnSameTimeline` that exercises both boundaries in sequence.  **Cross-ref:** PR #775 review-test-quality P2.
+
+#### Outer-state-exit detector not isolated for non-timeout PREFLIGHT exit
+
+- **P2** (`tests/test_mission_state_tick.cpp`) — `ReentryToPreflightStartsFreshTimer` exercises re-entry after the timeout fires, but the "GCS aborts PREFLIGHT mid-window before timeout, then re-enters PREFLIGHT" path is not isolated.  Add `PreflightTimerResetsOnNonTimeoutExitViaGCSAbort`.  **Cross-ref:** PR #775 review-test-quality P2 + test-unit P3 (analogous gap).
+
+#### Weak thread-safety assertion in PlannerStallHandler concurrency test
+
+- **P3** (`tests/test_planner_stall_handler.cpp`) — `ConsumeEventIsThreadSafeAcrossWatchdogAndPlanningLoop` asserts `EXPECT_GE(consumed.load(), 1)` which is satisfied by any single successful consume — far too loose.  A regression from `release/acquire` → `relaxed` would almost certainly still pass on x86-64 (TSO).  Tighten to `consumed >= kIterations / 10` and run under TSan in CI to make ordering bugs detectable.  **Cross-ref:** PR #775 review-test-quality P3.
+
+#### LatencyProfiler trace copy under mutex (string allocations)
+
+- **P3** (`common/util/include/util/latency_profiler.h`) — `collect_traces_locked()` copies up to 4096 `LatencyTrace` objects (each with a `std::string stage`) while holding `mtx_`.  Currently bounded + watchdog-thread-only so non-blocking, but if the profiler is ever extended to higher trace rates, consider `string_view` or fixed-size char array in `LatencyTrace` to eliminate per-trace allocation.  **Cross-ref:** PR #775 review-performance P3.
+
+#### `StateTickConfig` field count growth
+
+- **P3** (`process4_mission_planner/include/planner/mission_state_tick.h`) — `StateTickConfig` is at 17 fields across 3 logical groups (basic FSM, Layer 1/4 debounce, preflight timeout).  Codebase pattern: split when fields exceed ~20.  When the next preflight/Layer-N config knob is added, consider extracting `StateTickConfig::PreflightConfig` nested struct.  **Cross-ref:** PR #775 review-code-quality P3.
+
+### 2026-05-15 (recovered from stash@{0} — scenario-runner / stack-coverage audit, originally 2026-05-01 / 2026-04-30)
+
+#### `tests/run_scenario.sh` missing `requires_cosys_airsim` skip gate
+
+- **P2** — `tests/run_scenario.sh` skips scenarios with `"requires_gazebo": true` but has no equivalent gate for `"requires_cosys_airsim": true`.  Scenarios 29, 30, and 33 set `requires_cosys_airsim` (not `requires_gazebo`), so `--all` will attempt to launch them on any machine, fail at stack startup (no Cosys-AirSim backend), and count them as failed rather than skipping cleanly.  Fix: add a second skip block in `run_scenario.sh` (around line 354) that reads `requires_cosys_airsim` and exits 0 with a SKIP message, mirroring the existing Gazebo gate.  Until fixed, always pass `--tier 1` to limit the run to genuine Tier 1 scenarios.
+
+#### 17 scenarios missing `_comment_static_obstacles` audit annotation
+
+- **P3** — 17 of 30 scenario JSON files have `"static_obstacles": []` without a `_comment_static_obstacles` key explaining why the array is empty.  The audit policy (CLAUDE.md "Stack Coverage Audit") requires an explanatory comment for every empty array.  Without it, a reviewer cannot distinguish "intentional: fault-injection scenario" from "accidental: HD-map was forgotten."  Add `_comment_static_obstacles` to scenarios 03, 04, 06, 07, 09, 10, 11, 12, 13, 14, 15, 16, 21, 23, 24, 25, 28.  Templates: `"_comment_static_obstacles": "Empty — fault-injection/smoke-test scenario; mission is interrupted before planner is significantly exercised."` for fault-injection group; `"Empty — no HD-map; perception-driven avoidance at runtime."` for Gazebo perception group (21, 28).  Verified present and correct in 01, 17, 18, 19, 27, 29, 30, 33 (9 scenarios already compliant).  Note: scenario numbering may have shifted since the original audit (April 30) — verify the offender list against current scenario IDs before fixing.
+
+### 2026-05-13 (PR #752 review-fix follow-ups)
+
+#### Decide whether VIO `LOST` state should also withhold pose publication
+
+- **P2** — `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread`.  PR #752 added a guard that suppresses `pose_buffer.write()` while `output.health == VIOHealth::INITIALIZING`.  The other unhealthy state — `VIOHealth::LOST` ("tracking lost — need re-initialization") — currently still publishes the (now-stale) pose.  Downstream the planner's `FaultManager` checks pose age (`stale_pose_ns`) but does NOT check `Pose::quality`, so a backend that keeps emitting fresh-stamped LOST poses with `quality=0` does not trigger `FAULT_POSE_STALE` and the consumer has no signal that pose is unreliable.
+  - **Pros of expanding the guard to LOST:**
+    - Semantically equivalent to INITIALIZING — consumer can't trust the pose.
+    - Cleaner FAULT_POSE_STALE triggering at the planner.
+  - **Cons:**
+    - Behaviour change beyond PR #752's stated scope ("INITIALIZING pose-publish guard").
+    - Consumers that DID look at `Pose::quality` would lose visibility.
+  - **Suggested fix:** open a follow-up issue + DR-NNN evaluating both options.  If we expand to LOST, the guard becomes `output.health == INITIALIZING || output.health == LOST` and the constant becomes a small enum / named bool.
+  - **When to do it:** when fault-response semantics next change, or when a scenario reproduces VIO-LOST mid-flight and exhibits the missing FAULT_POSE_STALE.
+  - **Source:** PR #752 Copilot review — `process3_slam_vio_nav/src/main.cpp:198/214` comment-vs-code mismatch.  PR #752 addressed the immediate concern by tightening the comment + log to say "INITIALIZING only" rather than "until DEGRADED/NOMINAL".
+
+---
+
+### 2026-05-13 (PR #752 implementation — proactive findings)
+
+#### Refactor `vio_pipeline_thread` for unit testability
+
+- **P3** — `test-infra` — `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread` is currently a 100+ line free function that captures `pose_buffer`, calls `backend.process_frame()`, and writes to the buffer.  No unit test directly exercises this function — coverage is via scenario integration tests only.  PR #752 (this PR) added an `output.health == INITIALIZING` guard inside the function but couldn't add a focused unit test for the new branch because the function isn't structured for testability (depends on a thread-local `PoseDoubleBuffer` reference + `Diagnostics` + ambient running flag).
+  - **Suggested fix:** extract the per-frame decision logic (the "should I publish this output?" call) into a free function `should_publish_vio_output(const VIOOutput&) -> bool` or a thin method on a struct.  The pipeline thread calls the helper and acts on the result.  Unit tests then cover the helper directly with synthetic `VIOOutput` instances spanning all health states (INITIALIZING, DEGRADED, NOMINAL, LOST).  The thread function becomes a thin glue layer that doesn't need its own unit test.
+  - **When to do it:** opportunistic — when next touching `vio_pipeline_thread` for another reason, or when adding the next per-output gating rule (likely Layer 4 RTF-aware logic from #746 if it lands here).
+  - **Affected:** test coverage gap for P3 publish-thread logic.  Today the contract "don't publish during INITIALIZING" is enforced inline but only exercised by scenario tests.  Cheap-to-add unit test would catch a regression at PR time instead of scenario-sweep time.
+
+---
+
+### 2026-05-13 (PR #750 review-fix follow-ups)
+
+#### `ZenohSubscriber` SFINAE-branch test coverage gap
+
+- **P2** — The new wrapper-level stale-message filter in `common/ipc/include/ipc/zenoh_subscriber.h::on_sample()` is gated by `if constexpr (has_validate<T>::value)` then `if constexpr (has_timestamp_ns<T>::value)`.  Four code paths exist:
+  1. `validate=Y, timestamp_ns=Y` — exercised by `ZenohStaleMessageFilter.*` tests in `tests/test_zenoh_coverage.cpp` (and most safety-critical IPC types).
+  2. `validate=Y, timestamp_ns=N` — no current IPC type matches; no test.
+  3. `validate=N, timestamp_ns=Y` — `ThreadHealth` matches but is publisher-side only (never subscribed via this wrapper); no test.
+  4. `validate=N, timestamp_ns=N` — no current IPC type matches; no test.
+  - **Why:** A future contributor who adds a non-validating timestamped type and relies on the constructor docstring will not be alerted that the filter silently fails to apply to their type.  Branch coverage is currently theoretical-only for paths 2 / 3 / 4.
+  - **Suggested fix:** add 1–2 tests in `tests/test_zenoh_coverage.cpp::ZenohStaleMessageFilter` using a synthetic test-only type (e.g. `struct NoValidateWithTs { uint64_t timestamp_ns; }`) that exercises path 3 and asserts the message passes through unfiltered.  Path 2 is harder to test meaningfully without a `validate()` implementation; path 4 is the no-op baseline already covered by happy-path subscriber tests.
+  - **When to do it:** next change that touches `on_sample()`, or when adding a new IPC type that opts out of the filter.
+
+#### Duplicate `### Fix #51` entry in BUG_FIXES.md
+
+- **P3** — Two entries share the heading `### Fix #51`: one is "Gazebo SITL Broken After Ubuntu System Update" (chronologically earlier), the other is "Depth Anything V2 ONNX Model Incompatible with OpenCV DNN".  Renumbering one of them (probably the later one) keeps the audit trail unambiguous.
+  - **When to do it:** any quiet window; trivial sed-replace + index update.
+
+---
+
+### 2026-05-13 (PR #744 review-fix follow-ups)
+
+#### `tests/lib_check_contacts.py` — no pytest coverage
+
+- **P2** — The Python state machine that parses `gz topic` text format and classifies drone-vs-obstacle pairs is currently only verified by its in-the-loop behaviour during a scenario run.  A regression in `parse_contacts()` (e.g. the `---` delimiter reset added in PR #744 review fixes, or the `is_allowlisted` substring rule) could silently produce phantom or missing events without any unit-test signal.
+  - **Why:** the helper is a small but load-bearing piece of cold-start observability — a quietly-broken parser would re-introduce the false-PASS class this gate exists to prevent.
+  - **Suggested fix:** add `tests/test_lib_check_contacts.py` with pytest cases for: (a) synthetic clean log → exit 0; (b) synthetic single-contact log → exit 1 with the expected pair; (c) allowlist suppression; (d) truncated `contact { ... }` block followed by `---` → no phantom event; (e) missing file → exit 2.  Wire into `tests/run_tests.sh` if pytest is on the CI path.
+  - **When to do it:** next time the parser is touched, or as part of the Tier-1 follow-up gate that will share the same state machine.
+
+---
+
+### 2026-05-13 (PR #741 review-fix follow-ups — backlog items deferred from the review)
+
+These are valid suggestions surfaced by the [9-agent + Copilot review of PR #741](https://github.com/nmohamaya/companion_software_stack/pull/741#issuecomment-4440678222) that we chose to defer to backlog rather than fix in the immediate follow-up PR #743.  Each has a defined "when to do it" trigger so it doesn't get forgotten.
+
+**Audit trail note:** these are review-comment-derived but routed to IMPROVEMENTS.md rather than DESIGN_RATIONALE.md because each is a **valid-but-deferred backlog item** ("yes will do later") rather than a **considered-and-declined design decision** ("we evaluated both paths and chose this one").  See CLAUDE.md §"Where deferred items are logged" (clarified in PR #743 to distinguish these two flavours).
+
+#### Sibling `cfg_key` constants for `preflight_arm_retry_s` / `preflight_wait_log_s` absent
+
+- **P3** — `architecture` — PR #741's review (api-contract agent) noted that `process4_mission_planner/include/planner/mission_state_tick.h::StateTickConfig` exposes three preflight tunables (`preflight_arm_retry_s`, `preflight_wait_log_s`, `preflight_armable_stable_s`) but only the third has a corresponding `cfg_key::mission_planner::PREFLIGHT_ARMABLE_STABLE_S` constant (added by PR #741).  The other two are read via hardcoded string literals or implicit defaults.  This is pre-existing asymmetry from PR #717 — not introduced by #741 — but is now visible.
+  - **Suggested fix:** add `PREFLIGHT_ARM_RETRY_S` and `PREFLIGHT_WAIT_LOG_S` constants to `common/util/include/util/config_keys.h` under `namespace mission_planner`, and wire them into `main.cpp` where the values are read.
+  - **When to do it:** bundle with #734's "tracking-doc cleanup + IMPROVEMENTS↔DR-NNN re-homing" or any other config-hygiene pass.  Not worth a standalone PR.
+  - **Affected:** documentation consistency only — production behaviour is unchanged because `cfg.get<>` already handles missing keys via fallback.
+
+#### `preflight_armable_stable_s` not propagated to `config/hardware*.json`
+
+- **P3** — `docs / config` — PR #741's review (security agent) noted that the new `preflight_armable_stable_s = 3.0` JSON entry exists only in `config/default.json`, not in `config/hardware.json`, `config/hardware_orin.json`, or `config/hardware_edge.json`.  Operators inspecting a hardware-specific config can't see the key or tune it without knowing to look in `default.json`.
+  - **Suggested fix:** add the key to all three hardware configs.  But: real-hardware tuning values (Orin vs edge vs Jetson Nano) may differ from Gazebo's 3.0s and **aren't empirically known yet**.  Propagating now risks locking in wrong values.
+  - **When to do it:** when real-hardware testing produces empirical evidence about EKF2 settling time on each platform.  Until then, the `cfg.get<float>(..., 3.0f)` fallback is safe.
+  - **Affected:** operator visibility only — no functional impact.
+
+#### Repeated positional `StateTickConfig` constructor in test fixtures
+
+- **P3** — `test-infra` — PR #741's review (code-quality agent) noted that `StateTickConfig c{10.0f, 1.5f, 0.5f, 5}` (positional brace-init for the first 4 fields) is repeated in 3 sites in `tests/test_mission_state_tick.cpp`: `make_default_test_config()`, the lambda init for `MissionStateTickDebounceTest`, and the free `ZeroWindowDisablesDebounce` test.  Minor DRY violation — if the `StateTickConfig` field ordering ever changes, all three sites need updating but only the first is obvious.
+  - **Suggested fix:** extract a single `make_state_tick_config(float armable_stable_s)` helper that all three sites use.  Or, more ambitiously, a broader test-helper extraction across the planner test suite (other test files repeat similar fixture patterns).
+  - **When to do it:** bundle with any other test-infra cleanup pass, or when a 4th similar construction site appears.
+  - **Affected:** test maintainability only.
+
+---
+
+### 2026-05-13 (PR #741 — proactive safety / test-discipline findings during #740-A implementation)
+
+Two items noticed while implementing the ARM-gate debounce (PR #741, epic #740 / #727 Layer 1). Both are test-discipline / drift-hygiene, not flight-safety, so they're logged here rather than escalated. Adding them surfaces patterns worth catching during future review.
+
+#### Test-fixture ordering with `ScopedMockClock`
+
+- **P3** — `test-infra` — `ScopedMockClock` MUST be declared as a fixture member BEFORE the unit-under-test, because the UUT's constructor may query `drone::util::get_clock()` at construction time and capture the production clock if the override isn't installed yet. Member-init order is declaration order; violating this silently breaks mock-driven tests in a way that's hard to debug (mock advances do nothing, tests look like they should pass but the UUT sees real wall-clock time).
+  - **Suggested fix:** document the pattern in `docs/reference/CPP_PATTERNS_GUIDE.md` §5.7 (done in this PR), and check during review whenever a new `ScopedMockClock`-using test class is added.
+  - **Affected:** every test fixture that injects `ScopedMockClock`. Currently rare but will become common as we migrate more time-dependent code to `drone::util::get_clock()` (see next item).
+
+#### `std::chrono::steady_clock::now()` direct usage in process[1-7]_* code
+
+- **P3** — `architecture` — 35+ direct uses of `std::chrono::steady_clock::now()` remain in `process4_mission_planner/` alone (other processes likely similar). These are grandfathered under the new §5.7 rule but each one blocks unit-test mockability of the surrounding logic.
+  - **Suggested next step:** opportunistic migration when touching the surrounding code (the rule already says this). One-shot bulk migration as a separate refactor PR is also viable but would touch many files; review-pass-1 fault-recovery would likely raise concerns about subtle behaviour change so the touched-when-edited approach is safer.
+  - **Affected:** `mission_state_tick.h` (~10 sites), `fault_manager.cpp` (~8), `geofence.cpp`, `gcs_command_handler.h`, etc.
+
+#### `tests/TESTS.md` total drift
+
+- **P3** — `docs` — `tests/TESTS.md` top table claims 2074 base tests on `feature/perception-v2-integration` HEAD. My `ctest -N` on `feature/cold-start-hardening` HEAD (= main = `629bdcc`) shows 2058 base. That's a 16-test gap between docs and reality, pre-existing the PR-A changes. Either tests aren't being compiled in a standard build, or TESTS.md is stale.
+  - **Suggested next step:** reconciliation pass in a separate PR — run `ctest -N` against a fresh `main` build, walk the per-suite counts, and update TESTS.md to match. Bonus: add a CI gate that diffs TESTS.md against `ctest -N` output.
+  - **Affected:** documentation accuracy only, no functional impact.
+
 ### 2026-05-13 (PR #735 ADR-014 — TWO classes of pre-existing breakage inherited from PR #729 perception-v2 merge)
 
 Caught while opening PR #735 (ADR-014 — SWVIO algorithm-selection + FTO §9). Format-check failed on PR-#735's branch but the failures are **inherited from `main`**, not introduced by PR #735. After fixing format-check, a **second** class of pre-existing breakage emerged — sanitizer test failures that the format-check failure had been **masking**.
@@ -397,6 +543,68 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
   2. Keep it local-only, require each PR author to paste a diff snippet into the PR body.
   3. Move the "update the design doc" line out of Universal AC into per-issue AC where applicable.
 - **Recommendation:** option 1 when we're comfortable the doc is public-facing.
+
+---
+
+### 2026-05-16 — PR #776 rollup review deferrals (cold-start hardening epic)
+
+The PR #776 (integration→main rollup of the cold-start hardening epic) review surfaced these items as P3 — valid suggestions we agreed with but chose not to bundle into the rollup. Each entry preserves the originating-review audit trail.
+
+#### 1. `std::to_string` in pose-stale escalation log (perf, hot path)
+
+- **Priority:** P3
+- **Category:** code quality / performance
+- **Source:** deferred from `review-performance` agent on PR #776 rollup review (pre-existing — not introduced by the epic, but flagged in the merged diff)
+- **Current state:** `process4_mission_planner/include/planner/fault_manager.h` emits `DRONE_LOG_WARN("Pose stale " + std::to_string(...) + "ms")` inside the 50 Hz fault-evaluate path. The string concatenation allocates per evaluate-cycle even when the fault is not active.
+- **Proposed fix:** switch to `DRONE_LOG_WARN("Pose stale {}ms", ms)` (fmt-style structured logging, already supported by the spdlog backend) — zero allocation on the non-trigger path.
+- **When worth doing:** when fault_manager telemetry shows the per-tick allocation cost in a profiler, or as part of a broader DRONE_LOG_* fmt-migration sweep.
+- **Why deferred:** pre-existing code, not introduced by the cold-start epic. Fixing in this rollup would expand the diff with no functional change to the epic itself.
+
+#### 2. `FAULT_FC_` vs `FAULT_PLANNER_` prefix inconsistency in fault catalogue
+
+- **Priority:** P3
+- **Category:** api-contract / naming
+- **Source:** deferred from `review-api-contract` agent on PR #776 rollup review
+- **Current state:** `common/ipc/include/ipc/ipc_types.h` fault flags use mixed prefixes — `FAULT_FC_PREFLIGHT_TIMEOUT`, `FAULT_FC_LINK_LOST` (FC-prefixed because the cause is the flight controller side) versus `FAULT_PLANNER_STALL`, `FAULT_VIO_LOST` (subsystem-prefixed). A reader can't infer the convention from the names alone.
+- **Proposed fix:** either drop the `FC_` infix to make all flags subsystem-prefixed (`FAULT_PREFLIGHT_TIMEOUT`, `FAULT_LINK_LOST`), OR add a doc-comment table at the top of the FaultFlags enum mapping each flag to its subsystem/owner. Option B is the no-code-churn fix.
+- **When worth doing:** when a new fault flag lands and the author has to pause to decide which convention to follow, OR if a GCS-side telemetry consumer is built that needs to filter by subsystem.
+- **Why deferred:** renaming touches >30 callsites across P4, P5, P7 + GCS protocol + scenario JSON expectations. Out of scope for a rollup PR.
+
+#### 3. `docs/tracking/BUG_FIXES.md` Fix #718 entry — file list completeness
+
+- **Priority:** P3
+- **Category:** docs (audit trail accuracy)
+- **Source:** deferred from `review-api-contract` agent on PR #776 rollup review
+- **Current state:** the Fix #718 entry in BUG_FIXES.md lists the planner_stall_handler files but omits the FaultManager constructor additions (`POSE_STALE_TIMEOUT_MS`, etc.) and the IPC type additions (FAULT_PLANNER_STALL bit).
+- **Proposed fix:** append the missing files to the Fix #718 entry's "Files changed" list.
+- **When worth doing:** in the next docs sweep, or when an audit (cert, post-mortem) traces a finding back through BUG_FIXES.md and the missing files matter.
+- **Why deferred:** BUG_FIXES.md is for the audit trail, not the diff. Cross-referencing files is a polish item.
+
+#### 4. `tests/TESTS.md` delta footnote attribution precision
+
+- **Priority:** P3
+- **Category:** docs (test inventory)
+- **Source:** deferred from `test-unit` agent on PR #776 rollup review
+- **Current state:** the latest TESTS.md update notes "+18 tests for cold-start hardening" but doesn't break down which test file added which count. A future maintainer can't tell from the footnote whether the 18 came from PR #743 (Layer 1+2) or PR #763 (Layer 4) or PR #775 (Layer 5).
+- **Proposed fix:** split the cold-start delta into per-PR footnotes:
+  - PR #741/#743 — Layer 1 ARM debounce (+N tests in `test_mission_state_tick.cpp`)
+  - PR #744/#750 — Layer 3 contact-sensor gate (+N tests in `test_contact_sensor_gate.cpp`)
+  - PR #752 — Layer 2 P3 INITIALIZING-skip (+N tests in `test_p3_pose_init.cpp`)
+  - PR #763 — Layer 4 settle gate (+N tests in `test_post_arm_settle.cpp`)
+  - PR #775 — Layer 5 planner-stall (+N tests in `test_planner_stall_handler.cpp`)
+- **When worth doing:** in the next TESTS.md sweep, or when a maintainer trying to git-bisect a test-count regression needs the attribution.
+- **Why deferred:** TESTS.md format is currently rolled-up-by-month. Per-PR attribution is a format change, not a rollup change.
+
+#### 5. End-to-end Layer 1→4 chain composition integration test
+
+- **Priority:** P3
+- **Category:** test-infra (integration coverage gap)
+- **Source:** deferred from `test-scenario` agent on PR #776 rollup review
+- **Current state:** each cold-start layer has unit tests for its individual gate (Layer 1 ARM debounce, Layer 2 INITIALIZING-skip, Layer 3 contact-sensor + stale-pose, Layer 4 attitude/velocity settle). There is no single integration test that runs a process-level fixture through all five gates in sequence with realistic cold-start timing (EKF2 flicker → INITIALIZING resolve → contact-sensor settle → ARM → settle gate → TAKEOFF).
+- **Proposed fix:** add `tests/integration/test_cold_start_chain.cpp` that drives a `MissionStateTick` instance through the full pre-flight sequence with a mocked `FCState` source that replays the recorded cold-start traces from the 5/5 smoke sweep on PR #763.
+- **When worth doing:** when a real bug crosses two layers (e.g. Layer 4 settles but Layer 2 hasn't really resolved) and we wish we had a regression test for the chain. File as a follow-up issue under epic #727 closeout.
+- **Why deferred:** integration test infrastructure (fixture, traces) is non-trivial; the 5/5 Gazebo sweep already validated the chain end-to-end at the scenario level for the epic merge.
+- **Action:** file as a new GitHub issue tagged `area:tests` `epic:727-followup` after the rollup merges.
 
 ---
 

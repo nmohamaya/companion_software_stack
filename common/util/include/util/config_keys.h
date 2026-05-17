@@ -385,6 +385,52 @@ inline constexpr const char* OVERSHOOT_PROXIMITY_FACTOR =
 inline constexpr const char* WAYPOINTS        = "mission_planner.waypoints";
 inline constexpr const char* STATIC_OBSTACLES = "mission_planner.static_obstacles";
 
+// Issue #740 (epic #727) — debounce window on `fc_state.armable` before
+// sending ARM.  Required because PX4's `health_all_ok` can flicker true
+// momentarily while EKF2 attitude is still settling on Gazebo cold-start.
+// Arming on a single-tick flicker produces asymmetric rotor spin-up.
+// 3.0 s default matches the StateTickConfig field default; settable per
+// scenario in config/default.json under `mission_planner`.
+inline constexpr const char* PREFLIGHT_ARMABLE_STABLE_S =
+    "mission_planner.preflight_armable_stable_s";
+
+// Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle gate.  PX4
+// can arm the instant its EKF2 checks scrape past threshold, before the
+// attitude estimate has converged; commanding TAKEOFF onto that marginal
+// state makes PX4's attitude controller fight a phantom tilt → asymmetric
+// rotor spin-up → sloppy / ground-contact takeoff (#746 smoke-sweep
+// evidence).  After `fc_state.armed`, the planner holds until the FC's own
+// attitude + velocity estimate proves stable for N consecutive FCState
+// observations.  Observation-counted (not wall-timed) so the gate is
+// RTF-immune in SITL.  `takeoff_settle_observations = 0` disables the gate
+// (legacy immediate takeoff) for headless dev / unit-test fixtures.
+inline constexpr const char* TAKEOFF_SETTLE_OBSERVATIONS =
+    "mission_planner.takeoff_settle_observations";
+inline constexpr const char* TAKEOFF_MAX_TILT_DEG     = "mission_planner.takeoff_max_tilt_deg";
+inline constexpr const char* TAKEOFF_MAX_VELOCITY_MPS = "mission_planner.takeoff_max_velocity_mps";
+
+// Issue #718 — PREFLIGHT timeout escalation.  When either Layer 1
+// (`armable` never stably true) or Layer 4 (post-ARM attitude/velocity
+// never settle) holds the FSM in PREFLIGHT for more than
+// `preflight_timeout_s`, the planner DISARMs the FC and transitions
+// FSM → IDLE, raising `FAULT_FC_PREFLIGHT_TIMEOUT` for GCS visibility.
+// `preflight_warn_s` (must be < preflight_timeout_s) promotes the
+// per-tick wait log from INFO to WARN so operators see the escalation
+// approaching.  Setting `preflight_timeout_s = 0` disables the timeout
+// entirely (legacy "hold forever" behaviour for headless dev / unit-
+// test fixtures).
+inline constexpr const char* PREFLIGHT_WARN_S    = "mission_planner.preflight_warn_s";
+inline constexpr const char* PREFLIGHT_TIMEOUT_S = "mission_planner.preflight_timeout_s";
+
+// Issues #718 / #765 — NAVIGATE-time planner-stall escalation uses the
+// existing `ThreadWatchdog` heartbeat-timeout for stuck-detection.
+// When the watchdog fires its stuck-callback for the `planning_loop`
+// thread, `PlannerStallHandler` sets a one-shot event flag that
+// FaultManager reads on the next `evaluate()` and raises
+// `FAULT_PLANNER_STALL` (escalating to LOITER — vehicle is in the
+// air, NEVER disarm).  No separate config key is needed because the
+// detection threshold IS the watchdog's heartbeat_timeout_s.
+
 namespace path_planner {
 inline constexpr const char* BACKEND            = "mission_planner.path_planner.backend";
 inline constexpr const char* RESOLUTION_M       = "mission_planner.path_planner.resolution_m";
@@ -584,9 +630,17 @@ inline constexpr const char* MAX_STUCK_COUNT   = "mission_planner.stuck_detector
 // Fault Manager (used by P4)
 // ═══════════════════════════════════════════════════════════
 namespace fault_manager {
-inline constexpr const char* POSE_STALE_TIMEOUT_MS = "fault_manager.pose_stale_timeout_ms";
-inline constexpr const char* BATTERY_WARN_PERCENT  = "fault_manager.battery_warn_percent";
-inline constexpr const char* BATTERY_CRIT_PERCENT  = "fault_manager.battery_crit_percent";
+inline constexpr const char* POSE_STALE_TIMEOUT_MS   = "fault_manager.pose_stale_timeout_ms";
+inline constexpr const char* BATTERY_WARN_PERCENT    = "fault_manager.battery_warn_percent";
+inline constexpr const char* BATTERY_RTL_PERCENT     = "fault_manager.battery_rtl_percent";
+inline constexpr const char* BATTERY_CRIT_PERCENT    = "fault_manager.battery_crit_percent";
+inline constexpr const char* FC_LINK_LOST_TIMEOUT_MS = "fault_manager.fc_link_lost_timeout_ms";
+inline constexpr const char* FC_LINK_RTL_TIMEOUT_MS  = "fault_manager.fc_link_rtl_timeout_ms";
+inline constexpr const char* LOITER_ESCALATION_TIMEOUT_S =
+    "fault_manager.loiter_escalation_timeout_s";
+inline constexpr const char* VIO_QUALITY_LOITER_THRESHOLD =
+    "fault_manager.vio_quality_loiter_threshold";
+inline constexpr const char* VIO_QUALITY_RTL_THRESHOLD = "fault_manager.vio_quality_rtl_threshold";
 }  // namespace fault_manager
 
 // ═══════════════════════════════════════════════════════════

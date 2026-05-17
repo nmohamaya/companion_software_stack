@@ -17,9 +17,12 @@
 #include "planner/mission_fsm.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
+#include "util/math_constants.h"
 #include "util/scoped_timer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -50,14 +53,98 @@ struct StateTickConfig {
     // mission_planner.obstacle_avoidance.influence_radius_m.
     float avoider_influence_radius_m = 5.0f;
 
-    // Issue #716 — PREFLIGHT ARM gating timings.  Both are exposed via
-    // `drone::Config` (mission_planner.preflight.*).  Defaults match the
-    // values empirically validated on scenario 18:
+    // Issue #716 — PREFLIGHT ARM gating timings.  Defaults match the values
+    // empirically validated on scenario 18:
     //   - 3 s ARM retry: short enough to recover within a few ticks if PX4
     //     drops an ARM message; long enough not to flood MAVLink.
     //   - 1 s wait log: visible to operators without spamming the log.
+    //
+    // **Currently NOT runtime-configurable.**  Despite the `mission_planner.
+    // preflight.*` shape that an operator might infer from the field names,
+    // these two are read straight from the struct defaults — `main.cpp` does
+    // not call `cfg.get<>()` for them, no entries exist in `config/default.
+    // json`, and no constants exist in `config_keys.h`.  Wiring them through
+    // `drone::Config` (so they can be tuned per-scenario) is tracked in
+    // `docs/tracking/IMPROVEMENTS.md` ("Sibling `cfg_key` constants for
+    // `preflight_arm_retry_s` / `preflight_wait_log_s` absent" — filed from
+    // the PR #741 review).  Surfaced again by the PR #763 (Layer 4) review:
+    // the new `takeoff_settle_*` keys land alongside as genuinely
+    // config-backed, making the contrast stark.
     int preflight_arm_retry_s{3};
     int preflight_wait_log_s{1};
+
+    // Issue #740 (epic #727 Layer 1) — debounce window on `fc_state.armable`
+    // before sending ARM.  Required because PX4's `health_all_ok` flickers
+    // true momentarily on Gazebo cold-start while EKF2 attitude estimate is
+    // still settling (gyro/accel bias estimates wandering).  Arming on a
+    // single-tick flicker causes asymmetric mixer commands → asymmetric
+    // rotor spin-up → drone tips on ground.  Requiring N consecutive seconds
+    // of continuous `armable=true` ensures EKF2 has actually converged before
+    // we hand control to PX4's arming flow.  3 s default chosen empirically:
+    // long enough to wait out the worst-case settling window observed across
+    // scenarios 02, 17, 18, 25, 26 (#727 reproduction matrix); short enough
+    // to keep mission startup latency acceptable on well-conditioned boots.
+    float preflight_armable_stable_s{3.0f};
+
+    // Issue #740 (epic #727 Layer 4) — post-ARM, pre-TAKEOFF settle gate.
+    // The #741 `armable` debounce (above) proved necessary-but-insufficient:
+    // the #746 smoke sweep showed PX4 can report armed with a marginal EKF2
+    // attitude estimate, and commanding TAKEOFF onto that state makes PX4's
+    // attitude controller fight a phantom tilt error → asymmetric rotor
+    // spin-up → the drone skids sideways instead of climbing.  Layer 4 holds
+    // after `fc_state.armed` until the FC's *own* attitude + velocity
+    // estimate proves stable: `|roll|` and `|pitch|` within
+    // `takeoff_max_tilt_deg`, `sqrt(vx²+vy²+vz²)` within
+    // `takeoff_max_velocity_mps`, for `takeoff_settle_observations`
+    // *consecutive* FCState observations.  Any excursion resets the counter
+    // — the estimate must settle continuously, not cumulatively.
+    //
+    // **Observation-counted, not wall-timed** — deliberately.  The companion
+    // runs on wall-clock; Gazebo+PX4-SITL run on sim-time.  A wall-timed gate
+    // under real-time-factor < 1 would under-wait in sim-time.  Counting
+    // FCState observations is RTF-immune: PX4 paces FCState publication in
+    // sim-time, so N observations is N observations regardless of RTF, and
+    // the gate behaves identically in SITL and on real hardware.
+    //
+    // **Default:** 30 observations (~0.6 s at a 50 Hz FCState rate).
+    // **Disable:** `takeoff_settle_observations = 0` collapses to legacy
+    // immediate-takeoff-on-armed — used by headless dev configs and the
+    // unit-test fixture so tests exercising post-TAKEOFF behaviour don't
+    // need to feed a settled FCState attitude stream.
+    int   takeoff_settle_observations{30};
+    float takeoff_max_tilt_deg{5.0f};
+    float takeoff_max_velocity_mps{0.3f};
+
+    // Issue #718 — PREFLIGHT timeout escalation.  If either Layer 1
+    // (`fc_state.armable` never stably true) or Layer 4 (post-ARM
+    // attitude/velocity never settle) holds the FSM in PREFLIGHT for
+    // more than `preflight_timeout_s` wall-clock seconds, the planner:
+    //   1. emits FCCommandType::DISARM (cheap action — drone is on the
+    //      ground or motors at idle, NEVER in flight from PREFLIGHT),
+    //   2. transitions FSM → IDLE via `fsm.on_landed()` (the existing
+    //      IDLE entry path),
+    //   3. raises a single-shot event consumed by main.cpp on the next
+    //      `FaultManager.evaluate()` to set `FAULT_FC_PREFLIGHT_TIMEOUT`
+    //      for GCS visibility.  PR #775 review fix: the FaultManager
+    //      setter is OR-latched (see fault_manager.h::set_preflight_timeout)
+    //      so the bit persists in `active_faults` across all subsequent
+    //      evaluate() calls until `reset()` — GCS polling at 500 ms–1 s
+    //      reliably observes the fault despite the planner ticking at
+    //      10 Hz.  Pre-fix it was visible for one tick only.
+    //
+    // `preflight_warn_s` (must be < `preflight_timeout_s`) promotes
+    // the per-tick "Waiting for FC preflight" log from INFO to WARN so
+    // operators see the escalation approaching before it fires.
+    //
+    // Both keys default to "0 disables the escalation entirely" so
+    // legacy unit-test fixtures (and headless dev configs that don't
+    // want timeouts firing during interactive debugging) can keep the
+    // existing hold-forever behaviour.  Production configs MUST set
+    // a non-zero timeout — see CLAUDE.md §"Asymmetric pre-conditions
+    // for asymmetric-cost actions": a stuck-in-PREFLIGHT drone with
+    // no operator alert is a silent-failure mode.
+    int preflight_warn_s{30};
+    int preflight_timeout_s{60};
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -124,6 +211,16 @@ public:
             }
         }
 
+        // Issue #718 — reset PREFLIGHT timeout tracking on the trailing
+        // edge of any PREFLIGHT exit (success via takeoff, or GCS abort,
+        // or our own timeout-induced abort).  Without this, a future
+        // re-entry to PREFLIGHT would inherit a stale `preflight_held_since_ns_`
+        // and fire the timeout almost immediately.
+        if (last_tick_state_ == MissionState::PREFLIGHT && fsm.state() != MissionState::PREFLIGHT) {
+            reset_preflight_timer();
+        }
+        last_tick_state_ = fsm.state();
+
         // No `default:` — exhaustive switch enables -Wswitch to catch new
         // MissionState values the moment they're added (CLAUDE.md safety rule).
         switch (fsm.state()) {
@@ -161,6 +258,17 @@ public:
         return v;
     }
 
+    /// Issue #718 — single-shot event flag.  Set by `tick_preflight()`
+    /// when the PREFLIGHT-stuck timer fires (after DISARMing + FSM → IDLE).
+    /// main.cpp reads + clears this each tick and passes the boolean into
+    /// `FaultManager::set_preflight_timeout()` so the next `evaluate()`
+    /// raises FAULT_FC_PREFLIGHT_TIMEOUT for GCS visibility.
+    [[nodiscard]] bool consume_preflight_timeout_event() {
+        bool v                   = preflight_timeout_fired_;
+        preflight_timeout_fired_ = false;
+        return v;
+    }
+
 private:
     StateTickConfig   config_;
     SharedFlightState flight_state_;
@@ -181,14 +289,61 @@ private:
     float                                 survey_start_yaw_ = 0.0f;
     uint64_t                              survey_log_tick_  = 0;
 
-    std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
-                                                           std::chrono::seconds(10);
-    // Issue #716 — wait-log throttle separate from `last_arm_time_` so the
-    // first ARM fires immediately when `fc_state.armable` transitions from
-    // false to true (without being gated by a stale arm-retry interval that
-    // was last touched by the wait-log path).
-    std::chrono::steady_clock::time_point last_wait_log_time_ = std::chrono::steady_clock::now() -
-                                                                std::chrono::seconds(10);
+    // Issue #716 + #740 — PREFLIGHT timing state.  All three throttles below
+    // share a single clock domain (`drone::util::get_clock().now_ns()`) so
+    // unit tests with `ScopedMockClock` can drive every PREFLIGHT timer
+    // deterministically.  Sentinel `0` means "never fired / not currently
+    // tracking" — interpreted as "infinitely far in the past" by the elapsed
+    // checks, so the first observation always passes the retry / wait-log
+    // thresholds.  Issue #740 PR-A review (PR #743) consolidated these from
+    // a mix of `std::chrono::steady_clock` and `drone::util::get_clock()` to
+    // close the test-mockability gap flagged by 4 of 9 review agents.
+    uint64_t last_arm_time_ns_      = 0;  // last time ARM command was emitted
+    uint64_t last_wait_log_time_ns_ = 0;  // last time the "waiting for FC" log fired
+
+    // Issue #740 — first observation of `fc_state.armable == true` since the
+    // last `armable == false` transition.  Used to debounce the ARM trigger
+    // against momentary `health_all_ok` flickers on Gazebo cold-start.  Zero
+    // means "not currently observing armable=true" (either we never have, or
+    // it dropped back to false and reset the timer).
+    uint64_t armable_first_seen_ns_ = 0;
+
+    // Issue #740 (epic #727 Layer 4) — count of consecutive armed-state
+    // FCState observations where attitude + velocity have been within the
+    // takeoff-settle thresholds.  Incremented per settled tick.  Reset to 0
+    // on:
+    //   (a) any excursion (attitude/velocity outside thresholds, or
+    //       non-finite from the FC),
+    //   (b) `fc_state.armed` going false (disarm / re-PREFLIGHT), and
+    //   (c) the gate-disabled path firing takeoff
+    //       (`takeoff_settle_observations == 0`) — for documentation
+    //       completeness; the counter is a no-op in that branch since it
+    //       never had a chance to grow.
+    // Takeoff fires once it reaches `config_.takeoff_settle_observations`.
+    uint32_t armed_settle_count_ = 0;
+
+    // Issue #718 — PREFLIGHT timeout escalation tracking.
+    // `preflight_held_since_ns_` = wall time of the first tick the FSM
+    // entered (or returned to) PREFLIGHT.  Zero = "not currently in a
+    // PREFLIGHT hold."  Reset on (a) successful release via
+    // `fsm.on_takeoff()`, (b) the timeout firing (we transition to IDLE),
+    // and (c) the outer-tick state-exit detector below (if the FSM
+    // leaves PREFLIGHT for any other reason — GCS abort, etc.).
+    // `preflight_last_warn_log_ns_` throttles the WARN-promoted log so
+    // it fires once per `preflight_wait_log_s` after the warn threshold.
+    // `preflight_timeout_fired_` is a single-shot event flag for
+    // `consume_preflight_timeout_event()` — main.cpp reads + clears it
+    // each tick and passes the boolean into `FaultManager.set_preflight_timeout()`.
+    uint64_t preflight_held_since_ns_    = 0;
+    uint64_t preflight_last_warn_log_ns_ = 0;
+    bool     preflight_timeout_fired_    = false;
+
+    // Issue #718 — tracks the previous tick's FSM state so we can detect
+    // PREFLIGHT exit on the *trailing* edge and clear `preflight_held_since_ns_`.
+    // Without this, a GCS-induced abort (PREFLIGHT → IDLE) would leave
+    // the timer set, and a future re-entry to PREFLIGHT would inherit a
+    // stale elapsed window and fire the timeout immediately.
+    MissionState last_tick_state_ = MissionState::IDLE;
 
     // Collision recovery state (Issue #226)
     enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
@@ -224,6 +379,41 @@ private:
             std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
     }
 
+    // Issue #740 / PR #743 review (code-quality P2): the PREFLIGHT block
+    // had three near-identical inline throttle checks of the form
+    //   if (last_ns == 0 || now_ns < last_ns || (now_ns - last_ns) >= period_ns)
+    // — sentinel-0 "never fired", backward-clock guard (for mock-clock
+    // resets / host clock skew), and elapsed-period.  Extracted to one
+    // helper so the four-condition contract (including the `last_ns =
+    // now_ns` update) is documented in one place.
+    //
+    // Note: this is NOT the same as the `armable_first_seen_ns_` window-
+    // start pattern in `tick_preflight` — that one starts a window with
+    // just sentinel-0 + backward-clock guards (no elapsed-period check
+    // because the window is the point of the gate, not a throttle).
+    //
+    // Returns true and updates `last_ns` to `now_ns` if the throttle should
+    // fire this tick.  Returns false (without modifying `last_ns`) otherwise.
+    static bool fire_throttled(uint64_t& last_ns, uint64_t now_ns, uint64_t period_ns) {
+        if (last_ns == 0 || now_ns < last_ns || (now_ns - last_ns) >= period_ns) {
+            last_ns = now_ns;
+            return true;
+        }
+        return false;
+    }
+
+    // Issue #718 / PR #775 review (code-quality P2): the two PREFLIGHT
+    // timeout-tracking fields move together — reset one, reset the other,
+    // or the warn-log throttle gets out of sync with the held-since
+    // timestamp.  Extracted to a one-liner so all four reset sites
+    // (outer-tick state-exit detector, timeout-fired path, gate-disabled
+    // takeoff success, Layer 4 settle success) can't accidentally diverge
+    // if a third field is added later.
+    void reset_preflight_timer() {
+        preflight_held_since_ns_    = 0;
+        preflight_last_warn_log_ns_ = 0;
+    }
+
     // ── PREFLIGHT: wait for FC readiness, then ARM (retry on configurable
     //               interval as a safety net for dropped MAVLink messages) ──
     //
@@ -237,8 +427,27 @@ private:
     // as a safety net for the rare case PX4 drops the ARM message after
     // armable went high.
     //
+    // Issue #740 (epic #727) — momentary `armable=true` is not enough.
+    // PX4's `health_all_ok` can flicker through OK while EKF2 attitude is
+    // still settling (gyro/accel bias estimates wandering for the first
+    // 1-15 s after spawn).  Arming on a single-tick flicker produces
+    // asymmetric mixer commands and the drone tips on the ground at
+    // takeoff.  We require `preflight_armable_stable_s` of *continuous*
+    // `armable=true` before sending ARM.  Any drop back to false resets
+    // `armable_first_seen_ns_` and restarts the stability window.
+    //
+    // **Default:** `preflight_armable_stable_s = 3.0 s` (production tuning).
+    // **Disable:** setting `preflight_armable_stable_s = 0.0` collapses the
+    // gate to legacy single-tick behaviour (ARM fires on first `armable=true`
+    // tick) — used by headless dev configs and the existing unit-test fixture
+    // (`make_default_test_config()` in `tests/test_mission_state_tick.cpp`)
+    // so tests that exercise post-PREFLIGHT behaviour don't need to drive
+    // a mock clock.  Production configs MUST keep the gate enabled (≥1 s) —
+    // see CLAUDE.md §"FSM transitions emitting physical FC commands must be
+    // debounced".
+    //
     // **No timeout / no fault escalation** (review-fault-recovery P2):
-    // if `armable` never becomes true (e.g. PX4 EKF stuck, MAVSDK
+    // if `armable` never becomes stably true (e.g. PX4 EKF stuck, MAVSDK
     // subscription silently lost, hardware sensor genuinely faulty), the
     // FSM remains in PREFLIGHT indefinitely with only the 1 Hz "Waiting
     // for FC preflight" INFO log.  FaultManager evaluates `fc_connected`
@@ -247,32 +456,233 @@ private:
     // FAULT_FC_PREFLIGHT_TIMEOUT is tracked as #718.
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
                         const FCSendFn& send_fc) {
-        if (fc_state.armed) {
-            DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
-            fsm.on_takeoff();
-            takeoff_sent_ = false;
+        // PR #741 review (4 agents convergent): use a single clock domain
+        // (`drone::util::get_clock()`) for ALL PREFLIGHT timing so unit tests
+        // with `ScopedMockClock` can drive every throttle deterministically.
+        // One `now_ns` capture per tick — cheap (one atomic load + virtual
+        // call), and `tick_preflight()` exits PREFLIGHT after a few seconds
+        // so this isn't a sustained hot path.
+        const uint64_t now_ns = drone::util::get_clock().now_ns();
+
+        // ── Issue #718 — PREFLIGHT timeout escalation ──────────
+        // Track continuous time held in PREFLIGHT and DISARM + abort
+        // to IDLE if `preflight_timeout_s` elapses without release.
+        // Covers BOTH Layer 1 (`armable` never stably true) and Layer 4
+        // (post-ARM attitude/velocity never settle) — neither layer
+        // released, no point in keeping the FSM held with no operator
+        // visibility past the configured budget.  Per CLAUDE.md
+        // "Asymmetric pre-conditions for asymmetric-cost actions",
+        // the recovery action is DISARM (cheap: drone is on the
+        // ground or motors at idle — NEVER in flight from PREFLIGHT)
+        // rather than LOITER (which is the mid-flight response and
+        // makes no sense pre-takeoff).
+        //
+        // Sentinel `0` = "not currently tracking" — set on first tick
+        // in PREFLIGHT, reset by the outer-tick state-exit detector
+        // (in `tick()`) and by the takeoff-success paths below.
+        // Clock-rewind guard mirrors the `armable_first_seen_ns_`
+        // pattern (PR #743 review): a MockClock manual reset must
+        // restart the window, not produce a wrapped-uint underflow.
+        if (preflight_held_since_ns_ == 0 || now_ns < preflight_held_since_ns_) {
+            preflight_held_since_ns_    = now_ns;
+            preflight_last_warn_log_ns_ = 0;  // fresh window, fresh WARN throttle
+        }
+        const uint64_t held_ns = now_ns - preflight_held_since_ns_;
+        const uint64_t timeout_ns =
+            static_cast<uint64_t>(std::max(0, config_.preflight_timeout_s)) * 1'000'000'000ULL;
+        const uint64_t warn_ns = static_cast<uint64_t>(std::max(0, config_.preflight_warn_s)) *
+                                 1'000'000'000ULL;
+
+        if (timeout_ns > 0 && held_ns > timeout_ns) {
+            // Timeout fired — abort PREFLIGHT.  Emit DISARM (cheap: pre-
+            // takeoff), transition FSM → IDLE via the existing IDLE entry
+            // path, and raise the single-shot event for main.cpp to
+            // propagate as FAULT_FC_PREFLIGHT_TIMEOUT on the next
+            // `FaultManager.evaluate()`.
+            DRONE_LOG_ERROR("[Planner] PREFLIGHT timeout — held for {:.1f}s without release "
+                            "(armable={}, armed={}); DISARMing and aborting to IDLE. "
+                            "FAULT_FC_PREFLIGHT_TIMEOUT will be raised for GCS.",
+                            static_cast<double>(held_ns) * 1e-9, fc_state.armable, fc_state.armed);
+            send_fc(drone::ipc::FCCommandType::DISARM, 0.0f);
+            fsm.on_landed();  // FSM → IDLE (existing entry path)
+            preflight_timeout_fired_ = true;
+            reset_preflight_timer();  // avoid immediate re-fire on re-entry
+            armable_first_seen_ns_ = 0;
+            armed_settle_count_    = 0;
             return;
         }
-        const auto now = std::chrono::steady_clock::now();
+
+        // Warn threshold reached but not yet timeout — promote the
+        // per-tick wait log from INFO to WARN so operators see the
+        // escalation approaching.  Throttled on `preflight_wait_log_s`
+        // (separate from the Layer 1 `last_wait_log_time_ns_` INFO
+        // throttle so an operator monitoring at WARN sees both the
+        // promotion edge and the per-tick state without flooding).
+        if (warn_ns > 0 && held_ns > warn_ns) {
+            const uint64_t warn_log_interval_ns =
+                static_cast<uint64_t>(std::max(0, config_.preflight_wait_log_s)) * 1'000'000'000ULL;
+            if (fire_throttled(preflight_last_warn_log_ns_, now_ns, warn_log_interval_ns)) {
+                DRONE_LOG_WARN(
+                    "[Planner] PREFLIGHT held for {:.1f}s (warn at {}s, timeout at {}s) — "
+                    "armable={}, armed={}",
+                    static_cast<double>(held_ns) * 1e-9, config_.preflight_warn_s,
+                    config_.preflight_timeout_s, fc_state.armable, fc_state.armed);
+            }
+        }
+
+        if (fc_state.armed) {
+            // Issue #740 (epic #727) Layer 4 — post-ARM, pre-TAKEOFF settle
+            // gate.  The #746 smoke sweep proved the #741 `armable` debounce
+            // is necessary-but-insufficient: PX4 can report armed with a
+            // marginal EKF2 attitude estimate, and commanding TAKEOFF onto
+            // that state makes PX4's attitude controller fight a phantom
+            // tilt → asymmetric rotor spin-up → the drone skids sideways
+            // instead of climbing.  Hold until the FC's own attitude +
+            // velocity estimate proves stable for N *consecutive* FCState
+            // observations.  Observation-counted (not wall-timed) → RTF-immune
+            // in SITL (see StateTickConfig::takeoff_settle_observations).
+            //
+            // PR #763 review (Copilot): clear `armable_first_seen_ns_` here.
+            // The pre-ARM debounce window has served its purpose by the time
+            // we observe `armed=true`, so leaving it set leaves a stale
+            // timestamp that — if the drone disarms while still in the Layer
+            // 4 settle gate (operator intervention, mid-PREFLIGHT fault) —
+            // would fall back to the armable code below with `(now -
+            // first_seen) >= window` immediately satisfied, letting the next
+            // ARM fire on a single armable=true tick without re-debouncing.
+            // Resetting on the armed-observed edge closes that re-arm path.
+            armable_first_seen_ns_  = 0;
+            const int settle_target = config_.takeoff_settle_observations;
+            if (settle_target <= 0) {
+                // Gate disabled by config — legacy immediate takeoff.
+                DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
+                fsm.on_takeoff();
+                takeoff_sent_       = false;
+                armed_settle_count_ = 0;
+                // PR #775 review (code-quality P2.6): redundant
+                // `armable_first_seen_ns_ = 0` removed — already cleared
+                // at the top of the `if (fc_state.armed)` block (see
+                // "Copilot fix" comment ~30 lines up).
+                //
+                // Issue #718 — release on successful takeoff fires.
+                // Defence-in-depth: the outer-tick state-exit detector
+                // in `tick()` would catch the PREFLIGHT → TAKEOFF edge
+                // on the next tick, but resetting here makes the intent
+                // explicit and avoids relying on the dispatch order.
+                reset_preflight_timer();
+                return;
+            }
+
+            const float tilt_limit = std::max(0.0f, config_.takeoff_max_tilt_deg);
+            const float vel_limit  = std::max(0.0f, config_.takeoff_max_velocity_mps);
+            const float roll_deg   = std::abs(fc_state.roll) * drone::util::kRadToDeg;
+            const float pitch_deg  = std::abs(fc_state.pitch) * drone::util::kRadToDeg;
+            const float vel_mag = std::sqrt(fc_state.vx * fc_state.vx + fc_state.vy * fc_state.vy +
+                                            fc_state.vz * fc_state.vz);
+            const bool  attitude_settled = std::isfinite(roll_deg) && std::isfinite(pitch_deg) &&
+                                          std::isfinite(vel_mag) && roll_deg <= tilt_limit &&
+                                          pitch_deg <= tilt_limit && vel_mag <= vel_limit;
+
+            if (attitude_settled) {
+                ++armed_settle_count_;
+                if (armed_settle_count_ >= static_cast<uint32_t>(settle_target)) {
+                    DRONE_LOG_INFO("[Planner] Armed + attitude settled ({} obs: roll={:.1f}° "
+                                   "pitch={:.1f}° |v|={:.2f}m/s) — initiating takeoff",
+                                   armed_settle_count_, roll_deg, pitch_deg, vel_mag);
+                    fsm.on_takeoff();
+                    takeoff_sent_       = false;
+                    armed_settle_count_ = 0;
+                    // PR #775 review (code-quality P2.6): redundant
+                    // `armable_first_seen_ns_ = 0` removed — already
+                    // cleared at the top of the `if (fc_state.armed)`
+                    // block 50+ lines up.
+                    //
+                    // Issue #718 — release on successful Layer 4 takeoff.
+                    reset_preflight_timer();
+                    return;
+                }
+                // Still accumulating consecutive settled observations.
+                return;
+            }
+
+            // Excursion — attitude/velocity outside thresholds (or non-finite).
+            // Reset the counter: the FC estimate must settle *continuously*,
+            // not cumulatively.  Log once per excursion-onset (count > 0) so a
+            // sustained-unsettled FC doesn't spam, but operators see why
+            // takeoff is being withheld.
+            //
+            // PR #763 review (fault-recovery P2): logged at WARN — the drone
+            // is armed (motors potentially spinning at idle) and the FC's
+            // attitude estimate is moving outside safety thresholds.  That's
+            // a degraded condition, not routine status.  An operator
+            // monitoring at INFO would otherwise miss the excursion pattern
+            // entirely.
+            if (armed_settle_count_ > 0) {
+                DRONE_LOG_WARN(
+                    "[Planner] Armed but attitude not settled (roll={:.1f}° pitch={:.1f}° "
+                    "|v|={:.2f}m/s; limits tilt={:.1f}° vel={:.2f}m/s) — settle counter reset",
+                    roll_deg, pitch_deg, vel_mag, tilt_limit, vel_limit);
+            }
+            armed_settle_count_ = 0;
+            return;
+        }
+        // Not armed — clear the Layer 4 settle counter so a future arm starts
+        // a fresh consecutive-observation window (covers disarm + re-PREFLIGHT).
+        // `now_ns` captured at top of function (see PR #741 review comment).
+        armed_settle_count_ = 0;
         if (!fc_state.armable) {
             // FC preflight not yet clear (EKF2 converging, sensors warming,
-            // GPS lock acquiring, etc.).  Log on the configurable wait-log
-            // throttle so operators can see we are waiting on the FC and
-            // not stuck.  Uses a separate throttle from `last_arm_time_`
-            // so the first ARM fires immediately once `armable` transitions
-            // to true.
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_wait_log_time_)
-                    .count() >= config_.preflight_wait_log_s) {
+            // GPS lock acquiring, etc.).  Reset the stability tracker — any
+            // future `armable=true` will start a fresh window.  Log on the
+            // configurable wait-log throttle so operators can see we are
+            // waiting on the FC and not stuck.  Uses a separate throttle
+            // from `last_arm_time_ns_` so the first ARM fires promptly once
+            // `armable` transitions to true and stays true through the
+            // stability window.
+            armable_first_seen_ns_ = 0;
+            const uint64_t wait_log_interval_ns =
+                static_cast<uint64_t>(std::max(0, config_.preflight_wait_log_s)) * 1'000'000'000ULL;
+            if (fire_throttled(last_wait_log_time_ns_, now_ns, wait_log_interval_ns)) {
                 DRONE_LOG_INFO("[Planner] Waiting for FC preflight (armable=false)");
-                last_wait_log_time_ = now;
             }
             return;
         }
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_arm_time_).count() >=
-            config_.preflight_arm_retry_s) {
-            DRONE_LOG_INFO("[Planner] FC armable — sending ARM command");
+
+        // armable == true — apply the #740 stability debounce.  First-time
+        // observation starts the window; subsequent observations check
+        // elapsed time against the configured threshold.
+        const uint64_t window_ns = static_cast<uint64_t>(
+            std::max(0.0, static_cast<double>(config_.preflight_armable_stable_s) * 1e9));
+
+        // First observation of armable=true since the last reset.  Start
+        // the window.  Guard against the unsigned-subtraction trap if the
+        // clock runs backward (e.g. ScopedMockClock manual reset or
+        // pathological host clock skew) by treating it as a fresh start.
+        if (armable_first_seen_ns_ == 0 || now_ns < armable_first_seen_ns_) {
+            armable_first_seen_ns_ = now_ns;
+            if (window_ns > 0) {
+                DRONE_LOG_INFO(
+                    "[Planner] FC armable=true — beginning {:.1f}s stability gate before ARM",
+                    config_.preflight_armable_stable_s);
+                return;  // wait for the window to elapse on a subsequent tick
+            }
+            // window == 0: gate disabled by config — fall through and ARM
+            // on this very tick (preserves legacy single-tick behaviour for
+            // headless dev / unit tests that don't exercise the debounce).
+        } else if ((now_ns - armable_first_seen_ns_) < window_ns) {
+            // Still within stability window — defer ARM.
+            return;
+        }
+
+        // Stability window satisfied — apply the existing ARM-retry throttle
+        // (Issue #716) so duplicate ARMs aren't issued within `preflight_arm_
+        // retry_s` of each other.
+        const uint64_t retry_interval_ns =
+            static_cast<uint64_t>(std::max(0, config_.preflight_arm_retry_s)) * 1'000'000'000ULL;
+        if (fire_throttled(last_arm_time_ns_, now_ns, retry_interval_ns)) {
+            DRONE_LOG_INFO("[Planner] FC armable stable for {:.1f}s — sending ARM command",
+                           static_cast<double>(now_ns - armable_first_seen_ns_) * 1e-9);
             send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
-            last_arm_time_ = now;
         }
     }
 

@@ -31,12 +31,20 @@ When working on any task, **always look for and suggest improvements** you notic
 
 Flag these as suggestions (don't silently implement them). Use your judgement on severity — mention critical issues immediately, batch minor suggestions at the end of your response.
 
-**Where deferred items are logged:** two destinations, never mixed:
+**Where deferred items are logged:** two destinations, never mixed. The distinction is *why* something is being deferred, not *who* surfaced it:
 
 - **Proactive findings I noticed myself** (not in response to a review comment) → `docs/tracking/IMPROVEMENTS.md`. Backlog of nice-to-haves for quiet windows. Entries are dated, prioritised (P1/P2/P3), categorised, and moved to a **Resolved** section with a PR/commit reference once addressed.
-- **Declining or disagreeing with a review comment** (from agents, Copilot, or humans) → `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. This is the audit trail proving the comment was evaluated and the call was intentional.
+- **Review-comment items "considered and chose otherwise"** (from agents, Copilot, or humans — we evaluated both paths and intentionally rejected the suggestion) → `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. The DR documents the question, arguments for both sides, our decision, and when to revisit. This is the audit trail proving the comment was evaluated and the call was intentional.
+- **Review-comment items "valid but deferred"** (we agree with the suggestion but choose not to do it in this PR) → `docs/tracking/IMPROVEMENTS.md` with **explicit cross-reference to the originating review** (`PR #N + agent name + severity`). The cross-reference preserves the audit trail without conflating "we'll do it later" with "we considered and declined".
 
-When writing "Review Fixes" tables on a PR and marking an item deferred, always include a DR-NNN reference. When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
+**The fork between DR-NNN and IMPROVEMENTS.md for review-comment declines:**
+
+- If your response is *"yes valid, will do later"* → IMPROVEMENTS.md with a "When to do it" trigger and a cross-ref to the review comment.
+- If your response is *"we considered both paths and chose this one because X"* → DR-NNN with both-sides analysis, decision rationale, and revisit conditions.
+
+The first case is a backlog item; the second is a design decision. Conflating them inflates DR-NNN with low-substance entries and devalues the format for genuine design decisions. (This distinction was clarified in PR #743 after the PR #741 review surfaced 4 deferred items, only 1 of which was a genuine design decision.)
+
+When writing "Review Fixes" tables on a PR and marking an item deferred, always include either a DR-NNN reference (for design declines) or an IMPROVEMENTS.md reference (for backlog deferrals). When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
 
 **Safety issues are critical** — any memory safety violations, undefined behaviour, race conditions, missing error handling on flight-critical paths, or other issues that could cause loss of vehicle must be reported to the user **immediately** when noticed, not batched.
 
@@ -66,7 +74,7 @@ All executables land in `build/bin/`.
 
 **After any clean rebuild (`rm -rf build/*`):**
 1. Reconfigure with the canonical command above
-2. Verify test count: from the repo root, run `ctest -N --test-dir build | grep "Total Tests:"` (or `ctest -N` from inside `build/`). It must match the current baseline in [tests/TESTS.md](tests/TESTS.md) (single source of truth — do not hardcode the number here).
+2. Verify test count: from the repo root, run `ctest -N --test-dir build | grep "Total Tests:"` (or `ctest -N` from inside `build/`). It must match the current baseline recorded in [tests/TESTS.md](tests/TESTS.md) (the **Total** row, single source of truth — do not hardcode the number here, every PR that adds tests would otherwise drift this file and turn the check into false confidence).
 
 ## Test Commands
 
@@ -100,7 +108,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches baseline in [tests/TESTS.md](tests/TESTS.md) (single source of truth)
+- [ ] Test count matches baseline in [tests/TESTS.md](tests/TESTS.md) (single source of truth — do not hardcode the number here)
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 
@@ -374,6 +382,14 @@ This is a **safety-critical drone software stack**. Use appropriate C++ construc
 - **Avoid:** Recursive mutexes (restructure code instead), `memory_order_relaxed` without justification, bare `lock()`/`unlock()` calls.
 
 **Observability on flight-critical threads:** Mutex-protected observability primitives (loggers, profilers, metrics collectors — e.g. `LatencyProfiler`, `JsonLogSink`) SHOULD NOT be called from flight-critical or real-time threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog touch paths) *without documented justification*. The default hazards are (a) **priority inversion** — a lower-priority thread holding the observability mutex can block a higher-priority control thread, and (b) **observation affecting measurement** — the mutex cost contaminates the latency being measured. If a control-loop thread needs to emit telemetry, the preferred pattern is to buffer into a lock-free primitive (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. If mutex-protected observability is used on a real-time thread anyway (e.g. benchmark-harness profiler wiring), record the analysis as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` showing (1) all recorders share similar priority (no inversion risk), (2) mutex-hold-time is bounded and dominated by the measured work, and (3) the usage is gated behind an explicit configuration flag so production builds don't pay the cost. Each observability primitive's header must document the constraint (e.g. "For >10 kHz hot loops, prefer `LatencyTracker` directly").
+
+**FSM transitions emitting physical FC commands must be debounced (Issue #740 / Epic #727):** Any planner FSM transition that emits a physical FC command (ARM, TAKEOFF, LAND, RTL — anything that moves the drone or commits the motors) MUST require multi-tick or multi-second confirmation of its gating state on `fc_state.*`. Single-tick triggers on FC fields (`armable`, `armed`, `connected`, `battery_*`, geofence breach) are forbidden. **Why:** external systems (PX4, MAVSDK, sensors) flicker state momentarily during cold-start, EKF2 settling, GPS lock acquisition, sensor reinitialisation. PR #717 added the per-tick `armable` check; today's #740 evidence proved one tick wasn't enough — asymmetric rotor spin-up on 3-of-6 cold-starts. The pattern applies to every FC-state-driven transition: gate on continuous-true-for-N-seconds, reset the tracker on any drop to false, expose `N` via `drone::Config`. Use `drone::util::get_clock().now_ns()` (not `steady_clock` direct) so the debounce is unit-testable.
+
+**Cold-start data hygiene — don't trust first observations from external systems (Issue #740 / Epic #727):** Any data received from external systems (FC state, VIO pose, sensor messages, IPC subscribers) within N seconds of process start MUST be treated as suspect. Require either (a) a multi-observation confirmation that the value is stable, (b) a multi-second age before acting on it for physical control, or (c) a publisher-side timestamp check that proves the data was generated *after* this process's birth. **Why:** three distinct mechanisms produce the same symptom — Zenoh last-value cache delivering historic messages after a subscriber re-connect (#720/#722); cold-start EKF2 flicker producing momentary `health_all_ok=true` before the estimate has actually converged (#727/#740); VIO backends in `INITIALIZING` state publishing fresh-stamped zero-poses before their first real measurement (#727 Layer 2). One rule covers all three: **first observations are suspect, multi-observation or age-guard is the production pattern**.
+
+**Asymmetric pre-conditions for asymmetric-cost actions:** Irreversible or destructive actions (ARM motors, TAKEOFF, LAND, geofence-breach RTL, fault-induced LOITER) MUST have stricter pre-conditions than reversible ones (hover-in-place, replan, log warning). Cost of premature ARM = ground damage / lost vehicle; cost of premature LOITER = a pause that recovers when the gate clears. Asymmetric error cost ↔ asymmetric verification rigor. When in doubt, escalate to LOITER instead of acting — a LOITER that turns out to be unnecessary is much cheaper than an ARM/TAKEOFF that turns out to be premature.
+
+**Mockable time mandatory for unit-testable time-dependent code (Issue #740 / Epic #727):** All time queries in `process[1-7]_*` code that's reachable from unit tests SHOULD go through `drone::util::get_clock().now_ns()`, not `std::chrono::steady_clock::now()` directly. Existing direct-`steady_clock` usage is grandfathered but should migrate to `get_clock()` whenever the surrounding code is touched. **Why:** untestable time = untestable safety logic. A debounce / timeout / window that can only be exercised by `std::this_thread::sleep_for(window_s)` in tests becomes either flaky-slow CI or simply un-tested. `ScopedMockClock` makes the same logic deterministic in microseconds. See `common/util/include/util/iclock.h` for the contract.
 
 ### Root Cause Analysis
 
