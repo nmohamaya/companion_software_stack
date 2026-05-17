@@ -322,6 +322,18 @@ private:
     // Takeoff fires once it reaches `config_.takeoff_settle_observations`.
     uint32_t armed_settle_count_ = 0;
 
+    // Issue #777 — Layer 4 diagnostic counter.  Total Layer 4 evaluations
+    // within the current armed cycle (incremented on every observation
+    // reaching the settle check, reset whenever `fc_state.armed` is false
+    // or PREFLIGHT exits).  Used to throttle the periodic-snapshot log so
+    // operators can see the actual roll/pitch/|v| values the gate is
+    // measuring, instead of inferring "never settled" from the absence of
+    // a release log.  Without this, run-4 of PR #776 sweep produced 17s of
+    // armed=true with zero release AND zero excursion logs (the existing
+    // `count > 0` guard suppresses the excursion log when the counter
+    // never accumulates a single settled observation).
+    uint32_t layer4_eval_count_ = 0;
+
     // Issue #718 — PREFLIGHT timeout escalation tracking.
     // `preflight_held_since_ns_` = wall time of the first tick the FSM
     // entered (or returned to) PREFLIGHT.  Zero = "not currently in a
@@ -509,6 +521,7 @@ private:
             reset_preflight_timer();  // avoid immediate re-fire on re-entry
             armable_first_seen_ns_ = 0;
             armed_settle_count_    = 0;
+            layer4_eval_count_     = 0;  // #777 — reset eval counter on timeout abort
             return;
         }
 
@@ -551,7 +564,23 @@ private:
             // first_seen) >= window` immediately satisfied, letting the next
             // ARM fire on a single armable=true tick without re-debouncing.
             // Resetting on the armed-observed edge closes that re-arm path.
-            armable_first_seen_ns_  = 0;
+            armable_first_seen_ns_ = 0;
+
+            // Issue #777 — first-evaluation diagnostic.  Emit one INFO at
+            // the start of every Layer 4 armed cycle so operators (and log
+            // archaeologists) can see the gate was actually reached with
+            // current threshold + target values.  Helps disambiguate the
+            // "no Layer 4 logs at all" case (= gate skipped or never
+            // entered) from the "evaluated but never settled" case (=
+            // genuine threshold / FC issue).
+            if (layer4_eval_count_ == 0) {
+                DRONE_LOG_INFO(
+                    "[Layer4] evaluation started — thresholds tilt<={:.1f}° vel<={:.2f}m/s, "
+                    "target {} consecutive observations",
+                    config_.takeoff_max_tilt_deg, config_.takeoff_max_velocity_mps,
+                    config_.takeoff_settle_observations);
+            }
+
             const int settle_target = config_.takeoff_settle_observations;
             if (settle_target <= 0) {
                 // Gate disabled by config — legacy immediate takeoff.
@@ -559,6 +588,7 @@ private:
                 fsm.on_takeoff();
                 takeoff_sent_       = false;
                 armed_settle_count_ = 0;
+                layer4_eval_count_  = 0;  // #777 — reset eval counter on disabled-gate takeoff
                 // PR #775 review (code-quality P2.6): redundant
                 // `armable_first_seen_ns_ = 0` removed — already cleared
                 // at the top of the `if (fc_state.armed)` block (see
@@ -583,6 +613,24 @@ private:
                                           std::isfinite(vel_mag) && roll_deg <= tilt_limit &&
                                           pitch_deg <= tilt_limit && vel_mag <= vel_limit;
 
+            // Issue #777 — periodic snapshot diagnostic.  Throttled per
+            // evaluation count (not wall-time) so the cadence is fixed in
+            // observations-per-log, independent of FCState publish rate /
+            // RTF.  Fires every 10th evaluation, including the first
+            // (count==0).  Emits the actual roll/pitch/|v| values the gate
+            // is measuring, so when run-4-class failure (60s held, no
+            // release, no excursion log) reproduces, we can immediately
+            // tell whether the FC's attitude was genuinely above thresholds
+            // (config-tune territory) or some other failure mode is at
+            // play (code/data-plumbing investigation).
+            if (layer4_eval_count_ % 10 == 0) {
+                DRONE_LOG_INFO("[Layer4] eval #{} roll={:.1f}° pitch={:.1f}° |v|={:.2f}m/s — "
+                               "settled_count={}/{} (this_obs_settled={})",
+                               layer4_eval_count_, roll_deg, pitch_deg, vel_mag,
+                               armed_settle_count_, settle_target, attitude_settled);
+            }
+            ++layer4_eval_count_;
+
             if (attitude_settled) {
                 ++armed_settle_count_;
                 if (armed_settle_count_ >= static_cast<uint32_t>(settle_target)) {
@@ -592,6 +640,7 @@ private:
                     fsm.on_takeoff();
                     takeoff_sent_       = false;
                     armed_settle_count_ = 0;
+                    layer4_eval_count_  = 0;  // #777 — reset eval counter on settled takeoff
                     // PR #775 review (code-quality P2.6): redundant
                     // `armable_first_seen_ns_ = 0` removed — already
                     // cleared at the top of the `if (fc_state.armed)`
@@ -630,6 +679,7 @@ private:
         // a fresh consecutive-observation window (covers disarm + re-PREFLIGHT).
         // `now_ns` captured at top of function (see PR #741 review comment).
         armed_settle_count_ = 0;
+        layer4_eval_count_  = 0;  // #777 — reset eval counter on disarm/re-PREFLIGHT
         if (!fc_state.armable) {
             // FC preflight not yet clear (EKF2 converging, sensors warming,
             // GPS lock acquiring, etc.).  Reset the stability tracker — any
