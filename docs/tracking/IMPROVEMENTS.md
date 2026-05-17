@@ -147,7 +147,7 @@ Two items noticed while implementing the ARM-gate debounce (PR #741, epic #740 /
 #### Test-fixture ordering with `ScopedMockClock`
 
 - **P3** — `test-infra` — `ScopedMockClock` MUST be declared as a fixture member BEFORE the unit-under-test, because the UUT's constructor may query `drone::util::get_clock()` at construction time and capture the production clock if the override isn't installed yet. Member-init order is declaration order; violating this silently breaks mock-driven tests in a way that's hard to debug (mock advances do nothing, tests look like they should pass but the UUT sees real wall-clock time).
-  - **Suggested fix:** document the pattern in `docs/guides/CPP_PATTERNS_GUIDE.md` §5.7 (done in this PR), and check during review whenever a new `ScopedMockClock`-using test class is added.
+  - **Suggested fix:** document the pattern in `docs/reference/CPP_PATTERNS_GUIDE.md` §5.7 (done in this PR), and check during review whenever a new `ScopedMockClock`-using test class is added.
   - **Affected:** every test fixture that injects `ScopedMockClock`. Currently rare but will become common as we migrate more time-dependent code to `drone::util::get_clock()` (see next item).
 
 #### `std::chrono::steady_clock::now()` direct usage in process[1-7]_* code
@@ -161,6 +161,47 @@ Two items noticed while implementing the ARM-gate debounce (PR #741, epic #740 /
 - **P3** — `docs` — `tests/TESTS.md` top table claims 2074 base tests on `feature/perception-v2-integration` HEAD. My `ctest -N` on `feature/cold-start-hardening` HEAD (= main = `629bdcc`) shows 2058 base. That's a 16-test gap between docs and reality, pre-existing the PR-A changes. Either tests aren't being compiled in a standard build, or TESTS.md is stale.
   - **Suggested next step:** reconciliation pass in a separate PR — run `ctest -N` against a fresh `main` build, walk the per-suite counts, and update TESTS.md to match. Bonus: add a CI gate that diffs TESTS.md against `ctest -N` output.
   - **Affected:** documentation accuracy only, no functional impact.
+
+### 2026-05-13 (PR #735 ADR-014 — TWO classes of pre-existing breakage inherited from PR #729 perception-v2 merge)
+
+Caught while opening PR #735 (ADR-014 — SWVIO algorithm-selection + FTO §9). Format-check failed on PR-#735's branch but the failures are **inherited from `main`**, not introduced by PR #735. After fixing format-check, a **second** class of pre-existing breakage emerged — sanitizer test failures that the format-check failure had been **masking**.
+
+#### CI — format-check gating masked deeper sanitizer-test failures
+
+- **P1** (upgraded from P2 after second failure class discovered) — Two distinct classes of pre-existing CI breakage on `main`, inherited from PR #729 (~92 commits). The first masked the second.
+
+  **Class 1 — clang-format-18 violations** (visible): 16 files across `common/hal/`, `process3_slam_vio_nav/`, `process4_mission_planner/`, `tests/` were committed without a final clang-format pass during the PR #729 merge. Format-check fails on every PR branching off `main` until fixed.
+
+  **Class 2 — sanitizer-incompatible tests** (MASKED by Class 1): the build matrix on `main` is **gated on format-check passing** — when format-check fails, the build matrix is skipped entirely. This means three test failures under sanitizer builds were completely hidden until PR #735's format-fix unmasked them:
+  - `LatencyProfiler.OverheadUnderBudget` — fails under TSan (timing budget incompatible with TSan instrumentation overhead)
+  - `LatencyProfiler.ConcurrentReadersDoNotRaceWriters` — fails under UBSan
+  - `Performance.LargeFrameUnder100ms` — fails under ASan + TSan + UBSan (latency budget incompatible with sanitizer overhead)
+
+  These are timing-sensitive performance / observability tests that don't tolerate sanitizer instrumentation overhead. Likely need `GTEST_SKIP_IF_SANITIZED()` guards or sanitizer-aware budget scaling — see [DR-022](DESIGN_RATIONALE.md) discussion of latency-profiler sanitizer interaction if it exists.
+
+- **Evidence:**
+  - PR #735's format-fix commit `c070965` made format-check go green
+  - Once format-check passed, the build matrix RAN and revealed the three sanitizer test failures
+  - `main` HEAD CI (run 25792496533, sha `629bdcc`) shows `format-check: FAILURE` + `build (matrix): SKIPPED` — confirming the matrix never ran on main with the current code
+  - PR #735 itself does NOT introduce any of these failures; its diff is docs-only ADR + mechanical whitespace fixes
+
+- **Why this is P1 not P2:**
+  - **CI gate ordering masking real bugs.** Format-check failure didn't just slow downstream PRs; it actively concealed a second class of breakage from anyone looking at main's CI dashboard. "Format-check failed, sanitizer status unknown" is materially worse than "format-check failed, sanitizer status also failed" because the unknown status doesn't trigger a fix-it instinct.
+  - **Sanitizer breakage on a safety-critical codebase is not optional.** TSan / ASan / UBSan exist specifically to catch data races, memory issues, and undefined behaviour that would cause loss of vehicle in production. Letting sanitizer tests fail silently is a direct safety regression.
+  - **Discovery latency.** This breakage landed via PR #729 on 2026-05-13 morning and was only discovered later the same day when PR #735 happened to fix the format-check. Without that accidental sequence, sanitizer breakage could have stayed masked for weeks.
+
+- **Suggested fix:**
+  1. **Restructure CI workflow so format-check and the build matrix run in parallel**, both required for merge. Format-check failures shouldn't mask test failures.
+  2. **Confirm format-check AND every sanitizer build are required status checks on `main`** branch protection — if any are non-required, fix that.
+  3. **For large integration PRs (>20 commits or any wave-merge)**, require the full CI matrix (not just format-check) to pass on the integration branch's tip before the squash/merge button activates.
+  4. **Add a pre-merge "rebase test" job** for any PR whose base branch has moved >10 commits since the PR's last push — catches the inheritance-from-stale-main pattern.
+  5. **Separately, fix the three sanitizer test failures** — likely via `GTEST_SKIP_IF_SANITIZED()` guards, conditional latency budgets, or test-runner annotations. Track in a dedicated GitHub issue.
+
+- **Why it matters:** trust in CI is binary. If a green PR can inherit a red main, contributors stop trusting the green. Worse: if a red CI dashboard masks a second class of red further down, the visible failure becomes a misleading indicator of true state. Equivalent to a fire alarm that activates after the fire is out *and* obscures the burning room behind a door no one opens.
+
+- **Owner:** `feature-infra-platform` (CI / GitHub Actions workflow). Two follow-ups: (a) CI workflow restructure (P1); (b) sanitizer test fixes (P1).
+
+- **Tracker:** to be filed as a GitHub issue.
 
 ---
 
@@ -415,15 +456,6 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 
 ### 2026-04-20
 
-#### 10. `COSYS_SIMULATION_ARCHITECTURE.md` — parallel to the existing Gazebo doc
-
-- **Priority:** P3
-- **Category:** docs (architecture reference)
-- **Noticed while:** filing issue #594 (GT emitter) — the existing `docs/architecture/SIMULATION_ARCHITECTURE.md` is Gazebo-only despite Cosys now being comparable in complexity (HAL backends, segmentation, `simSpawnObject` scene population, scenarios #29/#30, GT emitter).
-- **Current state:** Cosys architecture is scattered across ADR-011 (the "why"), `docs/guides/COSYS_SETUP.md` (the "how-to-install"), and inline comments in `common/hal/src/cosys_*.cpp`. No single reference doc for the runtime architecture.
-- **Proposed fix:** create `docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md` mirroring the Gazebo doc's structure — HAL-mapping, RPC-surface inventory, scenario population via `simSpawnObject`, segmentation pipeline, GT-emitter integration, known limitations. Cross-link from the Gazebo doc and from COSYS_SETUP.md.
-- **When worth doing:** after the #594 (GT emitter) + #573 (baseline capture) work stabilises the Cosys-side patterns — then we document what actually shipped rather than chasing a moving target.
-
 #### 5. Stage-name constants (eliminate magic-string drift across P2/P4/tests)
 
 - **Priority:** P3
@@ -498,7 +530,7 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 - **Fix options:**
   1. Pin the generator explicitly in `deploy/build.sh` (e.g. `cmake .. -G Ninja`) so every invocation matches.
   2. Pass `-G ${CMAKE_GENERATOR}` through to the `ExternalProject_Add` call for `airsim_external` in `cmake/FindAirSim.cmake` so the sub-project always mirrors the parent.
-  3. Document the workaround near `FindAirSim.cmake` and in `docs/guides/DEV_MACHINE_SETUP.md`.
+  3. Document the workaround near `FindAirSim.cmake` and in `docs/tutorials/DEV_MACHINE_SETUP.md`.
 - **Recommendation:** option 2 — it's the root cause; options 1 and 3 are palliatives.
 
 #### 2. `.gitignore` hides `perception_v2_detailed_design.md` from PR diffs
@@ -577,6 +609,10 @@ The PR #776 (integration→main rollup of the cold-start hardening epic) review 
 ---
 
 ## Resolved
+
+### 2026-05-13
+
+- **P3** — `COSYS_SIMULATION_ARCHITECTURE.md` (Cosys-specific Tier 3 runtime arch doc, sibling to the Gazebo `SIMULATION_ARCHITECTURE.md`) created. Resolved by #745 Phase F. Covers HAL backend mapping, scenarios #29/#30/#33, Tier 2 vs Tier 3 differences, build gating. The ground-truth-emitter section that pairs with the perception pipeline is intentionally deferred to the (currently gitignored) `perception_v2_detailed_design.md` and cross-linked.
 
 ### 2026-04-30
 

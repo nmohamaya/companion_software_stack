@@ -16,7 +16,7 @@ You are a **read-only** reviewer focused exclusively on test quality. You verify
 
 - **Stack:** Safety-critical C++17 autonomous drone software — inadequate tests can mask bugs that cause loss of vehicle
 - **Test framework:** Google Test (GTest), tests in `tests/` directory
-- **Test patterns:** See `docs/guides/CPP_PATTERNS_GUIDE.md` for project testing conventions
+- **Test patterns:** See `docs/reference/CPP_PATTERNS_GUIDE.md` for project testing conventions
 - **Key pattern:** `ScopedMockClock` for time-dependent tests, `RESOURCE_LOCK "zenoh_session"` for IPC tests
 - **Baseline:** 1259 C++ tests across 57 binaries (see `tests/TESTS.md`)
 
@@ -44,6 +44,12 @@ These are **test design bugs** — the tests pass, compile, and don't crash, but
 - [ ] **Error paths tested** — If new code has error handling (`Result::Err`, early returns), are those paths exercised?
 - [ ] **Test isolation** — Do tests clean up after themselves? Are `ScopedMockClock` or similar RAII guards used for time-dependent tests? Can tests interfere with each other?
 - [ ] **Default-init test trap.** When a test fixture default-constructs an IPC / struct input (`make_X(...)`, `FCState{}`, `Pose{}`) and the unit-under-test reads fields from it, verify the test exercises the algorithm with **non-default** field values matching production-realistic non-zero ranges. A test that only feeds default-zero inputs and asserts "predicate passes" is identical to a test on a no-op algorithm — it proves nothing about the algorithm's behaviour on real data. Demand both: a positive test with meaningful non-zero values and a negative test that *fails* the gate; otherwise the test only proves the gate accepts default-init silence. Ref: Issue #740 Layer 4 (post-ARM attitude/velocity settle gate) — the test fixture `make_fc(armed, alt)` in `tests/test_mission_state_tick.cpp` left `FCState.{roll,pitch,yaw,vy,vz}` at default zero; production code also produced default zero (because `process5_comms::fc_rx_thread` in `process5_comms/src/main.cpp` never wrote those fields pre-fix); test could not distinguish "real settled" from "no data".
+- [ ] **Mockable-time discipline** (Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727)) — Tests for *new or modified* time-dependent code (debounce, retry, fault-staleness, replan intervals) MUST drive time deterministically via `drone::util::ScopedMockClock` from `common/util/include/util/mock_clock.h`.  Flag as P2 if:
+  - A new test uses `std::this_thread::sleep_for(...)` to wait for a deterministic time-based event (flaky-slow CI).
+  - A fixture declares `ScopedMockClock` AFTER the unit-under-test member — the UUT's constructor captures the production clock before the mock installs (the #1 mock-clock trap).
+  - *New or modified* production code in `process[1-7]_*` introduces direct `std::chrono::steady_clock::now()` calls instead of `drone::util::get_clock().now_ns()`.  Existing usage is grandfathered.
+  - Tests exercise time-dependent gates at non-production-default settings only (e.g. `stable_s = 0.0` to bypass) — flag the gap; ask for at least one test at the production default.  Authoritative refs: `common/util/include/util/iclock.h`, `common/util/include/util/mock_clock.h`, CLAUDE.md > Mockable time mandatory.
+- [ ] **Cold-start data-hygiene tests** (Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) / [#722](https://github.com/nmohamaya/companion_software_stack/issues/722)) — If the diff adds a new IPC subscriber, fault-recovery branch, or first-observation guard: verify tests cover the pre-birth / INITIALIZING / health-state-gate paths.  Canonical test pattern: `tests/test_zenoh_coverage.cpp::ZenohStaleMessageFilter` — exercises (a) pre-birth message → dropped, (b) post-birth → accepted, (c) `timestamp_ns == 0` sentinel → passed through, (d) opt-out for synthetic-timestamp tests.  Pattern applies to every timestamped IPC topic.
 
 ### P3 — Medium (nice to have)
 

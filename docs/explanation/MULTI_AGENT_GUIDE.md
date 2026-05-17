@@ -177,7 +177,7 @@ The multi-agent framework runs on **your local machine** using the Claude Code C
 | Python 3.10+ | System package or pyenv | `python3 --version` |
 | Claude Code CLI | [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code) | `claude --version` |
 | GitHub CLI | `sudo apt install gh` or [cli.github.com](https://cli.github.com) | `gh auth status` |
-| Build toolchain | See [GETTING_STARTED.md](GETTING_STARTED.md) | `cmake --version && clang-format-18 --version` |
+| Build toolchain | See [GETTING_STARTED.md](../tutorials/GETTING_STARTED.md) | `cmake --version && clang-format-18 --version` |
 
 ### First-Time Setup
 
@@ -643,7 +643,7 @@ python -m orchestrator deploy-issue 123 --pipeline
 
 ### Remote Monitoring
 
-Run pipelines on your dev machine and approve checkpoints from your phone. See the [Remote Pipeline Guide](REMOTE_PIPELINE_GUIDE.md) for full setup instructions.
+Run pipelines on your dev machine and approve checkpoints from your phone. See the [Remote Pipeline Guide](../how-to/REMOTE_PIPELINE_GUIDE.md) for full setup instructions.
 
 **Quick version:**
 
@@ -917,7 +917,7 @@ Agents coordinate through these shared files:
 | `tasks/agent-changelog.md` | Completed work log — what was recently done | Pipeline CLEANUP, orchestrator session | All agents at session start |
 | `.claude/shared-context/project-status.md` | Project state, priorities, blocking bugs, active epics | `orchestrator sync-status` + human notes | All agents at session start |
 | `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls discovered during work | Any agent (tech-lead reviews) | All agents at session start |
-| `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead | Agents during handoff |
+| `docs/explanation/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead | Agents during handoff |
 | `tests/TESTS.md` | Test inventory and baseline count | Feature agents | All agents (verify test count) |
 | `docs/tracking/PROGRESS.md` | Improvement history | Feature agents | Agents needing project context |
 | `docs/tracking/ROADMAP.md` | Planned work and completion status | Feature agents | Agents checking what's done |

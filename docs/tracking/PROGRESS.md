@@ -2952,11 +2952,11 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 - **HAL factory wiring** — `comms.mavlink.backend: "cosys_rpc"` selects `CosysFCLink` under `#ifdef HAVE_COSYS_AIRSIM`. Unknown backend keeps throwing `std::runtime_error`.
 - **Config updates** — `config/cosys_airsim_dev.json` + `config/cosys_airsim.json` both now use `comms.mavlink.backend: "cosys_rpc"`. `config/cosys_settings.json` switched from `PX4Multirotor` (TCP HIL + LockStep + control ports) to `SimpleFlight` with `DefaultVehicleState: Armed`; PX4-specific fields removed.
 - **Unit tests** — `tests/test_cosys_fc_link.cpp` — 8 tests covering construction, name, pre-open state, disconnected-client failure paths for all command methods, unknown-mode rejection, and idempotent close.
-- **Docs** — `docs/guides/COSYS_SETUP.md` gained a "Flight Controller Choice" section explaining the SimpleFlight decision, the PX4+Cosys HIL upstream blocker (PX4 #24033, AirSim #5018), and the trade-offs (fault-injection stays in Tier 2).
+- **Docs** — `docs/how-to/COSYS_SETUP.md` gained a "Flight Controller Choice" section explaining the SimpleFlight decision, the PX4+Cosys HIL upstream blocker (PX4 #24033, AirSim #5018), and the trade-offs (fault-injection stays in Tier 2).
 
 **Files created:** `common/hal/include/hal/cosys_fc_link.h`, `common/hal/src/cosys_fc_link.cpp`, `tests/test_cosys_fc_link.cpp`
 
-**Files modified:** `common/hal/include/hal/hal_factory.h`, `common/hal/CMakeLists.txt`, `tests/CMakeLists.txt`, `config/cosys_airsim_dev.json`, `config/cosys_airsim.json`, `config/cosys_settings.json`, `docs/guides/COSYS_SETUP.md`, `docs/tracking/PROGRESS.md`, `tests/TESTS.md`
+**Files modified:** `common/hal/include/hal/hal_factory.h`, `common/hal/CMakeLists.txt`, `tests/CMakeLists.txt`, `config/cosys_airsim_dev.json`, `config/cosys_airsim.json`, `config/cosys_settings.json`, `docs/how-to/COSYS_SETUP.md`, `docs/tracking/PROGRESS.md`, `tests/TESTS.md`
 
 **Why:** PX4+Cosys-AirSim Hardware-in-the-Loop integration is blocked upstream (six configs tested, all fail `ekf2 missing data`). SimpleFlight is AirSim's built-in flight controller and unblocks Epic #431 Tier 3 scenarios. Tier 2 (Gazebo) continues to use PX4+MAVLink via `MavlinkFCLink` — the two tiers now have distinct flight-controller backends selected by config, matching their distinct test purposes (physics / fault sim vs. ML perception / photorealistic rendering).
 
@@ -3560,7 +3560,7 @@ Two pre-existing latent IPC-state bugs surfaced during multi-run-per-session tes
 
 **What:**
 
-Adds an 8-phase checklist to `docs/guides/DEVELOPMENT_WORKFLOW.md` for reviewing integration branches before merging them into `main`. When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks), the standard single-PR review process is insufficient — combined diff is much larger than any individual PR, and per-PR review misses cross-cutting interactions, doc drift across PROGRESS/ROADMAP/API/TESTS, test-baseline drift, latent per-site-vs-wrapper-level gaps (see #720/#722 example), and compounding performance regression.
+Adds an 8-phase checklist to `docs/how-to/DEVELOPMENT_WORKFLOW.md` for reviewing integration branches before merging them into `main`. When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks), the standard single-PR review process is insufficient — combined diff is much larger than any individual PR, and per-PR review misses cross-cutting interactions, doc drift across PROGRESS/ROADMAP/API/TESTS, test-baseline drift, latent per-site-vs-wrapper-level gaps (see #720/#722 example), and compounding performance regression.
 
 | Phase | What it covers |
 |-------|----------------|
@@ -3575,7 +3575,7 @@ Adds an 8-phase checklist to `docs/guides/DEVELOPMENT_WORKFLOW.md` for reviewing
 
 Cost estimate: **6–12 hours over 2–3 sessions**, with Phase 2 (scenario sweep) typically the slowest. References #723 as the first worked example (87-commit integration rollup in progress).
 
-**Files modified:** `docs/guides/DEVELOPMENT_WORKFLOW.md`
+**Files modified:** `docs/how-to/DEVELOPMENT_WORKFLOW.md`
 
 **Why:** Codifies the lessons from the #723 rollup so future integration→main merges follow a repeatable process with structured agent review chunking and explicit doc-drift checks.
 

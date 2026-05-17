@@ -4,7 +4,7 @@
 > and how to modify it. Aimed at DevOps newcomers and contributors adding
 > new CI jobs.
 
-**Workflow file:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+**Workflow file:** [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
 **Runner:** `ubuntu-24.04` (GitHub-hosted)
 **Trigger:** push to `main`/`develop`, pull requests to `main`
 
@@ -90,7 +90,7 @@ The CI pipeline has **3 jobs** totalling **6 parallel runners** at peak:
 - Uses `-print0 | xargs -0` for safe handling of paths with spaces.
 - The `build-and-test` matrix has `needs: format-check`, so formatting failures short-circuit the entire pipeline.
 
-**Config file:** [`.clang-format`](../.clang-format) (4-space indent, K&R braces, 100-col limit, left pointer alignment).
+**Config file:** [`.clang-format`](../../.clang-format) (4-space indent, K&R braces, 100-col limit, left pointer alignment).
 
 **Fixing a format failure locally:**
 ```bash
@@ -127,7 +127,7 @@ The plain and sanitizer legs build in different modes and catch **different clas
 
 **Why the difference matters:**
 
-1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](CI_ISSUES.md)).
+1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](../tracking/CI_ISSUES.md)).
 
 2. **Release and Debug builds produce different binaries.** `NDEBUG` is defined in Release, disabling `assert()`. Code behind `#ifndef NDEBUG` (debug logging, extra validation) only compiles in Debug. Both paths need testing.
 
@@ -219,8 +219,8 @@ genhtml coverage.info --output-directory coverage-report
 Zenoh is not available via `apt`, so the CI installs it from GitHub releases:
 
 1. **zenohc** (C library) — Pre-built `.deb` packages from [eclipse-zenoh/zenoh-c releases](https://github.com/eclipse-zenoh/zenoh-c/releases). Currently pinned to **v1.7.2**.
-   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](CI_ISSUES.md).
-   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](CI_ISSUES.md).
+   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](../tracking/CI_ISSUES.md).
+   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](../tracking/CI_ISSUES.md).
 
 2. **zenoh-cpp** (header-only C++ bindings) — Cloned from GitHub at the matching version tag, installed via `cmake --install`.
 
@@ -266,7 +266,7 @@ Test locally first — Zenoh API breaking changes are common between minor versi
 
 ## Known Issues & Workarounds
 
-These are summarized here for quick reference. Full details are in [CI_ISSUES.md](CI_ISSUES.md).
+These are summarized here for quick reference. Full details are in [CI_ISSUES.md](../tracking/CI_ISSUES.md).
 
 | ID | Issue | Workaround | Ref |
 |----|-------|-----------|-----|
@@ -276,6 +276,45 @@ These are summarized here for quick reference. Full details are in [CI_ISSUES.md
 | CI-005 | TSan + GCC 13 `-Wtsan` warning | `-Wno-tsan` in ENABLE_TSAN block | CI_ISSUES.md |
 | — | TSan crash on kernel >=6.17 (`FATAL: unexpected memory mapping`) | `sudo sysctl vm.mmap_rnd_bits=28` | BUG_FIXES.md #11 |
 | — | TSan false positives with Zenoh/MAVSDK/OpenCV | Exclude those tests via `ctest -E` regex | ci.yml |
+| — | Sanitizer overhead breaks latency-budget tests | `GTEST_SKIP()` when `drone::test::is_sanitizer_build()` is true | PR #739 |
+
+---
+
+## Sanitizer discipline (PR #739 lessons)
+
+Three patterns codified after PR #739 caught real bugs that were being masked.
+
+### Gate ordering — format-check must not be a hard gate before sanitizer legs
+
+> **Status:** fix landed in PR #759 (Issue #758). `.github/workflows/ci.yml` no longer has `build-and-test: needs: format-check`. The two jobs run in parallel as siblings; both independently block merge.
+
+The CI pipeline used to run format-check as a **required** prerequisite of `build-and-test`. A format-check failure caused the entire build matrix to be **skipped**, and a skipped check shows up green-ish on the PR — so three sanitizer test failures (`LatencyProfiler.OverheadUnderBudget` under TSan, `LatencyProfiler.ConcurrentReadersDoNotRaceWriters` under UBSan, `Performance.LargeFrameUnder100ms` under ASan/TSan/UBSan) sat undetected for weeks before PR #739 surfaced them. The fix was to keep format-check as an independent required check but stop making `build-and-test` depend on it; both now run in parallel and both independently block merge.
+
+Track this as a class: **never let one CI gate hide another's signal by being a hard dependency**.
+
+### `DRONE_UBSAN_BUILD` for GCC
+
+`__has_feature(undefined_behavior_sanitizer)` only works on Clang. GCC defines `__SANITIZE_ADDRESS__` / `__SANITIZE_THREAD__` but has **no portable macro for UBSan**. To detect UBSan builds on the Ubuntu-default GCC used in CI, `CMakeLists.txt` defines `DRONE_UBSAN_BUILD=1` when `ENABLE_UBSAN=ON`. The helper in `tests/test_helpers.h` (`drone::test::is_sanitizer_build()`) layers three detection mechanisms: Clang `__has_feature`, GCC `__SANITIZE_*`, and `DRONE_UBSAN_BUILD`.
+
+### `GTEST_SKIP()` for latency budgets, never for correctness
+
+Some tests assert "this code path completes in under N microseconds". Sanitizer instrumentation (especially TSan) imposes 5–20× overhead, which defeats those budgets without invalidating the tested behaviour. The pattern is:
+
+```cpp
+TEST(LatencyProfiler, OverheadUnderBudget) {
+    if (drone::test::is_sanitizer_build()) {
+        GTEST_SKIP() << "Latency budget incompatible with sanitizer overhead — "
+                        "non-sanitized CI build covers the timing assertion.";
+    }
+    // ... real test ...
+}
+```
+
+**Correctness tests must never `GTEST_SKIP()` on sanitizer builds.** Only the timing assertion gets skipped; the same test logic runs in the non-sanitized CI build, which catches behavioural regressions there.
+
+### `reader_ready` race-test pattern
+
+When a race test wants to verify "writer and reader overlap in time", the naive design — start both threads and join — can lose the overlap under sanitizer overhead, because the reader gets scheduled after the writer has already finished. The fix is a `std::atomic<bool> reader_ready` flag: writers wait for the reader to enter its read loop **before** writing. This preserves the overlap intent regardless of scheduler noise. See `tests/test_latency_profiler.cpp::ConcurrentReadersDoNotRaceWriters` for the canonical pattern.
 
 ---
 

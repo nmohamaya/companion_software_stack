@@ -70,8 +70,8 @@ enum class PromotionDecision {
 ///     are structurally outside any radar coverage (e.g. cells above the
 ///     elevation cone) so they don't accumulate indefinitely.  This is a
 ///     pure age-based eviction independent of FOV residency.
-[[nodiscard]] constexpr PromotionDecision decide_promotion(
-    const RadarQuery& q, const CrossVetoPolicy& policy) noexcept {
+[[nodiscard]] constexpr PromotionDecision decide_promotion(const RadarQuery&      q,
+                                                           const CrossVetoPolicy& policy) noexcept {
     // Row 1 — stereo-alone authority at short range.
     if (q.range_to_drone_m < policy.short_range_m) {
         return PromotionDecision::Promote;
@@ -79,8 +79,7 @@ enum class PromotionDecision {
     // Row 2 — both modalities required at long range, in FOV.
     if (q.in_fov) {
         if (q.radar_stale) return PromotionDecision::DeferToDynamic;
-        return q.radar_present ? PromotionDecision::Promote
-                               : PromotionDecision::DeferToDynamic;
+        return q.radar_present ? PromotionDecision::Promote : PromotionDecision::DeferToDynamic;
     }
     // Row 3 — long range, outside FOV.  Default-conservative: stay dynamic.
     // Two distinct escape hatches:

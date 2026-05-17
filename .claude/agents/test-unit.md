@@ -134,6 +134,54 @@ New bugs always get a regression test **before** the fix:
 2. Fix the bug
 3. Verify the regression test now passes
 
+### Mockable Time — `ScopedMockClock`, never `sleep_for` (Issue #740 / Epic #727)
+
+**Scope of "MUST":** *new or modified* time-dependent code in `process[1-7]_*` MUST use `drone::util::get_clock().now_ns()` (mockable), not `std::chrono::steady_clock::now()` (not mockable).  Existing direct-`steady_clock` usage is grandfathered but should migrate when the surrounding code is touched.
+
+Tests that exercise time-dependent logic MUST drive time via `drone::util::ScopedMockClock`, never via `std::this_thread::sleep_for`.
+
+```cpp
+#include "util/mock_clock.h"
+
+class MyFixture : public ::testing::Test {
+protected:
+    // CRITICAL: ScopedMockClock MUST be declared BEFORE the unit-under-test,
+    // because the UUT's constructor may query drone::util::get_clock() and
+    // capture the production clock if the override isn't installed yet.
+    drone::util::ScopedMockClock mock_clock_guard;
+    MyClassUnderTest             uut{config};  // installs after the guard
+};
+
+TEST_F(MyFixture, DebounceFiresAfterWindow) {
+    // Tick 1: starts the window
+    uut.tick();
+    EXPECT_FALSE(uut.fired());
+
+    // Advance mock clock past the window — deterministic, no real sleep
+    mock_clock_guard.mock().advance_ms(3100);
+
+    uut.tick();
+    EXPECT_TRUE(uut.fired());
+}
+```
+
+**Why:**
+
+- A debounce / timeout / window that can only be exercised by `sleep_for(window_s)` becomes either flaky-slow CI or simply un-tested.  `ScopedMockClock` makes the same logic deterministic in microseconds.
+- The fixture-ordering bug is the #1 trap — see Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) and `docs/tracking/IMPROVEMENTS.md` for historical context.
+
+**When reviewing tests for time-dependent code, flag as P2:**
+
+- Any new test using `std::this_thread::sleep_for` to wait for a deterministic time-based event.
+- Any new fixture where a `ScopedMockClock` member is declared AFTER the unit-under-test.
+- Any *new or modified* production code in `process[1-7]_*` introducing direct `std::chrono::steady_clock::now()` use (existing usage is grandfathered).
+
+**Authoritative references:**
+
+- `common/util/include/util/iclock.h` — `drone::util::get_clock()` contract and `IClock` interface.
+- `common/util/include/util/mock_clock.h` — `ScopedMockClock` RAII + `MockClock::advance_*()` API.
+- CLAUDE.md > Mockable time mandatory; `docs/reference/CPP_PATTERNS_GUIDE.md` — section names are stable references, but if the section doesn't appear by name in either doc on the branch under review, fall back to the `iclock.h` / `mock_clock.h` headers as authoritative.
+
 ### Testing Result<T,E>
 ```cpp
 // Test success path

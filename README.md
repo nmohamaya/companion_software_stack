@@ -8,7 +8,7 @@ Multi-process C++17 software stack for an autonomous drone companion computer. 7
 
 ## Quick Start (5 minutes)
 
-**New to this project?** Start here. For detailed setup, see [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md).
+**New to this project?** Start here. For detailed setup, see [docs/tutorials/GETTING_STARTED.md](docs/tutorials/GETTING_STARTED.md).
 
 ### 1. Clone & Setup
 
@@ -48,8 +48,8 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 ### Next Steps
 
 - **Deep dive?** Read [Architecture](#architecture) section below
-- **First time contributing?** See [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md)
-- **Need details?** Check [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md)
+- **First time contributing?** See [DEVELOPMENT_WORKFLOW.md](docs/how-to/DEVELOPMENT_WORKFLOW.md)
+- **Need details?** Check [docs/tutorials/GETTING_STARTED.md](docs/tutorials/GETTING_STARTED.md)
 - **Troubleshooting?** Jump to [Troubleshooting](#troubleshooting) section
 
 ---
@@ -72,7 +72,7 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 
 | Document | Purpose |
 |----------|---------|
-| [GETTING_STARTED.md](docs/guides/GETTING_STARTED.md) | Detailed setup and first-run guide |
+| [GETTING_STARTED.md](docs/tutorials/GETTING_STARTED.md) | Detailed setup and first-run guide |
 | **Process Design** | |
 | [video_capture_design.md](docs/design/video_capture_design.md) | P1 camera backends, frame formats, stereo sync |
 | [perception_design.md](docs/design/perception_design.md) | P2 perception pipeline: detector backends, ByteTrack tracker, UKF fusion |
@@ -90,14 +90,14 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | [ipc-key-expressions.md](docs/architecture/ipc-key-expressions.md) | Zenoh topic naming convention and complete channel table |
 | [process-health-monitoring.md](docs/architecture/process-health-monitoring.md) | Zenoh liveliness tokens for crash detection |
 | **Guides & Tracking** | |
-| [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
+| [CONFIG_GUIDE.md](docs/how-to/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
 | [ROADMAP.md](docs/tracking/ROADMAP.md) | Completed milestones and planned production phases |
-| [CPP_PATTERNS_GUIDE.md](docs/guides/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
-| [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) | Branching, PRs, CI, review process |
+| [CPP_PATTERNS_GUIDE.md](docs/reference/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
+| [DEVELOPMENT_WORKFLOW.md](docs/how-to/DEVELOPMENT_WORKFLOW.md) | Branching, PRs, CI, review process |
 | [BUG_FIXES.md](docs/tracking/BUG_FIXES.md) | Documented bugs fixed (good reference for common pitfalls) |
 | [TESTS.md](tests/TESTS.md) | Full test inventory with suites, counts, and run instructions |
 | **Multi-Agent Pipeline** | |
-| [MULTI_AGENT_GUIDE.md](docs/guides/MULTI_AGENT_GUIDE.md) | Multi-agent AI pipeline: setup, deployment, review, pipeline mode |
+| [MULTI_AGENT_GUIDE.md](docs/explanation/MULTI_AGENT_GUIDE.md) | Multi-agent AI pipeline: setup, deployment, review, pipeline mode |
 | [ADR-010](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Architecture decision record for the multi-agent pipeline |
 
 ---
@@ -283,7 +283,7 @@ All common libraries live in `common/` and are written from scratch.
 
 > For IPC class hierarchy, interface signatures, and message type reference, see [API.md](docs/design/API.md).
 > For the three-layer watchdog architecture, Result\<T,E\> patterns, and systemd integration, see [hardening-design.md](docs/design/hardening-design.md).
-> For C++17 patterns used throughout the codebase, see [CPP_PATTERNS_GUIDE.md](docs/guides/CPP_PATTERNS_GUIDE.md).
+> For C++17 patterns used throughout the codebase, see [CPP_PATTERNS_GUIDE.md](docs/reference/CPP_PATTERNS_GUIDE.md).
 
 ---
 
@@ -315,7 +315,7 @@ bash tests/run_tests.sh
 bash deploy/launch_all.sh
 ```
 
-For detailed setup, see [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md).
+For detailed setup, see [docs/tutorials/GETTING_STARTED.md](docs/tutorials/GETTING_STARTED.md).
 
 ## Run
 
@@ -669,7 +669,7 @@ For full dependency license details, see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md
 
 ## Development Workflow
 
-See [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) for the full development workflow including:
+See [DEVELOPMENT_WORKFLOW.md](docs/how-to/DEVELOPMENT_WORKFLOW.md) for the full development workflow including:
 
 - Branching & PR process (Steps 1-9)
 - Bug fix workflow
@@ -677,4 +677,4 @@ See [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) for the full 
 - Pre-merge checklist
 - Quick reference commands
 
-**CI Pipeline:** GitHub Actions pipeline — format gate (clang-format-18) -> sanitizer build matrix (ASan/TSan/UBSan, Zenoh-enabled) -> coverage report (lcov). See [docs/guides/CI_SETUP.md](docs/guides/CI_SETUP.md) for the full DevOps guide.
+**CI Pipeline:** GitHub Actions pipeline — format gate (clang-format-18) -> sanitizer build matrix (ASan/TSan/UBSan, Zenoh-enabled) -> coverage report (lcov). See [docs/how-to/CI_SETUP.md](docs/how-to/CI_SETUP.md) for the full DevOps guide.

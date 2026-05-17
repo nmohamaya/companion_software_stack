@@ -30,6 +30,7 @@ For every file in the diff, check each item. Flag violations with severity.
 - [ ] **No dangling references** — references to temporaries or locals that outlive scope
 - [ ] **No buffer overflows** — bounds checking on array/vector access, especially IPC message parsing
 - [ ] **No `memcpy`/`memset`/`memmove`** — use `std::copy`, `std::fill`, value semantics, constructors, or `std::array`
+- [ ] **No unbounded recursion** — every recursive function must have a documented termination bound (matches CLAUDE.md > Constructs to AVOID).
 
 ### P2 — High (should fix before merge)
 - [ ] **`unique_ptr` over `shared_ptr`** — shared ownership is a code smell in safety code
@@ -89,6 +90,58 @@ At the end, provide a summary:
 - **Conservative:** If you are uncertain whether something is safe, flag it. False positives are acceptable; missed safety issues are not.
 - **Context-aware:** Consider the execution context. A pattern that is acceptable in a test file may be unacceptable in flight-critical code.
 - **Root cause:** When you find a violation, check if the same pattern appears elsewhere in the changed files.
+- **Report safety issues immediately** (CLAUDE.md > Safety issues are critical) — when you spot a memory safety violation, surface it at the top of your report with severity, file:line, and proposed fix.  Do NOT bury safety findings inside a long list — operators and authors must see them at first glance.
+
+## Cold-start hardening patterns to inspect specifically
+
+The cold-start hardening epic ([#740](https://github.com/nmohamaya/companion_software_stack/issues/740) / [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) / [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) / [#720](https://github.com/nmohamaya/companion_software_stack/issues/720) / [#716](https://github.com/nmohamaya/companion_software_stack/issues/716)) introduces new code-shape categories that overlap directly with the integer-conversion sub-patterns above.  When reviewing any PR that touches these areas, apply the sub-patterns to the specific lines listed:
+
+### Subscriber-side first-observation filters (Issue [#722](https://github.com/nmohamaya/companion_software_stack/issues/722) cold-start data hygiene)
+
+Wrapper-level implementation: `common/ipc/include/ipc/zenoh_subscriber.h::on_sample`.  Per-site fallback: `process4_mission_planner/src/main.cpp` (`planner_birth_ns` + slack-guarded subtraction).  When reviewing additions that record a `_birth_ns` and compare incoming `timestamp_ns` against it, grep for and apply sub-pattern (e) "Timestamp arithmetic overflow":
+
+```cpp
+// HAZARD: temp->timestamp_ns + kSlackNs < birth_ns  — addition wraps if timestamp_ns near UINT64_MAX.
+// Pattern initially missed during early review of this same code shape — agents must explicitly
+// grep for `timestamp_ns +` / `+ kSlackNs` and call out the overflow path.
+
+// SAFE FORM:
+//   birth_ns > kSlackNs &&
+//   temp->timestamp_ns < (birth_ns - kSlackNs)
+// — subtraction is guarded by the leading `birth_ns > kSlackNs` check; comparison is exact.
+```
+
+### FSM debounce gates with mockable time (Issue [#740](https://github.com/nmohamaya/companion_software_stack/issues/740))
+
+Canonical implementation: `process4_mission_planner/include/planner/mission_state_tick.h::tick_preflight`.  When reviewing additions that maintain `_first_seen_ns_` / `_last_*_ns_` `uint64_t` members and compare `(now_ns - last_ns) >= window_ns`, apply sub-patterns (b) "Unsigned subtraction underflow" and (e) "Timestamp arithmetic overflow":
+
+```cpp
+// HAZARD: `(now_ns - last_ns) >= window` — underflows if now_ns < last_ns
+// (mock-clock reset, host clock skew).
+// SAFE FORM:
+//   last_ns == 0 || now_ns < last_ns || (now_ns - last_ns) >= window_ns
+// — the leading `now_ns < last_ns` clause short-circuits before the subtraction.
+```
+
+### Config-driven duration clamps (CLAUDE.md > Unguarded signed→unsigned casts)
+
+Canonical implementation: `process4_mission_planner/src/main.cpp` `preflight_armable_stable_s` clamp.  When reviewing `cfg.get<float>(key, default)` reads that feed into `static_cast<uint64_t>(... * 1e9)`, apply sub-patterns (a), (d), (f):
+
+```cpp
+// HAZARD: static_cast<uint64_t>(std::max(0.0, raw * 1e9))
+//   - +inf or huge raw → float-to-uint64 cast UB
+//   - NaN → std::max(0.0, NaN) returns 0.0 (not NaN); but the path still flows
+// SAFE FORM:
+//   if (!std::isfinite(raw) || raw < 0 || raw > kMax) {
+//       DRONE_LOG_WARN(...);
+//       raw = std::clamp(std::isfinite(raw) ? raw : default_val, 0.0f, kMax);
+//   }
+// — clamps before float-to-uint cast; explicit isfinite check.  Mirror this pattern.
+```
+
+### IPC message default values (CLAUDE.md > No uninitialized variables)
+
+When reviewing `VIOOutput` / `Pose` / similar struct returns from backend `process_frame`, verify the default-constructed instance has all numeric fields zero-initialised (sub-pattern: uninitialised float in flight-critical path).  The publisher-side guard in `process3_slam_vio_nav/src/main.cpp::vio_pipeline_thread` skips publishing when `output.health == INITIALIZING`, which masks zero-pose-with-fresh-timestamp; if a future backend defeats this guard, the consumer sees garbage.  Flag any change to backend `process_frame` that breaks the "INITIALIZING → default-zero Pose" contract.
 
 ## Anti-Hallucination Rules
 

@@ -114,6 +114,15 @@ ctest -N --test-dir build | grep "Total Tests:"
 - No `exit()`/`abort()`/`std::terminate()` in library code
 - `constexpr` where possible for compile-time evaluation
 
+## FSM / Fault-Action Patterns (Epic [#740](https://github.com/nmohamaya/companion_software_stack/issues/740) / root-cause [#727](https://github.com/nmohamaya/companion_software_stack/issues/727) lessons)
+
+You author the FSM code that physically commits the drone — these patterns are load-bearing.  Authoritative rule text: CLAUDE.md > Safety-Critical C++ Practices (the rule names below are the section headings).
+
+- **Debounce every FSM transition that emits a physical FC command** (`ARM`, `TAKEOFF`, `LAND`, `RTL`).  Require N consecutive seconds of continuous `fc_state.*` true; reset on any drop to false; expose `N` via `drone::Config`.  Use `drone::util::get_clock().now_ns()` for the window so unit tests can drive it with `ScopedMockClock`.  Canonical reference implementation: `process4_mission_planner/include/planner/mission_state_tick.h::tick_preflight`.
+- **Cold-start data hygiene — first observations from external systems are suspect**.  When subscribing to an IPC topic that's an input to control logic (`fc_state`, `slam/pose`, `detected_objects`, etc.), assume the first few messages may be (a) historic last-value cache from a previous session ([#720](https://github.com/nmohamaya/companion_software_stack/issues/720) / [#722](https://github.com/nmohamaya/companion_software_stack/issues/722)), (b) flicker from an unstable EKF ([#727](https://github.com/nmohamaya/companion_software_stack/issues/727)), or (c) fresh-stamped zero-data from an INITIALIZING-state backend ([#727](https://github.com/nmohamaya/companion_software_stack/issues/727) Layer 2).  Wrapper-level birth-time filtering for types with `timestamp_ns` lives in `common/ipc/include/ipc/zenoh_subscriber.h::on_sample`; per-site fallback in `process4_mission_planner/src/main.cpp`.  Your FSM code should additionally check health enums (`VIOHealth::NOMINAL`) and use multi-tick confirmation for boolean state.
+- **Asymmetric pre-conditions for asymmetric-cost actions**.  Irreversible actions (ARM, TAKEOFF, LAND, geofence-RTL, fault-induced RTL) deserve stricter pre-conditions than reversible ones (LOITER, hover, replan).  Cost of premature ARM = ground damage; cost of premature LOITER = a pause.  When fault-action selection is ambiguous, prefer LOITER + log over RTL + LAND.
+- **Mockable time mandatory** — all *new or modified* time queries in `process3_*` and `process4_*` SHOULD go through `drone::util::get_clock().now_ns()` (see `common/util/include/util/iclock.h`) instead of `std::chrono::steady_clock::now()` directly.  Existing direct-`steady_clock` usage is grandfathered.  Canonical pattern: see `process4_mission_planner/include/planner/mission_state_tick.h` (mixed-clock migration consolidates retry + debounce + wait-log throttles onto a single mockable clock domain).
+
 ## Anti-Hallucination Rules
 
 - Before citing a function, file, or API — verify it exists by reading the file. Never reference code you haven't read.

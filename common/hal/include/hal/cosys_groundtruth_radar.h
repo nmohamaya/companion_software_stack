@@ -32,13 +32,11 @@
 #include "util/ilogger.h"
 #include "util/thread_heartbeat.h"
 
-#include <Eigen/Geometry>
-
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,6 +44,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <Eigen/Geometry>
 #include <common/common_utils/StrictMode.hpp>
 STRICT_MODE_OFF
 #include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
@@ -83,12 +82,11 @@ public:
                   /*vehicle_name=*/vehicle_name_,
                   /*unknown_action=*/CosysNameFilterUnknown::Keep) {
         const float rad_to_deg = 180.0f / static_cast<float>(M_PI);
-        DRONE_LOG_INFO(
-            "[CosysGroundTruthRadar] Created for {} vehicle='{}' range=[{:.1f},{:.1f}]m "
-            "FOV=±{:.0f}°×±{:.0f}° rate={}Hz mode={}",
-            client_->endpoint(), vehicle_name_, min_range_m_, max_range_m_,
-            fov_azimuth_rad_ * rad_to_deg, fov_elevation_rad_ * rad_to_deg, update_rate_hz_,
-            filter_.has_allowlist() ? "allowlist" : "blocklist");
+        DRONE_LOG_INFO("[CosysGroundTruthRadar] Created for {} vehicle='{}' range=[{:.1f},{:.1f}]m "
+                       "FOV=±{:.0f}°×±{:.0f}° rate={}Hz mode={}",
+                       client_->endpoint(), vehicle_name_, min_range_m_, max_range_m_,
+                       fov_azimuth_rad_ * rad_to_deg, fov_elevation_rad_ * rad_to_deg,
+                       update_rate_hz_, filter_.has_allowlist() ? "allowlist" : "blocklist");
     }
 
     ~CosysGroundTruthRadarBackend() override { shutdown(); }
@@ -183,15 +181,15 @@ private:
             heartbeat.touch();
             try {
                 using namespace msr::airlib;
-                std::vector<Pose>           poses;
-                Kinematics::State           drone_kin{};
-                bool                        got = client_->with_client([&](auto& rpc) {
+                std::vector<Pose> poses;
+                Kinematics::State drone_kin{};
+                bool              got = client_->with_client([&](auto& rpc) {
                     // only_visible=true means we get a vector with the SAME length as
                     // simListInstanceSegmentationObjects() (cached in object_names_),
                     // but objects not currently visible have zero/identity pose entries
                     // we must filter out.
                     poses     = rpc.simListInstanceSegmentationPoses(/* ned */ true,
-                                                                     /* only_visible */ true);
+                                                                 /* only_visible */ true);
                     drone_kin = rpc.simGetGroundTruthKinematics(vehicle_name_);
                 });
                 if (!got) {
@@ -238,14 +236,15 @@ private:
                     static_cast<float>(drone_kin.pose.orientation.x()),
                     static_cast<float>(drone_kin.pose.orientation.y()),
                     static_cast<float>(drone_kin.pose.orientation.z()));
-                const Eigen::Matrix3f R_body_from_world = q_body_world.conjugate().toRotationMatrix();
+                const Eigen::Matrix3f R_body_from_world =
+                    q_body_world.conjugate().toRotationMatrix();
 
                 // Drone linear velocity in NED for radial-velocity computation.
                 const float vN = static_cast<float>(drone_kin.twist.linear.x());
                 const float vE = static_cast<float>(drone_kin.twist.linear.y());
                 const float vD = static_cast<float>(drone_kin.twist.linear.z());
 
-                size_t in_fov = 0, out_fov = 0, kept = 0, missing_pose = 0;
+                size_t       in_fov = 0, out_fov = 0, kept = 0, missing_pose = 0;
                 const size_t n = poses.size();
                 for (size_t i = 0; i < n; ++i) {
                     if (!keep_index_[i]) continue;
@@ -267,15 +266,15 @@ private:
                     // World-relative vector (NED).
                     const Eigen::Vector3f delta_world(wn - drone_pos_w.x(), we - drone_pos_w.y(),
                                                       wd - drone_pos_w.z());
-                    const float range = delta_world.norm();
+                    const float           range = delta_world.norm();
                     if (range < min_range_m_ || range > max_range_m_) continue;
 
                     // Full 3D rotation: body-frame delta = R_body_from_world * delta_world.
                     // Body convention (FRD): +X forward, +Y right, +Z down.
                     const Eigen::Vector3f delta_body = R_body_from_world * delta_world;
-                    const float           body_fx   = delta_body.x();
-                    const float           body_fy   = delta_body.y();
-                    const float           body_fz   = delta_body.z();
+                    const float           body_fx    = delta_body.x();
+                    const float           body_fy    = delta_body.y();
+                    const float           body_fz    = delta_body.z();
 
                     const float azimuth   = std::atan2(body_fy, body_fx);
                     const float elevation = std::asin(std::clamp(body_fz / range, -1.0f, 1.0f));
@@ -350,16 +349,16 @@ private:
     int                             update_rate_hz_;
     CosysNameFilter                 filter_;
 
-    std::vector<std::string>        object_names_;   ///< Cached at init(), parallel to keep_index_
-    std::vector<uint8_t>            keep_index_;     ///< 1 if object should appear as obstacle
+    std::vector<std::string> object_names_;  ///< Cached at init(), parallel to keep_index_
+    std::vector<uint8_t>     keep_index_;    ///< 1 if object should appear as obstacle
 
-    mutable std::mutex              mutex_;
-    drone::ipc::RadarDetectionList  cached_detections_{};
-    std::atomic<bool>               active_{false};
-    std::atomic<uint64_t>           scan_count_{0};
-    bool                            size_mismatch_warned_ = false;  ///< poll-thread only
-    std::thread                     poll_thread_;
-    std::once_flag                  shutdown_once_;
+    mutable std::mutex             mutex_;
+    drone::ipc::RadarDetectionList cached_detections_{};
+    std::atomic<bool>              active_{false};
+    std::atomic<uint64_t>          scan_count_{0};
+    bool                           size_mismatch_warned_ = false;  ///< poll-thread only
+    std::thread                    poll_thread_;
+    std::once_flag                 shutdown_once_;
 };
 
 }  // namespace drone::hal

@@ -13,12 +13,12 @@
 
 #include "planner/radar_fov_gate.h"
 
-#include <gtest/gtest.h>
-
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 using drone::ipc::Pose;
 using drone::ipc::RadarDetection;
@@ -45,7 +45,7 @@ Pose make_pose_origin() {
 
 // Yaw-only pose at the world origin.  yaw = rotation about +Z (up).
 Pose make_pose_yawed(float yaw_rad) {
-    Pose p           = make_pose_origin();
+    Pose        p    = make_pose_origin();
     const float half = 0.5f * yaw_rad;
     p.quaternion[0]  = std::cos(half);  // w
     p.quaternion[1]  = 0.0;
@@ -56,9 +56,9 @@ Pose make_pose_yawed(float yaw_rad) {
 
 RadarDetectionList make_radar_with(float range_m, float az_rad, float el_rad) {
     RadarDetectionList list{};
-    list.timestamp_ns         = 1;
-    list.num_detections       = 1;
-    list.detections[0]        = RadarDetection{};
+    list.timestamp_ns                = 1;
+    list.num_detections              = 1;
+    list.detections[0]               = RadarDetection{};
     list.detections[0].range_m       = range_m;
     list.detections[0].azimuth_rad   = az_rad;
     list.detections[0].elevation_rad = el_rad;
@@ -81,8 +81,12 @@ RadarDetectionList empty_radar() {
     return list;
 }
 
-constexpr uint64_t kMs(uint64_t ms) { return ms * 1'000'000ULL; }
-constexpr uint64_t kS(uint64_t s) { return s * 1'000'000'000ULL; }
+constexpr uint64_t kMs(uint64_t ms) {
+    return ms * 1'000'000ULL;
+}
+constexpr uint64_t kS(uint64_t s) {
+    return s * 1'000'000'000ULL;
+}
 
 }  // namespace
 
@@ -235,8 +239,8 @@ TEST(RadarFovGate, RadarOlderThanThreshold_Stale) {
     g.set_radar_detections(make_radar_with(50.0f, 0.0f, 0.0f), kMs(100));
     auto q = g.query(15.0f, 0.0f, 0.0f, kMs(250));  // 150 ms old, > 100 ms threshold
     EXPECT_TRUE(q.radar_stale);
-    EXPECT_FALSE(q.radar_present)
-        << "Stale radar must NOT short-circuit to radar_present even if a co-located return exists.";
+    EXPECT_FALSE(q.radar_present) << "Stale radar must NOT short-circuit to radar_present even if "
+                                     "a co-located return exists.";
 }
 
 // ── Residency tracker ─────────────────────────────────────────
@@ -244,9 +248,8 @@ TEST(RadarFovGate, RadarOlderThanThreshold_Stale) {
 // Helper: refresh radar each tick to mimic the real ~20 Hz radar receiver
 // thread. Without this, the staleness gate (default 100 ms) trips between
 // ticks and residency accrual stops — by design, research note §6.
-static void tick_with_fresh_radar(RadarFovGate&                g,
-                                  const std::vector<GridCell>& cells, float resolution_m,
-                                  uint64_t now_ns) {
+static void tick_with_fresh_radar(RadarFovGate& g, const std::vector<GridCell>& cells,
+                                  float resolution_m, uint64_t now_ns) {
     g.set_radar_detections(RadarDetectionList{}, now_ns);
     g.tick_residency(cells, resolution_m, now_ns);
 }
@@ -258,10 +261,10 @@ TEST(RadarFovGate, ResidencyAccruesWhileInFovWithNoRadar) {
     // Cell at (15, 0, 0) world coords; with resolution 1 m → GridCell{15,0,0}.
     const std::vector<GridCell> cells{{15, 0, 0}};
 
-    tick_with_fresh_radar(g, cells, 1.0f, kMs(0));    // baseline; dt=0 first tick
+    tick_with_fresh_radar(g, cells, 1.0f, kMs(0));  // baseline; dt=0 first tick
     EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), 0u);
 
-    tick_with_fresh_radar(g, cells, 1.0f, kMs(50));   // +50 ms (radar still fresh)
+    tick_with_fresh_radar(g, cells, 1.0f, kMs(50));  // +50 ms (radar still fresh)
     EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), kMs(50));
 
     tick_with_fresh_radar(g, cells, 1.0f, kMs(150));  // +100 ms (radar refreshed each tick)
@@ -291,7 +294,7 @@ TEST(RadarFovGate, ResidencyHeldAcrossFovExit) {
 TEST(RadarFovGate, ResidencyCappedAtPromoteThreshold) {
     // Without a cap, residency would grow unboundedly while the cell
     // sits in FOV — wasted memory and sets up future overflow risk.
-    auto policy                    = default_policy();
+    auto policy                     = default_policy();
     policy.fov_residency_promote_ns = kMs(100);
     RadarFovGate g(default_fov(), policy);
     g.set_pose(make_pose_origin());
@@ -415,7 +418,7 @@ TEST(RadarFovGate, GateRadiusBoundaryRespectsLeq) {
 
 TEST(RadarFovGate, NanQuaternionPose_QueryReturnsConservativeVeto) {
     RadarFovGate g(default_fov(), default_policy());
-    Pose         p = make_pose_origin();
+    Pose         p  = make_pose_origin();
     p.quaternion[0] = std::numeric_limits<double>::quiet_NaN();
     g.set_pose(p);
     // After NaN pose, query should not crash; in_fov is unspecified (NaN
@@ -440,11 +443,11 @@ TEST(RadarFovGate, QueryCellPopulatesResidencyAndAge) {
     RadarFovGate g(default_fov(), default_policy());
     g.set_pose(make_pose_origin());
 
-    const GridCell c{15, 0, 0};
+    const GridCell              c{15, 0, 0};
     const std::vector<GridCell> cells{c};
 
     g.set_radar_detections(empty_radar(), kMs(0));
-    g.tick_residency(cells, 1.0f, kMs(0));   // first tick — first_seen=0
+    g.tick_residency(cells, 1.0f, kMs(0));  // first tick — first_seen=0
     g.set_radar_detections(empty_radar(), kMs(100));
     g.tick_residency(cells, 1.0f, kMs(100));
 
@@ -459,7 +462,7 @@ TEST(RadarFovGate, QueryCell_AgeAdvancesEvenWhileOutsideFov) {
     RadarFovGate g(default_fov(), default_policy());
     g.set_pose(make_pose_origin());
 
-    const GridCell c{-15, 0, 0};
+    const GridCell              c{-15, 0, 0};
     const std::vector<GridCell> cells{c};
     g.set_radar_detections(empty_radar(), kMs(0));
     g.tick_residency(cells, 1.0f, kMs(0));
@@ -520,7 +523,7 @@ TEST(RadarFovGate, AgeAdvancesWhileResidencyPersistsAcrossFovExit) {
     RadarFovGate g(default_fov(), default_policy());
     g.set_pose(make_pose_origin());
 
-    const GridCell             c{15, 0, 0};
+    const GridCell              c{15, 0, 0};
     const std::vector<GridCell> cells{c};
     g.set_radar_detections(empty_radar(), kMs(0));
     g.tick_residency(cells, 1.0f, kMs(0));
@@ -535,4 +538,3 @@ TEST(RadarFovGate, AgeAdvancesWhileResidencyPersistsAcrossFovExit) {
     EXPECT_EQ(g.residency_ns(c), residency_at_exit) << "Residency must persist across FOV exit.";
     EXPECT_EQ(g.cell_age_ns(c, kMs(200)), kMs(200));
 }
-

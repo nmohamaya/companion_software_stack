@@ -74,7 +74,7 @@ All executables land in `build/bin/`.
 
 **After any clean rebuild (`rm -rf build/*`):**
 1. Reconfigure with the canonical command above
-2. Verify test count: `ctest -N --test-dir build | grep "Total Tests:"` → must match the current baseline recorded in [tests/TESTS.md](tests/TESTS.md) (the **Total** row). The literal number is intentionally not duplicated here — every PR that adds tests would otherwise drift this file and turn the check into false confidence.
+2. Verify test count: from the repo root, run `ctest -N --test-dir build | grep "Total Tests:"` (or `ctest -N` from inside `build/`). It must match the current baseline recorded in [tests/TESTS.md](tests/TESTS.md) (the **Total** row, single source of truth — do not hardcode the number here, every PR that adds tests would otherwise drift this file and turn the check into false confidence).
 
 ## Test Commands
 
@@ -108,11 +108,31 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches the baseline in [tests/TESTS.md](tests/TESTS.md)? (the literal number is not duplicated here — TESTS.md is the single source of truth)
+- [ ] Test count matches baseline in [tests/TESTS.md](tests/TESTS.md) (single source of truth — do not hardcode the number here)
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 
 See `tests/TESTS.md` for the full test inventory.
+
+## Single Sources of Truth (SSOT)
+
+Quantitative facts about the project drift the moment they are duplicated. Each fact below has **one canonical source**; every other doc must defer to it (e.g. "see `tests/TESTS.md`") rather than restating the value.
+
+| Fact | Canonical source | How to read it |
+|---|---|---|
+| Test count + per-suite inventory | [`tests/TESTS.md`](tests/TESTS.md) | Live total at top of file; also derivable from `ctest -N --test-dir build` |
+| Scenario list + count | [`config/scenarios/`](config/scenarios/) | `find config/scenarios -maxdepth 1 -name '*.json' \| wc -l` |
+| HAL interface list + count | [`common/hal/include/hal/`](common/hal/include/hal/) | `ls common/hal/include/hal/i*.h` |
+| IPC wire types | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) | Authoritative struct definitions; `docs/design/API.md` documents but does not define |
+| IPC topic constants | [`common/ipc/include/ipc/ipc_types.h`](common/ipc/include/ipc/ipc_types.h) (`namespace topics`) for the names; [`common/ipc/include/ipc/zenoh_message_bus.h`](common/ipc/include/ipc/zenoh_message_bus.h) for the SHM→Zenoh key-expression mapping; [`common/ipc/include/ipc/topic_resolver.h`](common/ipc/include/ipc/topic_resolver.h) for optional `vehicle_id` prefixing | Topic strings live in code, not docs |
+| Config keys | [`common/util/include/util/config_keys.h`](common/util/include/util/config_keys.h) + [`config/default.json`](config/default.json) | Code declares, JSON provides defaults; `docs/reference/config_reference.md` is reference-only |
+| ADR catalogue | [`docs/adr/`](docs/adr/) | One file per ADR; `docs/adr/README.md` (when added) indexes them |
+| Agent roster | [`.claude/agents/`](.claude/agents/) + [`docs/adr/ADR-010-multi-agent-pipeline-architecture.md`](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Agent definitions in `.claude/agents/`; pipeline architecture in ADR-010 |
+| Dependency versions (per-OS) | [`docs/how-to/INSTALL.md`](docs/how-to/INSTALL.md) | Single matrix; do not restate versions elsewhere |
+| systemd units + service deps | [`deploy/systemd/`](deploy/systemd/) | Unit files are authoritative |
+| Process/thread map | This file (CLAUDE.md §Process Map) | Hand-maintained; update when process or thread count changes |
+
+**Rule:** when writing or updating a doc, never bake in a number or list that has a canonical source above — link to it instead. Reviewers and the doc-linter should reject docs that hardcode test counts, scenario lists, HAL interface counts, etc.
 
 ## Lint and Format
 
@@ -200,7 +220,7 @@ int w = cfg.get<int>("video_capture.mission_cam.width", 1920);
 auto section = cfg.section("mission_planner");
 ```
 
-## Development Workflow (from `docs/guides/DEVELOPMENT_WORKFLOW.md`)
+## Development Workflow (from `docs/how-to/DEVELOPMENT_WORKFLOW.md`)
 
 ### Branch & Commit Conventions
 - Branch naming: `feature/issue-XX-description`, `fix/issue-XX-description`, `refactor/issue-XX-description`, `docs/issue-XX-description`
@@ -386,6 +406,12 @@ Mixing Release and Coverage builds in the same directory causes `__gcov_init` li
 **PR body updates — do it immediately after fixes**
 After pushing review-fix commits, update the PR body right away. Don't wait to be asked.
 
+**Git commit verification — `git stash pop` silently restores staging state**
+Running `git stash pop` restores both the working directory AND the staging-area state from when the stash was made. A subsequent `git add <file>` ADDS to the index, it does not replace it. Always `git status` + `git diff --staged` after a stash pop, before committing. Always `git show HEAD --stat` after `git commit --amend`, before pushing. Treat `--force-with-lease` as a verification gate, not a habitual finish. See [tasks/lessons.md](tasks/lessons.md) "Git verification before pushing" for the full five-step checklist.
+
+**Public-repo commits — verify private content isn't leaking**
+Before any push to the public repo, scan `git diff origin/<base>..HEAD` for: stray submodule entries (`mode 160000`), `.gitmodules` additions pointing to private repo URLs, references to `business/` or other private content, files from private submodule paths. The `business/` submodule URL points to a private repo and must never appear in `.gitmodules` on the public repo.
+
 ### Common Issues
 
 | Issue | Solution |
@@ -400,7 +426,7 @@ After pushing review-fix commits, update the PR body right away. Don't wait to b
 - `docs/tracking/PROGRESS.md` / `docs/tracking/ROADMAP.md` — Improvement history and planned work
 - `docs/design/perception_design.md` — P2 pipeline detail
 - `docs/design/hardening-design.md` — Watchdog and systemd integration
-- `docs/guides/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
+- `docs/reference/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
 - `docs/tracking/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
 - `docs/tracking/BUG_FIXES.md` — 29 documented bugs fixed (good reference for common pitfalls)
 - `docs/adr/` — Architecture Decision Records
@@ -504,7 +530,7 @@ Test Quality, API Contract, Code Quality, Performance
 - `tasks/active-work.md` — Live work tracker (read at session start)
 - `tasks/agent-changelog.md` — Completed work log (append at session end)
 - `.claude/shared-context/domain-knowledge.md` — Non-obvious pitfalls all agents should know
-- `docs/guides/AGENT_HANDOFF.md` — Cross-domain handoff protocol
+- `docs/explanation/AGENT_HANDOFF.md` — Cross-domain handoff protocol
 
 ## graphify
 

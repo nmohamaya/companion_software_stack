@@ -30,8 +30,11 @@ jobs:
           | xargs -0 clang-format-18 --dry-run --Werror 2>&1
 
   # ── Build + test matrix ──────────────────────────────────────────
+  # Intentionally NOT `needs: format-check` — see docs/how-to/CI_SETUP.md
+  # § "Gate ordering" and Issue #758. A red format-check used to mask red
+  # sanitizer legs by skipping the whole matrix; now both gates run in
+  # parallel and independently block merge.
   build-and-test:
-    needs: format-check
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

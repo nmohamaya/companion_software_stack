@@ -12,12 +12,12 @@
 #include "planner/occupancy_grid_3d.h"
 #include "planner/radar_fov_gate.h"
 
-#include <gtest/gtest.h>
-
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+
+#include <gtest/gtest.h>
 
 using drone::ipc::Pose;
 using drone::ipc::RadarDetection;
@@ -190,8 +190,8 @@ TEST(OccupancyGridCrossVeto, FovSilencePromote_AfterEnoughInFovTime) {
     //      → row 3 escape hatch fires (PromoteFovSilence).
     auto policy                     = CrossVetoPolicy{};
     policy.fov_residency_promote_ns = 100'000'000ULL;  // 100 ms for fast test
-    auto         grid = make_grid(/*cell_ttl_s=*/600.0f);
-    auto         pose = pose_at_origin();
+    auto         grid               = make_grid(/*cell_ttl_s=*/600.0f);
+    auto         pose               = pose_at_origin();
     RadarFovGate gate(RadarFovConfig{}, policy);
     gate.set_pose(pose);
 
@@ -209,11 +209,11 @@ TEST(OccupancyGridCrossVeto, FovSilencePromote_AfterEnoughInFovTime) {
 
     // Step 2: yaw drone 180° — cell now outside FOV.  Refresh radar so
     // the staleness gate doesn't trip (insert_voxels uses real steady_clock).
-    Pose yawed_pose            = pose;
-    yawed_pose.quaternion[0]   = 0.0;  // w
-    yawed_pose.quaternion[1]   = 0.0;
-    yawed_pose.quaternion[2]   = 0.0;
-    yawed_pose.quaternion[3]   = 1.0;  // z
+    Pose yawed_pose          = pose;
+    yawed_pose.quaternion[0] = 0.0;  // w
+    yawed_pose.quaternion[1] = 0.0;
+    yawed_pose.quaternion[2] = 0.0;
+    yawed_pose.quaternion[3] = 1.0;  // z
     gate.set_pose(yawed_pose);
     gate.set_radar_detections(empty_radar(), now_real_ns());
 
@@ -232,14 +232,14 @@ TEST(OccupancyGridCrossVeto, AgeCapEvict_FiresIndependentOfResidency) {
     // Cell is behind drone (outside FOV) → never accrues residency.
     // Force `cell_age_ns >= dynamic_age_cap_ns` via fake timestamps and
     // verify age-cap eviction promotes with the dedicated counter.
-    auto policy              = CrossVetoPolicy{};
+    auto policy               = CrossVetoPolicy{};
     policy.dynamic_age_cap_ns = 50'000'000ULL;  // 50 ms for fast test
-    auto         grid = make_grid(/*cell_ttl_s=*/600.0f);
-    auto         pose = pose_at_origin();
+    auto         grid         = make_grid(/*cell_ttl_s=*/600.0f);
+    auto         pose         = pose_at_origin();
     RadarFovGate gate(RadarFovConfig{}, policy);
     gate.set_pose(pose);
 
-    const GridCell c{-15, 0, 1};
+    const GridCell        c{-15, 0, 1};
     std::vector<GridCell> live{c};
 
     // First tick stamps first_seen.
@@ -370,8 +370,8 @@ TEST(OccupancyGridCrossVeto, NullGate_PromotesUnconditionally) {
 TEST(OccupancyGridCrossVeto, GateWithoutPose_PromotesUnconditionally) {
     auto         grid = make_grid();
     RadarFovGate gate(RadarFovConfig{}, CrossVetoPolicy{});  // no set_pose() called
-    auto         v    = voxel_at(15.0f, 0.0f, 1.0f);
-    auto stats = grid.insert_voxels(&v, 1, 100.0f, 0.3f, &gate);
+    auto         v     = voxel_at(15.0f, 0.0f, 1.0f);
+    auto         stats = grid.insert_voxels(&v, 1, 100.0f, 0.3f, &gate);
     EXPECT_EQ(stats.cross_veto_deferred, 0u);
     EXPECT_GT(grid.static_count(), 0u)
         << "Gate without pose must not block — caller asked for veto but the gate isn't ready.";

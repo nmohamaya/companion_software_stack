@@ -143,11 +143,11 @@ public:
         hd_map_cells_.clear();
         hd_map_static_count_ = 0;
         static_cell_timestamps_.clear();
-        single_modality_static_.clear();      // Issue #698 Fix #1
-        total_cross_veto_deferred_  = 0;      // Issue #698 Fix #1 (Phase 3)
+        single_modality_static_.clear();  // Issue #698 Fix #1
+        total_cross_veto_deferred_  = 0;  // Issue #698 Fix #1 (Phase 3)
         total_fov_silence_promoted_ = 0;
         total_age_cap_evicted_      = 0;
-        promoted_count_                 = 0;
+        promoted_count_             = 0;
         hit_count_.clear();
         instances_.clear();
     }
@@ -467,7 +467,7 @@ public:
                                     bool may_promote          = true;
                                     bool single_modality_flag = false;
                                     if (radar_gate && radar_gate->has_pose()) {
-                                        const auto wxyz  = grid_to_world(c);
+                                        const auto wxyz = grid_to_world(c);
                                         // query_cell populates residency_ns
                                         // and cell_age_ns from the per-cell
                                         // trackers; without it the
@@ -799,8 +799,7 @@ public:
                 objects.num_objects, accepted, suppressed, excluded_cells, occupied_.size(),
                 static_occupied_.size(), promoted_count_, hd_map_static_count_, max_static_cells_,
                 total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
-                total_cross_veto_deferred_, total_fov_silence_promoted_,
-                total_age_cap_evicted_);
+                total_cross_veto_deferred_, total_fov_silence_promoted_, total_age_cap_evicted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {

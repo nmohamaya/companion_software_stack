@@ -2,6 +2,7 @@
 //
 // Unit tests for the LatencyProfiler (Issue #571, Epic #523).
 
+#include "test_helpers.h"
 #include "util/correlation.h"
 #include "util/latency_profiler.h"
 #include "util/mock_clock.h"
@@ -223,16 +224,40 @@ TEST(LatencyProfiler, ConcurrentReadersDoNotRaceWriters) {
     // Writers hammer record() while a reader spins on summaries()+traces()+to_json().
     // Proves the mutex covers the read path — a TSan-enabled build would catch
     // any unguarded access to the shared state.
+    //
+    // Synchronisation contract:
+    //   1. go=true releases the reader from its spinwait
+    //   2. Reader sets reader_ready=true BEFORE entering its read loop
+    //   3. Writers wait for reader_ready=true before writing — guarantees
+    //      the reader is IN ITS LOOP when writers start, so read/write
+    //      overlap is preserved even under heavy sanitizer instrumentation.
+    //   4. Main thread sets stop=true only after all writers join AND
+    //      reader has done at least one iteration. Deadline-bounded so a
+    //      truly broken build can't hang CI.
+    //
+    // This design fixes a previous bug where, under UBSan instrumentation,
+    // the reader could be scheduled so late that writers + stop=true
+    // completed before the reader's first iteration ran, leaving
+    // reader_iterations=0 and failing the EXPECT_GT below — without ever
+    // exercising the read/write overlap the test is meant to assert.
     du::LatencyProfiler      p(/*per_stage_capacity=*/1024, /*trace_ring_capacity=*/2048);
     constexpr int            kWriters          = 3;
     constexpr int            kRecordsPerWriter = 300;
     std::atomic<bool>        go{false};
+    std::atomic<bool>        reader_ready{false};
     std::atomic<bool>        stop{false};
     std::atomic<int>         reader_iterations{0};
     std::vector<std::thread> writers;
     for (int t = 0; t < kWriters; ++t) {
         writers.emplace_back([&, t]() {
             while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            // Wait for the reader to be inside its read loop before issuing
+            // any records. Guarantees real read/write overlap (Copilot
+            // review comment #1 on PR #739). sleep_for instead of yield()
+            // avoids a tight CPU-burn spin under heavy load (comment #2).
+            while (!reader_ready.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
             for (int i = 0; i < kRecordsPerWriter; ++i) {
                 p.record("stage", static_cast<uint64_t>(t * 10'000 + i), 0,
                          static_cast<uint64_t>(i + 1));
@@ -241,6 +266,7 @@ TEST(LatencyProfiler, ConcurrentReadersDoNotRaceWriters) {
     }
     std::thread reader([&]() {
         while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+        reader_ready.store(true, std::memory_order_release);
         while (!stop.load(std::memory_order_acquire)) {
             const auto s = p.summaries();  // NOLINT(readability-redundant-declaration)
             const auto t = p.traces();
@@ -254,6 +280,20 @@ TEST(LatencyProfiler, ConcurrentReadersDoNotRaceWriters) {
 
     go.store(true, std::memory_order_release);
     for (auto& w : writers) w.join();
+
+    // Safety belt: defend against the unlikely case where writers race past
+    // their reader_ready wait so fast that the reader's first iteration
+    // hasn't finished by the time we get here. Bounded by a generous
+    // deadline; typical wait is sub-millisecond. sleep_for instead of
+    // yield() (Copilot review comment #2 on PR #739) to avoid CPU burn
+    // if anything is wedged.
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (reader_iterations.load(std::memory_order_acquire) == 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
     stop.store(true, std::memory_order_release);
     reader.join();
 
@@ -324,6 +364,16 @@ TEST(LatencyProfiler, ToJsonStagesAreLexicographicallyOrdered) {
 // ────────────────────────────────────────────────────────────────────────────
 
 TEST(LatencyProfiler, OverheadUnderBudget) {
+    // Pure overhead-budget test (target < 2000 ns/record). Sanitizer
+    // instrumentation overhead (TSan adds ~5-15×, ASan ~2-3×, UBSan ~20%)
+    // would defeat any meaningful ceiling without invalidating the tested
+    // behaviour. Correctness of the overhead itself is verified by the
+    // non-sanitized CI build matrix.
+    if (drone::test::is_sanitizer_build()) {
+        GTEST_SKIP() << "Latency budget incompatible with sanitizer overhead — "
+                        "non-sanitized CI build covers this assertion.";
+    }
+
     du::LatencyProfiler p(/*per_stage_capacity=*/4096, /*trace_ring_capacity=*/4096);
     constexpr int       n = 10'000;
 

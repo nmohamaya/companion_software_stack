@@ -16,9 +16,7 @@ namespace drone::planner {
 struct GridCell {
     int x = 0, y = 0, z = 0;
 
-    bool operator==(const GridCell& o) const noexcept {
-        return x == o.x && y == o.y && z == o.z;
-    }
+    bool operator==(const GridCell& o) const noexcept { return x == o.x && y == o.y && z == o.z; }
     bool operator!=(const GridCell& o) const noexcept { return !(*this == o); }
 };
 

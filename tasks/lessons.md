@@ -3,6 +3,53 @@
 
 # Lessons Learned
 
+## Session: 2026-05-13 — Git verification before pushing (commit hygiene)
+
+### 1. `git stash pop` restores staging state silently — always `git status` afterwards
+
+**Mistake:** Cut a clean branch off main for an ADR commit. Ran `git stash pop` to recover the ADR file from the prior branch. Ran `git add docs/adr/ADR-014-...md`. Committed. The commit *also* contained a stray `business` submodule reference (mode 160000) because the stash had restored prior staging state that included the submodule. Force-pushed the bad commit before noticing.
+
+**Why this happens:** `git stash pop` restores **both** the working-directory changes and the **staging-area state** from when the stash was created. If anything was staged when the stash was made, it's silently re-staged on pop. A subsequent `git add <file>` does not replace the staging area — it *adds to* it.
+
+**Rule:** After any `git stash pop`, run `git status` AND `git diff --staged` before committing. Verify the index contains exactly what you expect and nothing else. Do not trust that `git add <name>` resulted in only `<name>` being staged.
+
+### 2. `git commit --amend` runs even when prerequisite `git rm --cached` failed silently — always re-verify with `git show HEAD --stat`
+
+**Mistake:** Ran `git rm --cached business` to remove the stray submodule from the commit. The command failed with `fatal: please stage your changes to .gitmodules or stash them to proceed` because `.gitmodules` had unstaged modifications. Did not check the exit code. Ran `git commit --amend --no-edit`, which succeeded on the unchanged index. Force-pushed the still-broken commit.
+
+**Why this happens:** `git rm --cached` aborts when there are unstaged dependent changes. The error is visible but easy to miss in mid-sequence output. `git commit --amend` then operates on whatever the index actually is — which in this case had not changed.
+
+**Rule:** After any `git rm --cached`, `git restore --staged`, or other index-mutation command, immediately verify with `git status` or `git diff --staged`. After any `git commit --amend`, immediately verify with `git show HEAD --stat` BEFORE pushing. Treat `--force-with-lease` as a verification gate, not a habitual finish.
+
+### 3. Public-repo commits — verify private content (paths, URLs, submodule entries) isn't leaking
+
+**Near-miss:** The accidental `business` submodule entry could have leaked the private repo URL `git@github.com:nmohamaya/companion_software_stack_business.git` if `.gitmodules` had been included in the same commit (it wasn't, by luck). A future broken-submodule commit might leak the URL.
+
+**Rule:** Before pushing to a public repo, `git diff origin/<base>..HEAD` and explicitly scan for:
+- Any submodule reference (`mode 160000` entries) — confirm they're intentional and point to public repos
+- Any `.gitmodules` entries — confirm URLs are public
+- Any reference to `business/`, `tasks/`, customer-specific paths, or other private content
+- Any URL to a private GitHub repo
+- Any file from the private business-submodule path
+
+If anything looks unintentional, **stop, fix, re-verify, then push**. Never use `git push --force` blindly; always `--force-with-lease`, and only after `git show HEAD --stat` confirms the diff is what you expect.
+
+### 4. Three-step verification checklist for any commit on a public repo
+
+Apply before every push (especially when stashes were used or rebases happened):
+
+1. `git status` — confirm working tree state matches intent
+2. `git diff --staged` — confirm the diff to be committed matches intent
+3. `git show HEAD --stat` (after commit) — confirm the commit actually contains what was intended
+
+For force-pushes, also:
+4. `git log origin/<branch>..HEAD --oneline` — confirm the rewrite is what you expect
+5. `--force-with-lease` (never bare `--force`) — protects against overwriting concurrent updates
+
+These five checks take ~30 seconds. They prevent a class of mistake that costs hours to clean up if it lands on a shared branch.
+
+
+
 ## Session: 2026-02-24 — Issue #4 API-Driven Development
 
 ### 1. Always check actual struct field names before writing tests

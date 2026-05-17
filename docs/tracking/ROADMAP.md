@@ -53,7 +53,7 @@
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (D* Lite planner + 3D avoidance + HD-map) |
 | Autonomous flight | ARM → Takeoff → Navigate 7 WPs (D* Lite + 3D avoidance) → RTL → Land → Disarm |
-| CI | GitHub Actions — 5-job pipeline: format gate + 3-leg build matrix (sanitizers) + coverage ([docs/CI_SETUP.md](../guides/CI_SETUP.md)) |
+| CI | GitHub Actions — 5-job pipeline: format gate + 3-leg build matrix (sanitizers) + coverage ([docs/CI_SETUP.md](../how-to/CI_SETUP.md)) |
 | Line coverage | **75.1%** (lcov) |
 | Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
 | Config tunables | 95+ (JSON, dot-path access, schema-validated) |
