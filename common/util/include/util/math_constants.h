@@ -20,9 +20,9 @@
 
 namespace drone::util {
 
-inline constexpr float kPi       = 3.14159265358979323846f;
-inline constexpr float kTwoPi    = 2.0f * kPi;
-inline constexpr float kHalfPi   = 0.5f * kPi;
+inline constexpr float kPi     = 3.14159265358979323846f;
+inline constexpr float kTwoPi  = 2.0f * kPi;
+inline constexpr float kHalfPi = 0.5f * kPi;
 
 /// Multiply a value in radians by `kRadToDeg` to convert to degrees.
 inline constexpr float kRadToDeg = 180.0f / kPi;
