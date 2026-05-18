@@ -177,6 +177,23 @@ export PX4_SYS_AUTOSTART=4001   # x500 quad airframe
 export PX4_SIM_MODEL="${PX4_MODEL}"
 export PX4_GZ_WORLD="test_world"
 
+# ── Issue #778 — extend PX4 auto-pre-flight-disarm window ───────────────
+# PX4 default `COM_DISARM_PRFLT=10` auto-disarms 10 s after ARM if no
+# TAKEOFF command is received.  Our Layer 4 (post-ARM attitude/velocity
+# settle gate, epic #727/#740) needs up to `mission_planner.preflight_timeout_s`
+# (default 60 s) to release on jittery cold-starts, and the PR #779
+# diagnostic sweep showed this race accounts for the largest population
+# of the ~40 % SITL failure rate (PX4 disarms mid-settle → planner sees
+# `armed=false` → Layer 1 re-engages → second ARM cycle eats the
+# remaining timeout budget).  Setting 120 s here gives full PREFLIGHT
+# timeout headroom + a safety buffer for re-arms while still preserving
+# eventual auto-disarm on a truly stuck FSM.  PX4 reads any
+# `PX4_PARAM_*` env var at rcS startup (see
+# `init.d-posix/rcS::129-136`) and applies the named parameter — no
+# PX4 source change required.  SITL-only: real hardware preflight
+# disarm is operator-tuned via the standard PX4 parameter UI.
+export PX4_PARAM_COM_DISARM_PRFLT=120
+
 # Explicitly export HEADLESS for both cases so that inherited
 # environment values don't override the --gui / default choice.
 if [[ "$HEADLESS" -eq 1 ]]; then
