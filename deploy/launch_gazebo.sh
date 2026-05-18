@@ -177,6 +177,72 @@ export PX4_SYS_AUTOSTART=4001   # x500 quad airframe
 export PX4_SIM_MODEL="${PX4_MODEL}"
 export PX4_GZ_WORLD="test_world"
 
+# ── Issue #778 — SITL-only workaround for Gazebo spawn-bounce EKF2 bias ─────
+#
+# THIS IS A SIM-ONLY WORKAROUND, NOT A REAL-HARDWARE FIX.
+# Real drones have been sitting still on the ground for seconds/minutes
+# before EKF2 ever boots, so the failure mode this addresses cannot
+# occur on real hardware.  This change protects nothing on real flight.
+#
+# The bug it works around:
+#   PX4's `px4-rc.gzsim` script (line 130) waits only 1 s between
+#   spawning the drone model into Gazebo and starting the IMU bridge.
+#   At the default spawn pose (z=0), the drone intersects the ground
+#   plane → Gazebo physics ejects it upward with a violent transient
+#   → EKF2 reads the noisy initial IMU samples and locks in a wrong
+#   attitude estimate.  PR #779 diagnostic sweep measured persistent
+#   1.7–2.5° tilt bias in 4 of 5 cold-starts at the default pose;
+#   PR #781 v7 sweep with z=0.3 measured 0.1° on 5 of 5 (clean).
+#
+# Why z=0.3:
+#   30 cm clearance gives ~25 cm of free fall before ground contact
+#   — a clean ballistic motion (constant -9.8 acceleration) that
+#   physics resolves cleanly, followed by a single impact + dampening,
+#   all within the 1-s PX4 spawn-wait window.  EKF2 then initialises
+#   from a fully-settled stationary drone.
+#
+# Proper-fix follow-up:
+#   The real fix lives upstream in PX4 (the `sleep 1` in px4-rc.gzsim
+#   should be a wait-for-Gazebo-physics-settled signal, not a fixed
+#   delay).  Architectural alternative on our side: a two-phase
+#   launcher that starts Gazebo first, waits for full physics
+#   convergence, then starts PX4 (Gazebo finds "already running" and
+#   skips the spawn-then-1s-wait flow entirely).  Neither is in scope
+#   for this PR — see #778 for the open follow-up work.
+export PX4_GZ_MODEL_POSE="0,0,0.3"
+
+# ── Issue #778 — extend PX4 auto-pre-flight-disarm window (SITL safety net) ─
+#
+# SITL-ONLY DEFENSE-IN-DEPTH.  Once the spawn-bounce workaround above
+# is in place, EKF2 converges to ~0.1° tilt by armable=true and Layer 4
+# releases TAKEOFF in <1 s (PR #781 v7 sweep) — the 10-s race window
+# this guards against no longer fires.  Keeping the override because
+# the cost is zero (parameter write at PX4 startup, no runtime impact
+# unless Layer 4 takes >10 s) and the protection is real for any
+# future regression in Layer 4 timing, PX4 behaviour change, or
+# under-load slowdown that pushes Layer 4 past the default 10-s
+# window.
+#
+# Background:
+#   PX4 default `COM_DISARM_PRFLT=10` auto-disarms 10 s after ARM if
+#   no TAKEOFF command is received.  Pre-spawn-drop, Layer 4 took
+#   >10 s when EKF2 had spawn-bounce bias → PX4 disarmed mid-settle
+#   → planner saw `armed=false` → Layer 1 re-engaged → second ARM
+#   cycle ate the remaining PREFLIGHT_TIMEOUT budget.  120 s gives
+#   full headroom + a safety buffer while still preserving eventual
+#   auto-disarm on a truly stuck FSM.
+#
+# Mechanism:
+#   PX4 reads any `PX4_PARAM_*` env var at rcS startup (see
+#   `init.d-posix/rcS::129-136`) and applies the named parameter —
+#   no PX4 source change required.
+#
+# Real hardware:
+#   COM_DISARM_PRFLT is operator-tuned on real hardware via the
+#   standard PX4 parameter UI.  This env-var override only fires
+#   when this script (Gazebo SITL launcher) runs PX4.
+export PX4_PARAM_COM_DISARM_PRFLT=120
+
 # Explicitly export HEADLESS for both cases so that inherited
 # environment values don't override the --gui / default choice.
 if [[ "$HEADLESS" -eq 1 ]]; then
