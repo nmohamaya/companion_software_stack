@@ -105,6 +105,10 @@
         "rtl_acceptance_radius_m": 1.5,
         "landed_altitude_m": 0.5,
         "rtl_min_dwell_seconds": 5,
+        "_layer4_sitl_canary_comment": "Issue #778 / PR #781 — SITL-only Layer 4 canary. These three takeoff_* values tighten the post-ARM attitude/velocity settle gate (defaults in default.json: 5.0° / 0.3 / 30 obs). Tighter values here serve as a SITL canary for the spawn-bounce EKF2 bias workaround in launch_gazebo.sh: when the workaround is functioning, the simulated EKF2 reaches roll/pitch ~0.1° / |v| ~0.01 from eval #0 (PR #779 + #781 v7 sweep), well within these tightened thresholds; if a future PX4 / Gazebo change reintroduces spawn-bounce bias, the tight gate fails fast (PREFLIGHT_TIMEOUT) instead of letting a biased-attitude TAKEOFF happen. NOT appropriate for real hardware — real IMU noise is higher than the simulated IIM42653 model and these thresholds would gate every real cold-start. Real-hardware deployments should use the default.json values or hardware-specific overrides. preflight_armable_stable_s deliberately uses the default (3.0s): post spawn-bounce fix, EKF2 is fully converged by armable=true, so the wider window adds no safety and costs 7 s of cold-start latency per run.",
+        "takeoff_settle_observations": 60,
+        "takeoff_max_tilt_deg": 1.5,
+        "takeoff_max_velocity_mps": 0.15,
         "path_planner": {
             "backend": "dstar_lite",
             "max_search_time_ms": 100
