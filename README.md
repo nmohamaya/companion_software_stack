@@ -68,37 +68,27 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 
 ---
 
-## Documentation Index
+## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [GETTING_STARTED.md](docs/tutorials/GETTING_STARTED.md) | Detailed setup and first-run guide |
-| **Process Design** | |
-| [video_capture_design.md](docs/design/video_capture_design.md) | P1 camera backends, frame formats, stereo sync |
-| [perception_design.md](docs/design/perception_design.md) | P2 perception pipeline: detector backends, ByteTrack tracker, UKF fusion |
-| [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md) | P3 VIO pipeline, pose quality states, IMU integration |
-| [mission_planner_design.md](docs/design/mission_planner_design.md) | P4 FSM, fault management, D* Lite planner, obstacle avoidance, geofencing |
-| [comms_design.md](docs/design/comms_design.md) | P5 MAVLink protocol, thread responsibilities, safety guards |
-| [payload_manager_design.md](docs/design/payload_manager_design.md) | P6 gimbal control, payload actions, rate-limited slew |
-| [system_monitor_design.md](docs/design/system_monitor_design.md) | P7 health metrics, thermal zones, battery monitoring |
-| **Cross-Cutting** | |
-| [API.md](docs/design/API.md) | IPC interfaces, Zenoh pub/sub, HAL interfaces, message types |
-| [hal_design.md](docs/design/hal_design.md) | Hardware Abstraction Layer: interfaces, backends, factory pattern |
-| [ipc_design.md](docs/design/ipc_design.md) | IPC architecture: Zenoh message bus, TripleBuffer, channel design |
-| [error_handling_design.md](docs/design/error_handling_design.md) | Result\<T,E\> monadic error handling, no-exception policy |
-| [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, systemd integration, foundation hardening |
-| [ipc-key-expressions.md](docs/architecture/ipc-key-expressions.md) | Zenoh topic naming convention and complete channel table |
-| [process-health-monitoring.md](docs/architecture/process-health-monitoring.md) | Zenoh liveliness tokens for crash detection |
-| **Guides & Tracking** | |
-| [CONFIG_GUIDE.md](docs/how-to/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
-| [ROADMAP.md](docs/tracking/ROADMAP.md) | Completed milestones and planned production phases |
-| [CPP_PATTERNS_GUIDE.md](docs/reference/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
-| [DEVELOPMENT_WORKFLOW.md](docs/how-to/DEVELOPMENT_WORKFLOW.md) | Branching, PRs, CI, review process |
-| [BUG_FIXES.md](docs/tracking/BUG_FIXES.md) | Documented bugs fixed (good reference for common pitfalls) |
-| [TESTS.md](tests/TESTS.md) | Full test inventory with suites, counts, and run instructions |
-| **Multi-Agent Pipeline** | |
-| [MULTI_AGENT_GUIDE.md](docs/explanation/MULTI_AGENT_GUIDE.md) | Multi-agent AI pipeline: setup, deployment, review, pipeline mode |
-| [ADR-010](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Architecture decision record for the multi-agent pipeline |
+**Start here:** [`docs/README.md`](docs/README.md) — goal-routing index ("I want to install / understand X / look up Y / develop Z — start here"). Organised by [Diátaxis](https://diataxis.fr/) quadrant (tutorials / how-to / reference / explanation) plus the project-specific `adr/`, `architecture/`, `design/`, and `tracking/` folders.
+
+**Common entry points:**
+
+- [`docs/how-to/INSTALL.md`](docs/how-to/INSTALL.md) — install dependencies (per-OS matrix)
+- [`docs/tutorials/GETTING_STARTED.md`](docs/tutorials/GETTING_STARTED.md) — first-run walkthrough
+- [`docs/adr/README.md`](docs/adr/README.md) — Architecture Decision Records index (15 ADRs)
+- [`docs/tracking/ROADMAP.md`](docs/tracking/ROADMAP.md) — shipped milestones + planned work
+- [`tests/TESTS.md`](tests/TESTS.md) — full test inventory (single source of truth for counts)
+- [`NOTICE`](NOTICE) — licence + AI/ML training opt-out reservation (see [`docs/explanation/ai-training-opt-out.md`](docs/explanation/ai-training-opt-out.md))
+
+> **A note on indexes:** the routing table lives in [`docs/README.md`](docs/README.md), not in this file. Keeping a single index avoids the drift you get when two lists try to stay in sync. This README is the project landing page (pitch + quick-start + architecture); `docs/README.md` is the documentation hub.
+
+## Recent additions (May 2026)
+
+- **Perception v2 — PATH A** (Epic #523): class-aware segmentation (SAM backends) → mask-class assigner → mask-depth projector → `/semantic_voxels` channel into P4's volumetric map. Replaces the pre-v2 bbox-gated single-grid pipeline. See [`docs/design/`](docs/design/) (the perception design docs are local-only drafts pending commit) and [ADR-013](docs/adr/ADR-013-stereo-radar-redundancy-vs-fusion.md).
+- **SWVIO** (Epic #497, in flight): custom in-house Stereo-Inertial Sliding-Window VIO — license-clean replacement for VINS-Fusion / ORB-SLAM3 / Kimera-VIO. See [ADR-014](docs/adr/ADR-014-stereo-inertial-vio-algorithm-selection.md).
+- **Cosys-AirSim Tier 3** simulation (ADR-011): photorealistic UE5-based sim runs alongside Gazebo (Tier 2). See [`docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md`](docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md) and [`docs/how-to/COSYS_SETUP.md`](docs/how-to/COSYS_SETUP.md).
+- **Integration-branch rollup workflow** ([ADR-015](docs/adr/ADR-015-integration-branch-rollup-strategy.md)): codifies the 8-phase process for merging long-lived integration branches with multi-agent themed reviews. Full how-to in [`docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md).
 
 ---
 
@@ -179,6 +169,14 @@ graph LR
 
 **Data flows top-down** through five conceptual layers: Sense -> Understand -> Decide -> Act, with lateral supervision. 21+ threads across 7 Linux processes (3 + 4+ + 4 + 1 + 5 + 1 + 1; P2 adds a radar thread when enabled). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process handoff (P2 only) uses `drone::TripleBuffer` (lock-free latest-value).
 
+The diagram shows P2's classic detect-track-fuse path → `/detected_objects`. The newer Perception v2 PATH A flows in parallel: `IInferenceBackend` (segmentation) + `IDepthEstimator` → `MaskDepthProjector` → `/semantic_voxels` → P4's `IVolumetricMap`. See P2 Process Summary below for details.
+
+The simulation tier is selected per-scenario:
+
+- **Tier 1** — pure simulated HAL backends (no physics, no rendering) — fast unit-test cycles
+- **Tier 2** — Gazebo SITL — PX4 + physics + functional rendering
+- **Tier 3** — Cosys-AirSim (UE5) — photorealistic rendering for perception validation (see [`docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md`](docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md), [ADR-011](docs/adr/ADR-011-cosys-airsim-photorealistic-simulation.md))
+
 **Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. In supervised deployments (`--supervised` flag), `ProcessManager` in P7 fork+execs the other processes and handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` stop propagation + `WatchdogSec` on P7) provide OS-level supervision, and P7 runs monitor-only. Sanitizer-clean (ASan/TSan/UBSan). See [hardening-design.md](docs/design/hardening-design.md) for the full three-layer watchdog architecture.
 
 ### IPC Channel Map
@@ -189,6 +187,8 @@ All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The sole 
  P1 --> /drone_mission_cam -------> P2           (Zenoh: drone/video/frame)
  P1 --> /drone_stereo_cam -------> P2, P3        (Zenoh: drone/video/stereo_frame)
  P2 --> /detected_objects -------> P4             (Zenoh: drone/perception/detections)
+ P2 --> /semantic_voxels --------> P4             (Zenoh: drone/perception/semantic_voxels — PATH A)
+ P2 --> /radar_detections -------> P4             (Zenoh: drone/perception/radar — when radar enabled)
  P3 --> /slam_pose ---------------> P4, P5, P6    (Zenoh: drone/slam/pose)
  P4 --> /trajectory_cmd ---------> P5            (Zenoh: drone/mission/trajectory)
  P4 --> /mission_status ---------> P5, P7         (Zenoh: drone/mission/status)
@@ -219,9 +219,14 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 | `IPathPlanner` | Path planning | `DStarLitePlanner` — 3D incremental search + obstacle awareness | — | RRT* |
 | `IObstacleAvoider` | Obstacle avoidance | `ObstacleAvoider3D` — 3D repulsive field + velocity prediction | — | VFH+ / 3D-VFH |
 | `IRadar` | Radar detections | `SimulatedRadar` — config-driven synthetic targets | `GazeboRadarBackend` (gpu_lidar + odometry) | SPI/UART radar driver |
+| `IDepthEstimator` | Dense depth from RGB | `SimulatedDepthEstimator` | `CosysDepthBackend` (Tier 3 ground truth) | `DepthAnythingV2Estimator` (ONNX/OpenCV DNN) |
+| `IInferenceBackend` | Object detection + segmentation | `SimulatedInferenceBackend` / `SimulatedSAMBackend` / `EdgeContourSAMBackend` | `CosysSegmentationBackend` (Tier 3 GT instance masks) | `FastSamInferenceBackend` (ONNX FastSAM) |
+| `ISemanticProjector` | 2D mask → 3D voxel back-projection | `CpuSemanticProjector` (header-only) | — | — |
+| `IVolumetricMap` | 3D voxel map | `SimulatedVolumetricMap` (in-memory hash map) | — | — |
+| `IEventCamera` | DVS event stream (forward-looking) | `SimulatedEventCamera` | — | — |
 | `IProcessMonitor` | System metrics | `LinuxProcessMonitor` — /proc, /sys | — | — |
 
-> For interface signatures and class hierarchy, see [API.md](docs/design/API.md).
+> For interface signatures and class hierarchy, see [API.md](docs/design/API.md). The authoritative interface list is `common/hal/include/hal/i*.h` (single source of truth — see [`CLAUDE.md` § Single Sources of Truth](CLAUDE.md#single-sources-of-truth-ssot)).
 
 ---
 
@@ -237,15 +242,20 @@ Two capture threads acquire frames from mission camera (1920x1080 RGB, 30 Hz) an
 
 ### Process 2 — Perception (4+ threads)
 
-A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrack with Kalman filters and Hungarian assignment), and sensor fusion (camera-only monocular depth or camera+radar UKF). Stages are connected by `drone::TripleBuffer` (lock-free latest-value handoff), so consumers always see the most recent result. An optional `radar_read` thread runs when radar is enabled. Three detector backends are available: simulated (random boxes), color contour (HSV segmentation, pure C++), and YOLOv8-nano (OpenCV DNN, optional).
+A pipelined vision system with two parallel paths into P4's occupancy grid:
 
-> For full pipeline details including Kalman state vectors, association algorithms, fusion backends, and config keys, see [perception_design.md](docs/design/perception_design.md).
+- **Classic detect/track/fuse path:** detection (`IDetector`) → tracking (ByteTrack with Kalman filters and Hungarian assignment) → sensor fusion (camera-only monocular depth or camera+radar UKF) → `/detected_objects`. Stages are connected by `drone::TripleBuffer` (lock-free latest-value handoff) so consumers always see the most recent result.
+- **PATH A (Perception v2, Epic #523):** class-agnostic segmentation (`IInferenceBackend` — `FastSAM`, `EdgeContourSAM`, or Cosys ground-truth) → `MaskClassAssigner` pairs masks with class-aware detections (IoU-gated) → `MaskDepthProjector` back-projects each mask through a depth map (`IDepthEstimator` — `DepthAnythingV2`, Cosys ground-truth) and camera pose into 3D `VoxelUpdate`s → `/semantic_voxels` to P4's volumetric map. Lets PATH A cover non-COCO obstacles (cubes, panels, wires) that the classic detector misses.
+
+An optional `radar_read` thread runs when radar is enabled. Backend selection is config-driven via the HAL factory.
+
+> For full pipeline details, see the design docs in [`docs/design/`](docs/design/) (the v2 docs are local-only drafts pending commit on the perception dev machine) and [ADR-013](docs/adr/ADR-013-stereo-radar-redundancy-vs-fusion.md) for the radar-vs-fusion architecture decision.
 
 ### Process 3 — SLAM/VIO/Nav (4 threads)
 
-Three worker threads plus a main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data, and generates a 6-DOF pose published at 100 Hz. The `Pose.quality` field (0=lost to 3=excellent) reflects VIO health state, consumed by P4's FaultManager for safety response. Backends: `SimulatedVIOBackend` (target-following dynamics with full pipeline), `GazeboVIOBackend` (ground-truth odometry), and `GazeboFullVIOBackend` (full pipeline on Gazebo frames).
+Three worker threads plus a main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data, and generates a 6-DOF pose published at 100 Hz. The `Pose.quality` field (0=lost to 3=excellent) reflects VIO health state, consumed by P4's FaultManager for safety response. Backends today: `SimulatedVIOBackend` (target-following dynamics with full pipeline), `GazeboVIOBackend` (ground-truth odometry), and `GazeboFullVIOBackend` (full pipeline on Gazebo frames). In flight (Epic #497): `SwvioBackend` — custom in-house Stereo-Inertial Sliding-Window VIO with IMU pre-integration, error-state formulation, and Schur-complement marginalisation. License-clean replacement for VINS-Fusion / ORB-SLAM3 / Kimera-VIO.
 
-> For VIO pipeline details, pose quality states, and IMU integration, see [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md).
+> For VIO pipeline details, see [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md). For the SWVIO algorithm-selection rationale see [ADR-014](docs/adr/ADR-014-stereo-inertial-vio-algorithm-selection.md).
 
 ### Process 4 — Mission Planner (1 thread, 10 Hz)
 
@@ -278,7 +288,7 @@ Collects CPU usage (/proc/stat), memory (/proc/meminfo), CPU temperature (/sys/c
 All common libraries live in `common/` and are written from scratch.
 
 - **IPC (`common/ipc/`)** — Zenoh-backed `IPublisher<T>` / `ISubscriber<T>` with zero-copy SHM for local transport and network transport (UDP/TCP/QUIC) for drone-to-GCS communication. Singleton `ZenohSession`, liveliness tokens for crash detection, and `ZenohServiceClient`/`ZenohServiceServer` for request-response patterns. All IPC structs must be trivially copyable.
-- **HAL (`common/hal/`)** — Abstract interfaces (ICamera, IDetector, IFCLink, IGCSLink, IGimbal, IIMUSource, IVIOBackend, IPathPlanner, IObstacleAvoider, IProcessMonitor) with config-driven factory. Simulated, Gazebo, and real backends.
+- **HAL (`common/hal/`)** — Abstract interfaces for camera, detector, FC/GCS link, gimbal, IMU, VIO, path planning, obstacle avoidance, radar, depth estimation, inference (detection + segmentation), semantic projection, volumetric map, event camera, and process monitoring — all with config-driven factory. Simulated, Gazebo, Cosys-AirSim, and real backends. Authoritative list: `common/hal/include/hal/i*.h`.
 - **Utilities (`common/util/`)** — `Result<T,E>` monadic error type, `Config` (nlohmann/json, dot-path access), `ThreadHeartbeat`/`ThreadWatchdog`, `SignalHandler`, `ScopedTimer`, `SPSCRing<T,N>` (lock-free ring buffer), `LogConfig` (spdlog), `parse_args()` CLI parsing.
 
 > For IPC class hierarchy, interface signatures, and message type reference, see [API.md](docs/design/API.md).
