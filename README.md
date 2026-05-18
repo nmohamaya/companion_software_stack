@@ -76,7 +76,7 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 
 - [`docs/how-to/INSTALL.md`](docs/how-to/INSTALL.md) — install dependencies (per-OS matrix)
 - [`docs/tutorials/GETTING_STARTED.md`](docs/tutorials/GETTING_STARTED.md) — first-run walkthrough
-- [`docs/adr/README.md`](docs/adr/README.md) — Architecture Decision Records index (15 ADRs)
+- [`docs/adr/README.md`](docs/adr/README.md) — Architecture Decision Records index
 - [`docs/tracking/ROADMAP.md`](docs/tracking/ROADMAP.md) — shipped milestones + planned work
 - [`tests/TESTS.md`](tests/TESTS.md) — full test inventory (single source of truth for counts)
 - [`NOTICE`](NOTICE) — licence + AI/ML training opt-out reservation (see [`docs/explanation/ai-training-opt-out.md`](docs/explanation/ai-training-opt-out.md))
@@ -85,7 +85,7 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 
 ## Recent additions (May 2026)
 
-- **Perception v2 — PATH A** (Epic #523): class-aware segmentation (SAM backends) → mask-class assigner → mask-depth projector → `/semantic_voxels` channel into P4's volumetric map. Replaces the pre-v2 bbox-gated single-grid pipeline. See [`docs/design/`](docs/design/) (the perception design docs are local-only drafts pending commit) and [ADR-013](docs/adr/ADR-013-stereo-radar-redundancy-vs-fusion.md).
+- **Perception v2 — PATH A** (Epic #523): class-agnostic segmentation (SAM backends) → `MaskClassAssigner` pairs masks with class-aware detector outputs → mask-depth projector → `/semantic_voxels` channel into P4's volumetric map. Replaces the pre-v2 bbox-gated single-grid pipeline. See [`docs/design/`](docs/design/) (the perception design docs are local-only drafts pending commit) and [ADR-013](docs/adr/ADR-013-stereo-radar-redundancy-vs-fusion.md).
 - **SWVIO** (Epic #497, in flight): custom in-house Stereo-Inertial Sliding-Window VIO — license-clean replacement for VINS-Fusion / ORB-SLAM3 / Kimera-VIO. See [ADR-014](docs/adr/ADR-014-stereo-inertial-vio-algorithm-selection.md).
 - **Cosys-AirSim Tier 3** simulation (ADR-011): photorealistic UE5-based sim runs alongside Gazebo (Tier 2). See [`docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md`](docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md) and [`docs/how-to/COSYS_SETUP.md`](docs/how-to/COSYS_SETUP.md).
 - **Integration-branch rollup workflow** ([ADR-015](docs/adr/ADR-015-integration-branch-rollup-strategy.md)): codifies the 8-phase process for merging long-lived integration branches with multi-agent themed reviews. Full how-to in [`docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](docs/how-to/INTEGRATION_ROLLUP_WORKFLOW.md).
@@ -193,8 +193,8 @@ All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The sole 
  P1 --> /drone_mission_cam -------> P2           (Zenoh: drone/video/frame)
  P1 --> /drone_stereo_cam -------> P2, P3        (Zenoh: drone/video/stereo_frame)
  P2 --> /detected_objects -------> P4             (Zenoh: drone/perception/detections)
- P2 --> /semantic_voxels --------> P4             (Zenoh: drone/perception/semantic_voxels — PATH A)
- P2 --> /radar_detections -------> P4             (Zenoh: drone/perception/radar — when radar enabled)
+ P2 --> /semantic_voxels --------> P4             (Zenoh: drone/perception/voxels — PATH A)
+ P2 --> /radar_detections -------> P4             (Zenoh: radar/detections — when radar enabled)
  P3 --> /slam_pose ---------------> P4, P5, P6    (Zenoh: drone/slam/pose)
  P4 --> /trajectory_cmd ---------> P5            (Zenoh: drone/mission/trajectory)
  P4 --> /mission_status ---------> P5, P7         (Zenoh: drone/mission/status)
