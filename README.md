@@ -119,8 +119,8 @@ graph LR
 
         subgraph Understand["Understanding Layer"]
             direction LR
-            P2["P2 Perception\n4+ threads - ~30 Hz\nDetect -> Track -> Fuse\n+ optional Radar"]
-            P3["P3 SLAM / VIO\n4 threads - 100 Hz\nStereo + IMU -> Pose"]
+            P2["P2 Perception\n4+ threads - ~30 Hz\nClassic: Detect -> Track -> Fuse (+ optional Radar)\nPATH A: Seg + Depth -> MaskDepthProjector -> Voxels"]
+            P3["P3 SLAM / VIO\n4 threads - 100 Hz\nStereo + IMU -> Pose\n(SwvioBackend in flight)"]
         end
 
         subgraph Decide["Decision Layer"]
@@ -150,13 +150,19 @@ graph LR
 
     P1 -->|"/drone_mission_cam"| P2
     P1 -->|"/drone_stereo_cam"| P3
+    P1 -.->|"/drone_stereo_cam (stereo depth)"| P2
     P2 -->|"/detected_objects"| P4
+    P2 -->|"/semantic_voxels (PATH A)"| P4
     P3 -->|"/slam_pose"| P4
+    P3 -.->|"/slam_pose (auto-track)"| P6
     P5 -->|"/fc_state"| P4
     P5 -->|"/gcs_commands"| P4
     P7 -->|"/system_health"| P4
     P4 -->|"/trajectory_cmd\n/fc_commands"| P5
+    P4 -->|"/mission_status"| P5
     P4 -->|"/payload_commands"| P6
+    P6 -->|"/payload_status"| P4
+    P6 -.->|"/payload_status"| P7
 
     style Sensors fill:#2d1f3d,stroke:#9b59b6,color:#e0e0e0
     style Stack fill:#1a1a2e,stroke:#3498db,color:#e0e0e0
@@ -169,7 +175,7 @@ graph LR
 
 **Data flows top-down** through five conceptual layers: Sense -> Understand -> Decide -> Act, with lateral supervision. 21+ threads across 7 Linux processes (3 + 4+ + 4 + 1 + 5 + 1 + 1; P2 adds a radar thread when enabled). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process handoff (P2 only) uses `drone::TripleBuffer` (lock-free latest-value).
 
-The diagram shows P2's classic detect-track-fuse path → `/detected_objects`. The newer Perception v2 PATH A flows in parallel: `IInferenceBackend` (segmentation) + `IDepthEstimator` → `MaskDepthProjector` → `/semantic_voxels` → P4's `IVolumetricMap`. See P2 Process Summary below for details.
+P2 publishes two parallel outputs into P4's planner: `/detected_objects` (classic detect → track → fuse) and `/semantic_voxels` (PATH A: `IInferenceBackend` segmentation + `IDepthEstimator` → `MaskDepthProjector` → `IVolumetricMap`). The dashed arrows mark secondary routes — stereo to P2 for depth, SLAM pose to P6 for gimbal auto-tracking, payload status to P7 for monitoring. See P2 Process Summary below for details.
 
 The simulation tier is selected per-scenario:
 
