@@ -566,21 +566,6 @@ private:
             // Resetting on the armed-observed edge closes that re-arm path.
             armable_first_seen_ns_ = 0;
 
-            // Issue #777 — first-evaluation diagnostic.  Emit one INFO at
-            // the start of every Layer 4 armed cycle so operators (and log
-            // archaeologists) can see the gate was actually reached with
-            // current threshold + target values.  Helps disambiguate the
-            // "no Layer 4 logs at all" case (= gate skipped or never
-            // entered) from the "evaluated but never settled" case (=
-            // genuine threshold / FC issue).
-            if (layer4_eval_count_ == 0) {
-                DRONE_LOG_INFO(
-                    "[Layer4] evaluation started — thresholds tilt<={:.1f}° vel<={:.2f}m/s, "
-                    "target {} consecutive observations",
-                    config_.takeoff_max_tilt_deg, config_.takeoff_max_velocity_mps,
-                    config_.takeoff_settle_observations);
-            }
-
             const int settle_target = config_.takeoff_settle_observations;
             if (settle_target <= 0) {
                 // Gate disabled by config — legacy immediate takeoff.
@@ -603,6 +588,26 @@ private:
                 return;
             }
 
+            // Issue #777 — first-evaluation diagnostic.  Emit one INFO at
+            // the start of every Layer 4 armed cycle so operators (and log
+            // archaeologists) can see the gate was actually reached with
+            // current threshold + target values.  Helps disambiguate the
+            // "no Layer 4 logs at all" case (= gate skipped or never
+            // entered) from the "evaluated but never settled" case (=
+            // genuine threshold / FC issue).
+            //
+            // PR #779 Copilot review fix: emitted *after* the
+            // `settle_target <= 0` early-return so we don't advertise
+            // thresholds + target that won't be applied (the gate-disabled
+            // legacy path takes off immediately above and never reaches
+            // here).
+            if (layer4_eval_count_ == 0) {
+                DRONE_LOG_INFO(
+                    "[Layer4] evaluation started — thresholds tilt<={:.1f}° vel<={:.2f}m/s, "
+                    "target {} consecutive observations",
+                    config_.takeoff_max_tilt_deg, config_.takeoff_max_velocity_mps, settle_target);
+            }
+
             const float tilt_limit = std::max(0.0f, config_.takeoff_max_tilt_deg);
             const float vel_limit  = std::max(0.0f, config_.takeoff_max_velocity_mps);
             const float roll_deg   = std::abs(fc_state.roll) * drone::util::kRadToDeg;
@@ -623,9 +628,18 @@ private:
             // tell whether the FC's attitude was genuinely above thresholds
             // (config-tune territory) or some other failure mode is at
             // play (code/data-plumbing investigation).
+            //
+            // PR #779 Copilot review fix: field is named
+            // `prev_settled_count` because `armed_settle_count_` is
+            // captured *before* the `++` below.  So at eval #0 with
+            // `this_obs_settled=true`, the log reads
+            // `prev_settled_count=0/30` and the post-tick value is 1.
+            // Operators reading traces in chronological order can subtract
+            // to derive the current count, but the name avoids the
+            // off-by-one confusion of calling it just "settled_count".
             if (layer4_eval_count_ % 10 == 0) {
                 DRONE_LOG_INFO("[Layer4] eval #{} roll={:.1f}° pitch={:.1f}° |v|={:.2f}m/s — "
-                               "settled_count={}/{} (this_obs_settled={})",
+                               "prev_settled_count={}/{} (this_obs_settled={})",
                                layer4_eval_count_, roll_deg, pitch_deg, vel_mag,
                                armed_settle_count_, settle_target, attitude_settled);
             }
