@@ -3894,4 +3894,90 @@ Layer 4 of the cold-start hardening epic (#740) — and the one the #746 smoke s
 
 ---
 
-*Last updated after Improvement #100 (Epic #740 Layer 4). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #101 — Stuck-Thread Stack-Trace Capture Infrastructure (Issue #765, PR 1 of 2)
+
+**Date:** 2026-06-12
+
+**What:** New `common/util/include/util/stack_trace_capture.h` — when
+`ThreadWatchdog` detects a stuck thread, the watchdog can now signal it
+with SIGUSR1 (via `tgkill`) and log a symbolised stack trace of where the
+thread is blocked.  This is the deferred acceptance-#1 piece of #765: the
+31-second `planning_loop` stall that motivated the issue produced zero
+actionable data; with this infrastructure, the next recurrence produces a
+full backtrace.
+
+**Key design points** (full analysis in the header + the #765 plan comment):
+
+- `pid_t tid` plumbed through `ThreadHeartbeat` (captured at
+  `register_thread()`, which runs on the monitored thread).
+- Delivery via `tgkill`, not `pthread_kill` — heartbeat slots are never
+  unregistered, and `pthread_kill` on a dead `pthread_t` is UB while
+  `tgkill` returns ESRCH cleanly.
+- Async-signal-safe handler: lock-free atomic state machine
+  (`kIdle → kRequested → kBusyWriting → kDone | kTimedOut`) + `backtrace()` into a
+  static buffer; symbolisation happens on the watchdog thread.
+  `install()` pre-warms glibc's lazy libgcc init outside signal context.
+- `SA_RESTART` set deliberately (counter-example to `SignalHandler`):
+  never unstick the stuck thread's blocked syscall as a side effect.
+- Timed-out slots are reclaimable (a D-state target never delivers) with
+  a target-tid handler guard preventing stale-delivery misattribution.
+- Per-tid rate limiting via `get_clock()` (mock-testable).
+- `-rdynamic` (`CMAKE_ENABLE_EXPORTS`) enabled globally so
+  `backtrace_symbols` produces names in Release field builds.
+
+**Phase 0 baseline (N=10 sweep of `02_obstacle_avoidance`, this date):**
+0/10 runs reproduced the #765 watchdog thread-stall (base rate <10%);
+2/10 failed with the unrelated #764 navigation-STUCK class.  The stall is
+too rare to root-cause by brute-force reproduction — confirming the
+trap-armed-in-every-run diagnostic approach.
+
+**Files modified:**
+
+- `common/util/include/util/stack_trace_capture.h` — NEW.
+- `common/util/include/util/thread_heartbeat.h` — `tid` field + capture +
+  copy/reset plumbing.
+- `CMakeLists.txt` — `CMAKE_ENABLE_EXPORTS ON` (with rationale comment).
+- `tests/test_stack_trace_capture.cpp` — NEW (10 tests, incl. TOCTOU,
+  wedge-bug, late-handler-race, rate-limit-on-timeout regressions).
+- `tests/test_thread_heartbeat.cpp` — +2 tid tests, 3 extended.
+- `docs/reference/CPP_PATTERNS_GUIDE.md` — §2.8 cross-ref (SA_RESTART
+  counter-example + capture pattern) + relaxed-ordering justification
+  added to the exemplar.
+- `tests/TESTS.md` — counts + new suite section.
+
+**Pre-commit adversarial review (3-lens + verify workflow) hardened the
+state machine before this PR was opened — 7 confirmed findings fixed:**
+
+- **TOCTOU (P2):** the bare `gettid()==s_target_tid` guard and the
+  `backtrace()` write were separable, so a parked handler could race the
+  next capture's buffer + misattribute the trace. Fixed by requiring the
+  handler to win an exclusive `kRequested→kBusyWriting` CAS *before*
+  touching `s_frames` (single-writer), plus a `s_writer_tid` stamp the
+  watchdog re-validates before consuming a `kDone` result
+  (no-misattribution).
+- **Rate-limit bypass on timeout (P2):** `note_capture()` ran only on the
+  `kOk` path, so a D-state thread (the actual #765 scenario — always
+  times out) was re-signalled every ~1 s forever. Now recorded on every
+  post-signal outcome.
+- **config_ race (P3):** assigned on every `install()`; now written only
+  on first install (published by the `installed_` release-store).
+- Four test-quality fixes: late-handler test made non-vacuous (asserts
+  the lost-slot branch via a new `is_timed_out_for_testing()` seam),
+  added a rate-limit-on-timeout test, documented the `kNotInstalled` and
+  `kBusy` coverage constraints (both contract-unreachable), strengthened
+  the reset test.
+
+**Test count:** +12 (new file 10, `test_thread_heartbeat.cpp` 25 → 27).
+A concurrent-callers test was dropped post-CI: it violated the
+single-consumer contract and TSan correctly flagged the race on the
+(deliberately non-atomic) rate-limiter state — the production handler⇄
+watchdog handoff is independently TSan-clean.
+
+**Why:** Observability-before-remediation (the pattern that paid off
+on #777 / #778): arm the diagnostic first, root-cause from data, then
+fix.  Planner-side wiring (config keys + `PlannerStallHandler`
+integration + DR entry) follows in PR 2.
+
+---
+
+*Last updated after Improvement #101 (Issue #765 PR 1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

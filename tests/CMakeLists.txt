@@ -134,6 +134,9 @@ target_compile_definitions(test_gt_emitter PRIVATE
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
 
+# ── Stack-trace capture tests (Issue #765) ───────────────────
+add_drone_test(test_stack_trace_capture test_stack_trace_capture.cpp)
+
 # ── Thread Health Publisher tests ────────────────────────────
 add_drone_test(test_thread_health_publisher test_thread_health_publisher.cpp)
 

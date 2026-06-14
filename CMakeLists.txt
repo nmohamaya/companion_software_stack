@@ -29,6 +29,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# Export dynamic symbols so backtrace_symbols() can name non-static
+# functions in stuck-thread stack traces (Issue #765 StackTraceCapture).
+# Applied to ALL build types deliberately: #765-class stalls manifest in
+# Release builds in the field, where an address-only trace defeats the
+# diagnostic's purpose.  Cost: single-digit-% dynamic-symtab growth.
+set(CMAKE_ENABLE_EXPORTS ON)
+
 # ── Sanitizer support ───────────────────────────────────────
 # Usage: cmake -DENABLE_ASAN=ON, -DENABLE_TSAN=ON, or -DENABLE_UBSAN=ON
 # ASan and TSan are mutually exclusive (both instrument memory accesses).

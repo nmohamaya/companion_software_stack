@@ -16,6 +16,10 @@
 #include <chrono>
 #include <cstring>
 
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 namespace drone::util {
 
 /// Maximum number of threads that can register heartbeats per process.
@@ -34,6 +38,18 @@ struct ThreadHeartbeat {
     std::atomic<uint64_t> last_touch_ns{0};
     bool                  is_critical = false;
 
+    /// Kernel thread id (gettid) of the registered thread — captured in
+    /// register_thread(), which runs ON the registering thread.  Used by
+    /// StackTraceCapture (Issue #765) to deliver SIGUSR1 via tgkill() when
+    /// the watchdog detects this thread stuck.  tgkill on a stale tid
+    /// returns ESRCH cleanly (heartbeat slots are never unregistered, so a
+    /// slot can outlive its thread — this is why we store a tid and NOT a
+    /// pthread_t: pthread_kill on a dead pthread_t is undefined behaviour).
+    /// 0 = "not captured" (pre-registration or test-synthesised beats).
+    /// Published under the same initialized release/acquire protocol as
+    /// `name` / `is_critical` — written before initialized.store(release).
+    pid_t tid = 0;
+
     /// Set to true (with release) after name/is_critical are fully written.
     /// snapshot() checks this (with acquire) to skip partially-initialized
     /// slots, eliminating the TSAN data race between register_thread()
@@ -43,7 +59,7 @@ struct ThreadHeartbeat {
     // Non-atomic copy for snapshots — only called on initialized slots
     // (guarded by initialized.load(acquire) in snapshot()).
     ThreadHeartbeat() = default;
-    ThreadHeartbeat(const ThreadHeartbeat& other) : is_critical(other.is_critical) {
+    ThreadHeartbeat(const ThreadHeartbeat& other) : is_critical(other.is_critical), tid(other.tid) {
         std::copy(std::begin(other.name), std::end(other.name), std::begin(name));
         last_touch_ns.store(other.last_touch_ns.load(std::memory_order_relaxed),
                             std::memory_order_relaxed);
@@ -56,6 +72,7 @@ struct ThreadHeartbeat {
             last_touch_ns.store(other.last_touch_ns.load(std::memory_order_relaxed),
                                 std::memory_order_relaxed);
             is_critical = other.is_critical;
+            tid         = other.tid;
             initialized.store(other.initialized.load(std::memory_order_relaxed),
                               std::memory_order_relaxed);
         }
@@ -125,6 +142,13 @@ public:
         // and prevents reading partially-written name/is_critical.
         safe_name_copy(beats_[idx].name, name);
         beats_[idx].is_critical = critical;
+        // Issue #765: capture the kernel tid of the registering thread so
+        // the watchdog's StackTraceCapture can signal it on stall.  This
+        // relies on register_thread() running ON the monitored thread —
+        // true for all current callers (ScopedHeartbeat is constructed at
+        // the top of each thread function).  Written before the
+        // initialized release-store, same protocol as name/is_critical.
+        beats_[idx].tid = static_cast<pid_t>(::syscall(SYS_gettid));
         beats_[idx].initialized.store(true, std::memory_order_release);
         // last_touch_ns stays 0 — signals "registered but not yet started"
         return idx;
@@ -175,6 +199,7 @@ public:
             std::fill_n(beats_[i].name, sizeof(beats_[i].name), '\0');
             beats_[i].last_touch_ns.store(0, std::memory_order_relaxed);
             beats_[i].is_critical = false;
+            beats_[i].tid         = 0;
         }
         count_.store(0, std::memory_order_relaxed);
     }

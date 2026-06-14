@@ -1134,11 +1134,16 @@ Process-global singleton for per-thread heartbeat tracking. Each thread register
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `instance` | `static ThreadHeartbeatRegistry& instance()` | Singleton access |
-| `register_thread` | `size_t register_thread(const char* name, bool critical = false)` | Claim next slot via CAS loop; returns handle or `kInvalidHandle` |
+| `register_thread` | `size_t register_thread(const char* name, bool critical = false)` | Claim next slot via CAS loop; returns handle or `kInvalidHandle`. **Must be called ON the monitored thread** — also captures that thread's kernel `tid` (`gettid`) for `StackTraceCapture` |
 | `touch` | `void touch(size_t handle)` | Update `last_touch_ns` atomically |
 | `touch_with_grace` | `void touch_with_grace(size_t handle, milliseconds grace)` | Touch with future timestamp (covers long ops like model loading) |
 | `snapshot` | `[[nodiscard]] ThreadSnapshot snapshot() const` | Stack-allocated copy of all registered heartbeats |
 | `count` | `[[nodiscard]] size_t count() const` | Number of registered beats |
+
+**`ThreadHeartbeat` fields:** `name[32]`, `last_touch_ns` (atomic),
+`is_critical`, `tid` (kernel thread id, Issue #765 — used by
+`StackTraceCapture` to signal a stuck thread), `initialized` (atomic
+publish flag).
 
 **Constants:** `kMaxThreads = 16`, `kInvalidHandle` (sentinel).
 
@@ -1183,6 +1188,41 @@ Background scanner thread that detects stuck threads via heartbeat age compariso
 |-------|---------|-------------|
 | `stuck_threshold` | 5000 ms | Duration without touch before "stuck" |
 | `scan_interval` | 1000 ms | Polling period |
+
+### `StackTraceCapture` — `drone::util` — Issue [#765](https://github.com/nmohamaya/companion_software_stack/issues/765)
+
+**Header:** `common/util/include/util/stack_trace_capture.h`
+
+Process-global singleton that captures a symbolised stack trace of a
+**stuck** thread when the watchdog detects it. The watchdog (single
+consumer) calls `capture_and_log(tid, name)`; it delivers `SIGUSR1` via
+`tgkill`; the async-signal-safe handler — running in the stuck thread's
+own context — writes `backtrace()` frames into a static buffer guarded by
+a lock-free state machine (`kIdle → kRequested → kBusyWriting → kDone |
+kTimedOut`); the watchdog validates the writer and symbolises +
+`DRONE_LOG_ERROR`s the result. The target `tid` comes from the new
+`ThreadHeartbeat::tid` field (captured at `register_thread()`).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `instance` | `static StackTraceCapture& instance()` | Singleton access |
+| `install` | `[[nodiscard]] bool install(TraceCaptureConfig cfg = {})` | One-shot: install SIGUSR1 handler + pre-warm glibc unwinder. Call BEFORE worker threads start; config fixed at first install |
+| `capture_and_log` | `[[nodiscard]] TraceCaptureStatus capture_and_log(pid_t tid, const char* name)` | **Single-consumer (watchdog thread only).** Signal + bounded-wait + symbolise + log |
+
+**`TraceCaptureStatus`:** `kOk`, `kNotInstalled`, `kSignalSendFailed`
+(ESRCH = stale slot), `kTimeout` (D-state likely), `kEmptyTrace`, `kBusy`
+(contract guard), `kRateLimited`.
+
+**`TraceCaptureConfig`:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `wait_timeout` | 250 ms | Bounded wait for the handler to complete |
+| `min_interval` | 30 s | Per-tid re-capture floor (the watchdog re-fires the stuck callback every ~scan while a thread stays stuck) |
+
+`SA_RESTART` is set deliberately (does NOT unstick the target's blocked
+syscall) — see the header and CPP_PATTERNS_GUIDE §2.8 for the rationale.
+Requires `-rdynamic` (`CMAKE_ENABLE_EXPORTS`) for non-static symbol names.
 
 ### `ThreadHealthPublisher<Publisher>` — `drone::util`
 

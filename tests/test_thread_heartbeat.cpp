@@ -13,6 +13,8 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 using namespace drone::util;
 using namespace std::chrono_literals;
@@ -35,6 +37,7 @@ TEST_F(ThreadHeartbeatTest, DefaultValues) {
     EXPECT_EQ(hb.name[0], '\0');
     EXPECT_EQ(hb.last_touch_ns.load(), 0u);
     EXPECT_FALSE(hb.is_critical);
+    EXPECT_EQ(hb.tid, 0);  // Issue #765: "not captured" sentinel
 }
 
 TEST_F(ThreadHeartbeatTest, CopyPreservesFields) {
@@ -42,11 +45,46 @@ TEST_F(ThreadHeartbeatTest, CopyPreservesFields) {
     std::strncpy(original.name, "test_thread", sizeof(original.name) - 1);
     original.last_touch_ns.store(42, std::memory_order_relaxed);
     original.is_critical = true;
+    original.tid         = 12345;
 
     ThreadHeartbeat copy(original);
     EXPECT_STREQ(copy.name, "test_thread");
     EXPECT_EQ(copy.last_touch_ns.load(), 42u);
     EXPECT_TRUE(copy.is_critical);
+    EXPECT_EQ(copy.tid, 12345);  // Issue #765: tid must survive snapshot copies
+}
+
+// Issue #765: register_thread() captures the registering thread's kernel
+// tid so StackTraceCapture can signal it on stall.
+TEST_F(ThreadHeartbeatTest, RegisterCapturesTidOfRegisteringThread) {
+    std::atomic<pid_t> expected_tid{0};
+    std::thread        worker([&] {
+        expected_tid.store(static_cast<pid_t>(::syscall(SYS_gettid)), std::memory_order_release);
+        (void)ThreadHeartbeatRegistry::instance().register_thread("tid_worker", false);
+    });
+    worker.join();
+
+    const auto snap = ThreadHeartbeatRegistry::instance().snapshot();
+    ASSERT_EQ(snap.size(), 1u);
+    EXPECT_EQ(snap.begin()->tid, expected_tid.load(std::memory_order_acquire));
+    EXPECT_NE(snap.begin()->tid, 0);
+}
+
+TEST_F(ThreadHeartbeatTest, ResetForTestingClearsTid) {
+    (void)ThreadHeartbeatRegistry::instance().register_thread("tid_clear", false);
+    ThreadHeartbeatRegistry::instance().reset_for_testing();
+    // Strengthening (#765 review #7): positively confirm reset emptied the
+    // registry, so the fresh-tid check below cannot pass merely because the
+    // snapshot still held the OLD entry (slot 0) with a coincidentally-equal
+    // tid (both registered from this same test thread).
+    EXPECT_EQ(ThreadHeartbeatRegistry::instance().count(), 0u);
+    EXPECT_EQ(ThreadHeartbeatRegistry::instance().snapshot().size(), 0u);
+
+    (void)ThreadHeartbeatRegistry::instance().register_thread("fresh", false);
+    const auto snap = ThreadHeartbeatRegistry::instance().snapshot();
+    ASSERT_EQ(snap.size(), 1u);
+    // Fresh registration from THIS thread — tid is this thread's gettid.
+    EXPECT_EQ(snap.begin()->tid, static_cast<pid_t>(::syscall(SYS_gettid)));
 }
 
 // ════════════════════════════════════════════════════════════════════
