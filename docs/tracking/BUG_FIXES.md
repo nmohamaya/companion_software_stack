@@ -3002,7 +3002,7 @@ LogConfig::init("flight_replay", LogConfig::resolve_log_dir());
 
 ---
 
-### Fix #57 — StackTraceCapture concurrency hazards caught pre-merge (Issue #765)
+### Fix #765 — StackTraceCapture concurrency hazards caught pre-merge (Issue #765)
 
 **Date:** 2026-06-14
 **Severity:** High (P2) — caught BEFORE merge; never shipped
