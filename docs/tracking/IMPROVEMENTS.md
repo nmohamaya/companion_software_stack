@@ -22,6 +22,16 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 - **P3** (`process4_mission_planner/src/main.cpp` ~lines 754–790) — the production glue for #765 stack-trace capture (read `watchdog.stack_trace.*` config + clamp; `StackTraceCapture::install()` before the `ThreadWatchdog` ctor; wire `set_trace_capturer` before `set_stuck_callback`) has **no integration test**. `StackTraceCapture` itself is unit-tested (`test_stack_trace_capture.cpp`) and `PlannerStallHandler`'s capturer invocation is unit-tested (`test_planner_stall_handler.cpp`), but the *ordering invariant* in main.cpp — which is load-bearing (a wrong order reintroduces the `trace_capturer_` race + the profiler use-after-free the PR 2 review caught) — is enforced only by comments + review, not a test. **When to do it:** when P4 main.cpp gains a testable harness, or when the next bug traces to a main.cpp wiring-order regression. **Cross-ref:** PR #765 PR 2 review (review-test-quality, P3). The two ordering bugs it guards against are documented in the main.cpp comments and DR-049.
 
+### 2026-06-14 (PR #782 formal-review deferrals — verified P3 hardening nits on merged `stack_trace_capture`)
+
+#### `is_rate_limited()` signed→unsigned cast lacks a local negative guard
+
+- **P3** (`common/util/include/util/stack_trace_capture.h`, `is_rate_limited()`) — `min_interval` is converted signed→unsigned (ns) without a local `std::max(int64_t{0}, …)` clamp. Not live today: `process4_mission_planner/src/main.cpp` clamps the config value to `[1, 3600]` before it reaches here, so it cannot be negative. But guarding signed→unsigned casts *at the point of use* is the house rule (CLAUDE.md §Safety-Critical C++ "Unguarded signed→unsigned casts"), and a future caller that bypasses the main.cpp clamp would underflow to a ~584-year interval (rate-limiter permanently engaged → traces silently never captured — defeats the whole feature). **Fix:** clamp at the cast site regardless of the upstream clamp. **When to do it:** next touch of the file, or a 2-line defensive follow-up. **Cross-ref:** PR #782 formal review (Workflow `wscyiw4en`), confirmed P3.
+
+#### `recent_` array hardcodes size 16 instead of referencing `kMaxThreads`
+
+- **P3** (`common/util/include/util/stack_trace_capture.h`) — the per-thread rate-limiter's `recent_` array uses a literal `16` rather than the `kMaxThreads` constant the heartbeat registry is sized by. No live overflow today (the index domain stays within the literal), but the two constants can silently drift: if `kMaxThreads` ever grows past 16 the rate-limiter would under-cover threads (or, depending on the indexing scheme, risk an OOB write). **Fix:** size `recent_` from `kMaxThreads`, or `static_assert` the two agree. Verify the exact indexing against current code before fixing. **When to do it:** next touch of the file, or alongside the cast fix above. **Cross-ref:** PR #782 formal review (Workflow `wscyiw4en`), confirmed P3.
+
 ### 2026-06-12 (proactive — noticed while implementing Issue #765 PR 1)
 
 #### DEVELOPMENT_WORKFLOW.md hardcodes a CI-job count that has already drifted
