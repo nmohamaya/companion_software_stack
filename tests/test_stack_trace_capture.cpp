@@ -324,38 +324,19 @@ TEST_F(StackTraceCaptureTest, RateLimitAppliesToTimeoutPathNotJustSuccess) {
     EXPECT_EQ(cap.capture_and_log(wedged.tid(), "wedged"), TraceCaptureStatus::kRateLimited);
 }
 
-// ─── Concurrent capture returns kBusy (#765 review #5) ──────────────
-
-TEST_F(StackTraceCaptureTest, ConcurrentCaptureWhileOneInFlightReturnsBusy) {
-    // A capture against a masked target sits in kRequested for the full
-    // wait_timeout.  A concurrent capture (second "consumer") must observe
-    // the slot is taken and return kBusy rather than corrupting the
-    // in-flight capture.
-    TraceCaptureConfig cfg = test_config();
-    cfg.wait_timeout       = std::chrono::milliseconds(200 * kWaitMultiplier);
-    cfg.min_interval       = std::chrono::seconds(0);
-    ASSERT_TRUE(StackTraceCapture::instance().install(cfg));
-
-    auto&        cap = StackTraceCapture::instance();
-    MaskedThread wedged;
-    ASSERT_TRUE(wedged.mask_ok());
-
-    std::atomic<bool> first_started{false};
-    std::thread       first([&] {
-        first_started.store(true, std::memory_order_release);
-        (void)cap.capture_and_log(wedged.tid(), "in_flight");  // blocks ~200 ms in kRequested
-    });
-    while (!first_started.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    // Give the first capture a moment to claim the slot (kIdle→kRequested).
-    std::this_thread::sleep_for(std::chrono::milliseconds(20 * kWaitMultiplier));
-
-    SpinningThread other;
-    EXPECT_EQ(cap.capture_and_log(other.tid(), "concurrent"), TraceCaptureStatus::kBusy);
-
-    first.join();
-}
+// NOTE: the kBusy status branch is intentionally NOT unit-tested.  Like
+// kNotInstalled, it is unreachable under the documented single-consumer
+// contract: capture_and_log() is called ONLY from the single watchdog scan
+// thread, which calls it synchronously, so the slot is always back to an
+// idle/leftover state before the next call — kRequested/kBusyWriting (the
+// states that yield kBusy) are never observed by a contract-respecting
+// caller.  kBusy is a defensive guard against a future contract violation.
+// An earlier revision tried to exercise it by calling capture_and_log()
+// from two threads concurrently; TSan correctly flagged that as a data race
+// on the (deliberately non-atomic, single-consumer) recent_/config_ state —
+// i.e. the TEST violated the contract, not the production code.  Driving the
+// state machine to kBusy from a single thread is impossible by construction,
+// so the branch is covered by inspection only.
 
 // ─── Dead-tid handling ──────────────────────────────────────────────
 

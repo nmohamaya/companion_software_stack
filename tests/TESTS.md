@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **103 C++ + 5 shell + 1 Python** | **2124 (no SDK, 8 Cosys-SDK tests skipped) / 2132 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #765 stack-trace capture +13 tests across 2 files (new `test_stack_trace_capture.cpp` with 11 tests, `test_thread_heartbeat.cpp` 25→27 for the tid plumbing). 11 capture tests = 9 initial + 2 added in the pre-commit-review fix round (`RateLimitAppliesToTimeoutPathNotJustSuccess`, `ConcurrentCaptureWhileOneInFlightReturnsBusy`). Baseline reconciled by measurement this PR: pre-change `ctest -N` showed **2119** total, not the previously documented 2120 — a pre-existing +1 doc drift, now corrected (2119 + 13 = 2132 measured). Previous delta: PR #775 (#718 + partial #765) +20 (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→47, `test_planner_stall_handler.cpp` 7). For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **103 C++ + 5 shell + 1 Python** | **2123 (no SDK, 8 Cosys-SDK tests skipped) / 2131 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #765 stack-trace capture +12 tests across 2 files (new `test_stack_trace_capture.cpp` with 10 tests, `test_thread_heartbeat.cpp` 25→27 for the tid plumbing). 10 capture tests = 9 initial + 1 added in the pre-commit-review fix round (`RateLimitAppliesToTimeoutPathNotJustSuccess`); a concurrent-callers test was dropped — it violated the single-consumer contract and TSan correctly flagged the resulting race (kBusy is contract-unreachable, covered by inspection). Baseline reconciled by measurement this PR: pre-change `ctest -N` showed **2119** total, not the previously documented 2120 — a pre-existing +1 doc drift, now corrected (2119 + 12 = 2131 measured). Previous delta: PR #775 (#718 + partial #765) +20 (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→47, `test_planner_stall_handler.cpp` 7). For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -1010,7 +1010,7 @@ Issue #89).  Three layers:
 
 ## Watchdog — Stuck-Thread Stack-Trace Capture
 
-### test_stack_trace_capture.cpp — 11 tests
+### test_stack_trace_capture.cpp — 10 tests
 
 **What it tests:** Issue #765 — `StackTraceCapture`, the SIGUSR1-based
 stack-trace capture of stuck threads.  The watchdog thread signals the
@@ -1032,16 +1032,16 @@ rate-limit on the timeout path).
 | | `TimedOutSlotIsReclaimedByNextCapture` | After a never-arriving handler, capture of a healthy thread → `kOk` | **Wedge-bug regression**: without leftover-slot reclamation, all later captures return `kBusy` forever |
 | | `LateHandlerAfterTimeoutDoesNotCorruptNextCapture` | Late handler runs (positively confirmed) yet slot stays `kTimedOut`; next capture → `kOk` | **TOCTOU regression (#765 review #1)**: late handler must lose the `kRequested→kBusyWriting` CAS and write nothing — non-vacuous, asserts the lost-slot branch |
 | | `RateLimitAppliesToTimeoutPathNotJustSuccess` | Two captures of a wedged (masked) tid → `kTimeout` then `kRateLimited` | **Regression (#765 review #2)**: a D-state thread must not be re-signalled every ~1 s forever |
-| | `ConcurrentCaptureWhileOneInFlightReturnsBusy` | Second capture while one is in flight → `kBusy` | Single-consumer protocol: concurrent capture rejected, not corrupting |
 | | `DeadTidReturnsSignalSendFailed` | tid outside our thread group → `kSignalSendFailed` (ESRCH) | Stale-heartbeat-slot path (slots are never unregistered) |
 | | `RateLimitSuppressesRepeatCaptureUntilIntervalElapses` | Immediate re-capture → `kRateLimited`; after mock-clock +31 s → `kOk` | Watchdog callback fires every ~1 s while stuck — floor prevents log storms |
 | | `RateLimitIsPerThread` | Thread B unaffected by thread A's floor | Catches a global (rather than per-tid) limiter regression |
 
 Sanitizer handling: wait budgets ×8 under ASan/TSan/UBSan
 (`test_helpers.h::is_sanitizer_build()`); correctness assertions never
-skipped.  The `kNotInstalled` branch is intentionally not unit-tested
-(process-wide signal disposition cannot be cleanly reverted between
-tests — see the fixture comment).
+skipped.  The `kNotInstalled` and `kBusy` branches are intentionally not
+unit-tested — both are unreachable under the single-consumer contract
+(process-wide signal disposition cannot be reverted between tests;
+concurrent callers are forbidden) — see the fixture/handler comments.
 
 **Key files under test:** `util/stack_trace_capture.h`,
 `util/thread_heartbeat.h` (tid plumbing)

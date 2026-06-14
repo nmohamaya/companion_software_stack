@@ -3937,9 +3937,8 @@ trap-armed-in-every-run diagnostic approach.
 - `common/util/include/util/thread_heartbeat.h` — `tid` field + capture +
   copy/reset plumbing.
 - `CMakeLists.txt` — `CMAKE_ENABLE_EXPORTS ON` (with rationale comment).
-- `tests/test_stack_trace_capture.cpp` — NEW (11 tests, incl. TOCTOU,
-  wedge-bug, late-handler-race, rate-limit-on-timeout, concurrent-busy
-  regressions).
+- `tests/test_stack_trace_capture.cpp` — NEW (10 tests, incl. TOCTOU,
+  wedge-bug, late-handler-race, rate-limit-on-timeout regressions).
 - `tests/test_thread_heartbeat.cpp` — +2 tid tests, 3 extended.
 - `docs/reference/CPP_PATTERNS_GUIDE.md` — §2.8 cross-ref (SA_RESTART
   counter-example + capture pattern) + relaxed-ordering justification
@@ -3964,10 +3963,15 @@ state machine before this PR was opened — 7 confirmed findings fixed:**
   on first install (published by the `installed_` release-store).
 - Four test-quality fixes: late-handler test made non-vacuous (asserts
   the lost-slot branch via a new `is_timed_out_for_testing()` seam),
-  added rate-limit-on-timeout + concurrent-busy tests, documented the
-  `kNotInstalled` coverage constraint, strengthened the reset test.
+  added a rate-limit-on-timeout test, documented the `kNotInstalled` and
+  `kBusy` coverage constraints (both contract-unreachable), strengthened
+  the reset test.
 
-**Test count:** +13 (new file 11, `test_thread_heartbeat.cpp` 25 → 27).
+**Test count:** +12 (new file 10, `test_thread_heartbeat.cpp` 25 → 27).
+A concurrent-callers test was dropped post-CI: it violated the
+single-consumer contract and TSan correctly flagged the race on the
+(deliberately non-atomic) rate-limiter state — the production handler⇄
+watchdog handoff is independently TSan-clean.
 
 **Why:** Observability-before-remediation (the pattern that paid off
 on #777 / #778): arm the diagnostic first, root-cause from data, then

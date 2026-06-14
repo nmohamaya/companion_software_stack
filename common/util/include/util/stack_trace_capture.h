@@ -189,8 +189,16 @@ public:
     /// Signal `tid`, wait (bounded) for the handler to fill the static
     /// frame buffer, symbolise on the CALLING thread, and log the result.
     ///
-    /// Call from the watchdog scan thread only (single-consumer protocol —
-    /// the kIdle→kRequested CAS enforces this at runtime via kBusy).
+    /// SINGLE-CONSUMER CONTRACT: call from the watchdog scan thread ONLY.
+    /// The state-machine handoff with the signal handler is fully atomic,
+    /// but the rate-limiter state (`recent_`) and `config_` are plain
+    /// non-atomic members read/written here without synchronisation — that
+    /// is sound ONLY because exactly one thread ever calls this.  (The
+    /// signal handler never touches `recent_`/`config_`.)  The `kBusy`
+    /// return is a defensive guard against a contract violation, NOT a
+    /// concurrency-safety guarantee: two concurrent callers would still
+    /// race `recent_`/`config_` even though the slot CAS serialises the
+    /// buffer.  Do not call this from multiple threads.
     [[nodiscard]] TraceCaptureStatus capture_and_log(pid_t tid, const char* thread_name) {
         if (!installed_.load(std::memory_order_acquire)) {
             return TraceCaptureStatus::kNotInstalled;
