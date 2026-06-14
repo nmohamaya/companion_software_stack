@@ -3914,7 +3914,7 @@ full backtrace.
   unregistered, and `pthread_kill` on a dead `pthread_t` is UB while
   `tgkill` returns ESRCH cleanly.
 - Async-signal-safe handler: lock-free atomic state machine
-  (`kIdle → kRequested → kDone | kTimedOut`) + `backtrace()` into a
+  (`kIdle → kRequested → kBusyWriting → kDone | kTimedOut`) + `backtrace()` into a
   static buffer; symbolisation happens on the watchdog thread.
   `install()` pre-warms glibc's lazy libgcc init outside signal context.
 - `SA_RESTART` set deliberately (counter-example to `SignalHandler`):

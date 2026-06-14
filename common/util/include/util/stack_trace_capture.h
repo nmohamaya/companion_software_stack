@@ -243,7 +243,13 @@ public:
         if (::syscall(SYS_tgkill, ::getpid(), tid, SIGUSR1) != 0) {
             const int err = errno;
             s_state.store(kIdle, std::memory_order_release);  // release the slot
-            // tid gone (ESRCH) won't recur, so it is NOT rate-limit-recorded.
+            // Rate-limit-record even the send-failure (#765 Copilot review):
+            // heartbeat slots are never unregistered, so an exited thread's
+            // STALE slot is re-flagged stuck on every ~1 s watchdog scan and
+            // tgkill keeps returning ESRCH — without recording, that's an
+            // ERROR log storm every second indefinitely.  The floor makes it
+            // one log per min_interval, consistent with the timeout path.
+            note_capture(tid);
             DRONE_LOG_ERROR(
                 "[StackTrace] tgkill(tid={}) for '{}' failed: errno={}{}", tid, thread_name, err,
                 err == ESRCH ? " (thread no longer exists — stale heartbeat slot)" : "");
@@ -325,17 +331,31 @@ public:
     }
 
     /// Reset all static state — only for testing.  NOT thread-safe; call
-    /// with no captures in flight.  Does not uninstall the signal handler
-    /// (process-wide disposition; tests tolerate it staying installed).
+    /// with no captures in flight.  Clears `installed_` and `config_` too
+    /// so a test fixture's `reset_for_testing(); install(cfg)` genuinely
+    /// re-applies `cfg` each test — without this, `install()`'s one-shot
+    /// guard makes every install after the first a no-op and the fixture
+    /// becomes order-dependent (#765 Copilot review).  The OS-level SIGUSR1
+    /// disposition is left in place (re-install is idempotent at the
+    /// sigaction layer); only the install/config bookkeeping is reset.
     void reset_for_testing() {
         s_state.store(kIdle, std::memory_order_release);
         s_frame_count.store(0, std::memory_order_release);
         s_target_tid.store(0, std::memory_order_release);
         s_writer_tid.store(0, std::memory_order_release);
+        installed_.store(false, std::memory_order_release);
+        config_ = TraceCaptureConfig{};
         for (auto& entry : recent_) {
             entry = RecentCapture{};
         }
     }
+
+    /// Override the config WITHOUT reinstalling the handler — test-only.
+    /// Production fixes config at first install() (one-shot, race-free);
+    /// tests legitimately need to tune wait_timeout / min_interval per test
+    /// after the fixture has already installed.  Single-threaded use only,
+    /// same contract as reset_for_testing() (no captures in flight).
+    void set_config_for_testing(const TraceCaptureConfig& cfg) { config_ = cfg; }
 
     /// Test seams (read-only) — let tests positively confirm WHICH protocol
     /// branch ran, so a regression test cannot pass vacuously via a
@@ -494,7 +514,10 @@ private:
     static char read_proc_thread_state(pid_t tid) {
         char path[64] = {};
         std::snprintf(path, sizeof(path), "/proc/self/task/%d/stat", static_cast<int>(tid));
-        std::FILE* f = std::fopen(path, "re");
+        // Plain "r" — the GNU "e" (O_CLOEXEC) mode is non-portable (fails on
+        // musl etc.) and CLOEXEC is unnecessary for this synchronous open+
+        // read+close with no intervening fork/exec (#765 Copilot review).
+        std::FILE* f = std::fopen(path, "r");
         if (f == nullptr) {
             return '?';
         }

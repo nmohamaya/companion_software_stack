@@ -22,10 +22,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <ctime>  // timespec
 #include <mutex>
 #include <thread>
 
 #include <gtest/gtest.h>
+#include <pthread.h>  // pthread_sigmask
+#include <signal.h>   // sigtimedwait, sigset_t, sigaddset (POSIX, beyond <csignal>)
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -104,7 +107,7 @@ protected:
 TEST_F(StackTraceCaptureTest, InstallIsIdempotent) {
     auto& cap = StackTraceCapture::instance();
     EXPECT_TRUE(cap.install(test_config()));
-    EXPECT_TRUE(cap.install(test_config()));  // second call: config refresh only
+    EXPECT_TRUE(cap.install(test_config()));  // second call: no-op (config fixed at first install)
 }
 
 // ─── Capture on live threads ────────────────────────────────────────
@@ -198,7 +201,8 @@ TEST_F(StackTraceCaptureTest, TimeoutWhenTargetMasksSigusr1) {
     // Short timeout so the test stays fast.
     TraceCaptureConfig cfg = test_config();
     cfg.wait_timeout       = std::chrono::milliseconds(50 * kWaitMultiplier);
-    ASSERT_TRUE(StackTraceCapture::instance().install(cfg));
+    StackTraceCapture::instance().set_config_for_testing(
+        cfg);  // per-test tuning (SetUp already installed)
 
     const auto status = StackTraceCapture::instance().capture_and_log(masked.tid(),
                                                                       "masked_thread");
@@ -214,7 +218,8 @@ TEST_F(StackTraceCaptureTest, TimedOutSlotIsReclaimedByNextCapture) {
     TraceCaptureConfig cfg = test_config();
     cfg.wait_timeout       = std::chrono::milliseconds(50 * kWaitMultiplier);
     cfg.min_interval       = std::chrono::seconds(0);
-    ASSERT_TRUE(StackTraceCapture::instance().install(cfg));
+    StackTraceCapture::instance().set_config_for_testing(
+        cfg);  // per-test tuning (SetUp already installed)
 
     auto& cap = StackTraceCapture::instance();
     {
@@ -272,7 +277,8 @@ TEST_F(StackTraceCaptureTest, LateHandlerAfterTimeoutDoesNotCorruptNextCapture) 
     TraceCaptureConfig cfg = test_config();
     cfg.wait_timeout       = std::chrono::milliseconds(50 * kWaitMultiplier);
     cfg.min_interval       = std::chrono::seconds(0);  // no rate limit for this test
-    ASSERT_TRUE(StackTraceCapture::instance().install(cfg));
+    StackTraceCapture::instance().set_config_for_testing(
+        cfg);  // per-test tuning (SetUp already installed)
 
     auto& cap = StackTraceCapture::instance();
     ASSERT_EQ(cap.capture_and_log(tid.load(std::memory_order_acquire), "late_handler_thread"),
@@ -312,7 +318,8 @@ TEST_F(StackTraceCaptureTest, RateLimitAppliesToTimeoutPathNotJustSuccess) {
     TraceCaptureConfig cfg = test_config();
     cfg.wait_timeout       = std::chrono::milliseconds(50 * kWaitMultiplier);
     cfg.min_interval       = std::chrono::seconds(30);  // real floor
-    ASSERT_TRUE(StackTraceCapture::instance().install(cfg));
+    StackTraceCapture::instance().set_config_for_testing(
+        cfg);  // per-test tuning (SetUp already installed)
 
     auto&        cap = StackTraceCapture::instance();
     MaskedThread wedged;  // D-state stand-in: SIGUSR1 masked → always times out

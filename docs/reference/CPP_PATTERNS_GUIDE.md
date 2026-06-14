@@ -747,7 +747,7 @@ or a hazard (diagnostics)?"
 two-thread protocol: the watchdog thread requests a trace via
 `tgkill(SIGUSR1)`, the target thread's handler writes `backtrace()` frames
 into a static buffer guarded by a lock-free atomic state machine
-(`kIdle → kRequested → kDone | kTimedOut`), and the watchdog symbolises
+(`kIdle → kRequested → kBusyWriting → kDone | kTimedOut`), and the watchdog symbolises
 with `backtrace_symbols()` outside signal context.  See the header's
 comments for the late-handler / slot-reclamation race analysis.
 
