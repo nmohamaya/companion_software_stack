@@ -4008,9 +4008,13 @@ ended in PX4 disarm with no clue what the thread was doing).
   hermetic. Updated the header's "deferred" comment (stack-trace DONE,
   mutex-snapshot still deferred).
 - `process4_mission_planner/src/main.cpp` — read the 3 config keys
-  (durations via `validate_and_clamp`), `StackTraceCapture::install()`
-  BEFORE the `ThreadWatchdog` constructor (so config_ publishes before the
-  scan thread exists), and wire the capturer after `set_stuck_callback`.
+  (durations via `validate_and_clamp`), then `StackTraceCapture::install()`
+  AND `set_trace_capturer()` BEFORE the `ThreadWatchdog` constructor (so
+  config_ publishes and the non-atomic `trace_capturer_` is written before
+  the scan thread exists — no race); `set_stuck_callback()` after the
+  watchdog. The benchmark profiler is also declared before the watchdog
+  (its `profiler_ptr` is captured by the callback and must outlive the
+  scan-thread join).
 - `tests/test_planner_stall_handler.cpp` — +5 tests (capturer invoked
   with tid+name; no-capturer-safe; tid==0 never reaches capturer;
   non-watched thread traced but no fault; capture-failure does not block
@@ -4021,8 +4025,9 @@ ended in PX4 disarm with no clue what the thread was doing).
   SA_RESTART; config-gated + rate-limited; mutex parts on the observer
   thread).
 
-**Test count:** +5 (`test_planner_stall_handler.cpp` 7 → 12). `ctest -N`
-2131 → 2136.
+**Test count:** +5 (`test_planner_stall_handler.cpp` 7 → 12). The live
+total lives in [tests/TESTS.md](../../tests/TESTS.md) (SSOT — not
+duplicated here, per CLAUDE.md §Single Sources of Truth).
 
 **Pre-commit adversarial review (3-lens + verify) on the wiring diff** found
 7 issues before commit, incl. a **pre-existing P2 use-after-free**: the
