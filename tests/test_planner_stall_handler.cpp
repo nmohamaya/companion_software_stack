@@ -197,7 +197,9 @@ TEST(PlannerStallHandlerTest, TraceCapturerInvokedWithBeatTidAndName) {
 }
 
 // No capturer installed → on_stuck() is safe (no crash) and the existing
-// escalation still runs.  Also: a zero tid is never passed to a capturer.
+// escalation still runs.  tid is deliberately non-zero (99) to prove the
+// null-capturer guard short-circuits before tid is ever examined — the
+// zero-tid guard itself is covered by CapturerNotCalledWhenTidIsZero.
 TEST(PlannerStallHandlerTest, NoCapturerInstalledIsSafe) {
     PlannerStallHandler handler("planning_loop");
     auto                beat = make_beat("planning_loop", /*is_critical=*/true);
