@@ -1134,11 +1134,16 @@ Process-global singleton for per-thread heartbeat tracking. Each thread register
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `instance` | `static ThreadHeartbeatRegistry& instance()` | Singleton access |
-| `register_thread` | `size_t register_thread(const char* name, bool critical = false)` | Claim next slot via CAS loop; returns handle or `kInvalidHandle` |
+| `register_thread` | `size_t register_thread(const char* name, bool critical = false)` | Claim next slot via CAS loop; returns handle or `kInvalidHandle`. **Must be called ON the monitored thread** — also captures that thread's kernel `tid` (`gettid`) for `StackTraceCapture` |
 | `touch` | `void touch(size_t handle)` | Update `last_touch_ns` atomically |
 | `touch_with_grace` | `void touch_with_grace(size_t handle, milliseconds grace)` | Touch with future timestamp (covers long ops like model loading) |
 | `snapshot` | `[[nodiscard]] ThreadSnapshot snapshot() const` | Stack-allocated copy of all registered heartbeats |
 | `count` | `[[nodiscard]] size_t count() const` | Number of registered beats |
+
+**`ThreadHeartbeat` fields:** `name[32]`, `last_touch_ns` (atomic),
+`is_critical`, `tid` (kernel thread id, Issue #765 — used by
+`StackTraceCapture` to signal a stuck thread), `initialized` (atomic
+publish flag).
 
 **Constants:** `kMaxThreads = 16`, `kInvalidHandle` (sentinel).
 

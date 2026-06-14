@@ -2999,3 +2999,81 @@ LogConfig::init("flight_replay", LogConfig::resolve_log_dir());
 **Fix:** Lifted the timestamp-vs-subscriber-birth comparison to the `ZenohSubscriber<T>::on_sample()` wrapper.  Every subscribed type with both `validate()` and `timestamp_ns` now drops messages whose publisher timestamp predates the subscriber's `drone::util::get_clock().now_ns()` birth by more than 100 ms (slack covers the rare case where the publisher booted slightly before the subscriber).  Log-once per subscriber via atomic compare-exchange.  Opt-out parameter (`filter_pre_birth_messages = false`) for tests that legitimately replay historic samples.
 
 **Found by:** Scenario sweeps on `feature/cold-start-hardening` integration branch reproduced the cold-start failure mode (#720 stale-pose symptom) repeatedly; root-cause generalised to the wrapper level in Issue #722.
+
+---
+
+### Fix #57 — StackTraceCapture concurrency hazards caught pre-merge (Issue #765)
+
+**Date:** 2026-06-14
+**Severity:** High (P2) — caught BEFORE merge; never shipped
+**File:** `common/util/include/util/stack_trace_capture.h` (new in PR #782)
+
+Three concurrency defects in the new SIGUSR1 stuck-thread stack-trace
+capture utility, all caught during PR #782 verification before merge.
+Recorded here because they are instructive about signal-handler /
+lock-free hazards, and to anchor the "found by" process lessons.
+
+**Bug A — TOCTOU between the handler's ownership check and its buffer
+write.** The SIGUSR1 handler validated `gettid() == s_target_tid` once at
+entry, then (separable instructions later) wrote `backtrace()` into the
+shared static `s_frames`. A handler preempted in that gap could resume
+after the watchdog had timed out and re-targeted a *different* thread,
+then (a) write `s_frames` concurrently with the watchdog's read of the
+next capture (data race / UB on a non-atomic array), and (b) have its
+`kRequested→kDone` CAS succeed on the new request — logging thread X's
+stack labelled as the newly-targeted thread Y (misattribution — the exact
+failure the tid guard was meant to prevent).
+
+- *Root cause:* the ownership check and the buffer write were not a single
+  atomic claim; the bare tid guard is not preemption-safe.
+- *Fix:* the handler must WIN an exclusive `kRequested→kBusyWriting` CAS
+  *before* touching `s_frames` (single-writer); a lost-slot handler returns
+  without writing. The winner stamps `s_writer_tid`, which the watchdog
+  re-validates before consuming a `kDone` result (no-misattribution). The
+  watchdog forces a timeout ONLY from `kRequested`, never from
+  `kBusyWriting`, so it can never reclaim a slot mid-write.
+
+**Bug B — rate limiter bypassed on the timeout path.** `note_capture()`
+(which records the per-tid re-capture floor) ran only on the `kOk` path.
+A never-responding thread — the literal #765 scenario, which always
+*times out* — was therefore never rate-limited and got re-signalled
+(`tgkill` + 250 ms busy-poll + ERROR log) on every ~1 s watchdog scan,
+indefinitely.
+
+- *Root cause:* the floor was recorded only on success, but the dominant
+  real case is repeated timeout.
+- *Fix:* record the attempt on every post-signal outcome (timeout,
+  empty/mismatch, ok). `kSignalSendFailed` (ESRCH) is deliberately not
+  recorded — that tid is gone and won't recur.
+
+**Bug C (test-only) — a regression test violated the single-consumer
+contract.** A `ConcurrentCaptureWhileOneInFlightReturnsBusy` test called
+`capture_and_log()` from two threads to exercise the `kBusy` guard. CI
+TSan correctly flagged a data race on the deliberately-non-atomic
+rate-limiter state (`recent_`) and `config_`.
+
+- *Root cause:* `capture_and_log()` is single-consumer (one watchdog scan
+  thread); `recent_`/`config_` are non-atomic by design. The test, not the
+  production code, was wrong; `kBusy` is contract-unreachable single-thread.
+- *Fix:* removed the test; documented `kBusy` as a defensive guard (not a
+  concurrency guarantee) and strengthened the single-consumer contract
+  docstring. Verified the genuine production concurrency (signal handler
+  writes `s_frames` ⇄ watchdog reads after the `kDone` release/acquire) is
+  race-free: the remaining handler⇄watchdog tests pass clean under a local
+  TSan build, 5×.
+
+**Found by:** Bugs A & B — pre-commit adversarial review workflow
+(3 independent lenses + adversarial verification) run on PR #782 before
+the first commit. Bug C — CI ThreadSanitizer leg on PR #782.
+
+**Lessons learned:**
+1. For signal-handler / atomic / lock-free code, pre-commit verification
+   must include a real **TSan build**, not only read-only review agents —
+   agents caught the logic bugs (A, B) but only TSan instrumentation
+   caught the contract-violation race (C). ASan/UBSan/Release green ≠
+   race-free.
+2. A bare "check identity then act" in a signal handler is a TOCTOU unless
+   the act is gated by the same atomic claim that established ownership.
+3. Rate-limit / debounce floors must be recorded on the *dominant* outcome
+   path, not just the success path — for a stuck-thread tool the dominant
+   path is timeout.
