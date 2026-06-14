@@ -4025,9 +4025,12 @@ ended in PX4 disarm with no clue what the thread was doing).
   SA_RESTART; config-gated + rate-limited; mutex parts on the observer
   thread).
 
-**Test count:** +5 (`test_planner_stall_handler.cpp` 7 → 12). The live
-total lives in [tests/TESTS.md](../../tests/TESTS.md) (SSOT — not
-duplicated here, per CLAUDE.md §Single Sources of Truth).
+**Tests:** added stack-trace-capturer-injection tests to
+`tests/test_planner_stall_handler.cpp` (capturer invoked with tid+name;
+no-capturer-safe; tid==0 guarded; non-watched traced-but-no-fault;
+capture-failure-doesn't-block-escalation).  Counts live in
+[tests/TESTS.md](../../tests/TESTS.md) (SSOT — not restated here, per
+CLAUDE.md §Single Sources of Truth).
 
 **Pre-commit adversarial review (3-lens + verify) on the wiring diff** found
 7 issues before commit, incl. a **pre-existing P2 use-after-free**: the

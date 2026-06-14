@@ -781,9 +781,14 @@ int main(int argc, char* argv[]) {
     // via its installed_ release-store before any capture could run, and no
     // scan thread exists yet to race it.  Gated on `watchdog.stack_trace.
     // enabled` (default true — the capture path is passive until a stall).
-    // Durations go through validate_and_clamp (clamp ≥ small floor) before
-    // the unsigned-ns cast inside TraceCaptureConfig, per the signed→
-    // unsigned-cast safety rule.
+    // Durations go through validate_and_clamp (clamp ≥ floor) before the
+    // unsigned-ns cast inside TraceCaptureConfig, per the signed→unsigned
+    // cast safety rule.  min_interval_s floor is 1 (NOT 0): 0 makes the
+    // rate-limiter's `(now - last) < interval` always false → no limiting
+    // → the stuck callback re-fires a tgkill + backtrace + ERROR log every
+    // ~1 s scan while a thread stays stuck (a log/trace storm — the exact
+    // thing the floor exists to prevent).  Disable capture entirely via
+    // `enabled=false`, not via a zero interval (#765 PR 2 Copilot review).
     const bool stack_trace_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::watchdog::stack_trace::ENABLED, true);
     if (stack_trace_enabled) {
@@ -792,7 +797,7 @@ int main(int argc, char* argv[]) {
                                                     250, 10, 5000, "watchdog.stack_trace.wait_ms");
         const int min_interval_s =
             validate_and_clamp<int>(ctx.cfg, drone::cfg_key::watchdog::stack_trace::MIN_INTERVAL_S,
-                                    30, 0, 3600, "watchdog.stack_trace.min_interval_s");
+                                    30, 1, 3600, "watchdog.stack_trace.min_interval_s");
         drone::util::TraceCaptureConfig tc_cfg;
         tc_cfg.wait_timeout = std::chrono::milliseconds(wait_ms);
         tc_cfg.min_interval = std::chrono::seconds(min_interval_s);
