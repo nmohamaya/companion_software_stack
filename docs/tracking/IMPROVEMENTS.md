@@ -16,6 +16,16 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-12 (proactive — noticed while implementing Issue #765 PR 1)
+
+#### DEVELOPMENT_WORKFLOW.md hardcodes a CI-job count that has already drifted
+
+- **P3** (`docs/how-to/DEVELOPMENT_WORKFLOW.md` header, ~line 7) — states "CI: GitHub Actions — 9-job pipeline" while `docs/tracking/ROADMAP.md` says "5-job pipeline". Both hardcode a count that drifts every time the CI matrix changes. Same SSOT-violation class as the test-count literals fixed in PR #776. **Fix:** replace both with a reference to `docs/how-to/CI_SETUP.md` (the canonical CI description) rather than restating the number. **When to do it:** next docs sweep, or when the CI matrix next changes.
+
+#### DEVELOPMENT_WORKFLOW.md shows three inconsistent worktree path conventions
+
+- **P3** (`docs/how-to/DEVELOPMENT_WORKFLOW.md`) — the doc shows `~/dev/wt-agent-1` (§Worktree Setup), `.claude/worktrees/agent-209` (§Integration Branch Pattern), and actual repo practice is `~/Projects/companion_software_stack_worktrees/`. Three conventions in one document confuses anyone setting up a worktree. **Fix:** standardize on the real convention (`~/Projects/companion_software_stack_worktrees/<branch>`). **When to do it:** next docs sweep. **Note:** the doc just went through the Diátaxis Phase A–F restructure (PRs #747–#760), so defer any structural split — only the factual conventions need reconciling.
+
 ### 2026-05-15 (PR #775 review deferrals — test/code-quality P2/P3 follow-ups)
 
 #### DISARM-vs-FSM ordering not asserted in Layer 4 timeout tests

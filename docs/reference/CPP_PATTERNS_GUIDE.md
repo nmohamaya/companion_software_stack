@@ -715,6 +715,10 @@ private:
     static void handler(int sig) {
         // ONLY async-signal-safe operations allowed here!
         if (s_running_)
+            // relaxed is justified here: the flag is a single independent
+            // value polled in a loop — no other memory must become visible
+            // "before" it (no release/acquire pairing needed).  Per
+            // CLAUDE.md, every relaxed use must carry its proof like this.
             s_running_->store(false, std::memory_order_relaxed);
         static constexpr char msg[] = "Signal received, shutting down...\n";
         [[maybe_unused]] auto r = write(STDOUT_FILENO, msg, sizeof(msg) - 1);
@@ -731,6 +735,21 @@ library are NOT.  Calling them can deadlock or corrupt memory.
 **Why `sa.sa_flags = 0`?** Without `SA_RESTART`, blocking calls like `read()`,
 `sleep()`, and `wait()` return with `errno = EINTR` when a signal is delivered.
 This ensures threads wake up promptly from blocking I/O after a signal.
+**Counter-example:** `util/stack_trace_capture.h` (Issue #765) deliberately
+sets `SA_RESTART` — there the signal is a *diagnostic probe* of a stuck
+thread, and waking that thread's blocked syscall with a rarely-tested
+`EINTR` mid-flight would be a state-corruption risk, not a feature.  Choose
+`sa_flags` by asking: "is interrupting the blocked call the goal (shutdown)
+or a hazard (diagnostics)?"
+
+**Related pattern — cross-thread stack-trace capture:**
+`util/stack_trace_capture.h` extends this signal-handler discipline to a
+two-thread protocol: the watchdog thread requests a trace via
+`tgkill(SIGUSR1)`, the target thread's handler writes `backtrace()` frames
+into a static buffer guarded by a lock-free atomic state machine
+(`kIdle → kRequested → kDone | kTimedOut`), and the watchdog symbolises
+with `backtrace_symbols()` outside signal context.  See the header's
+comments for the late-handler / slot-reclamation race analysis.
 
 ---
 

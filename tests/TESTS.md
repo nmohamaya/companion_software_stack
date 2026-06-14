@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **102 C++ + 5 shell + 1 Python** | **2112 (no SDK, 8 Cosys-SDK tests skipped) / 2120 (+SDK) + 42 + 29 + 250+** | Current PR: Issues #718 + #765 (cold-start defense escalation) +20 tests across 3 files (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→47, new `test_planner_stall_handler.cpp` with 7 tests). Latch-persistence + fault_flags_string registry tests added in PR #775 review-fix round. Recent deltas on `feature/cold-start-hardening`: PR #741 +4, PR #743 +4, PR #763 +7, PR #774 +3, **this PR +20**. For earlier deltas see PROGRESS.md entries #78–#94. |
+| **Total** | **103 C++ + 5 shell + 1 Python** | **2124 (no SDK, 8 Cosys-SDK tests skipped) / 2132 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #765 stack-trace capture +13 tests across 2 files (new `test_stack_trace_capture.cpp` with 11 tests, `test_thread_heartbeat.cpp` 25→27 for the tid plumbing). 11 capture tests = 9 initial + 2 added in the pre-commit-review fix round (`RateLimitAppliesToTimeoutPathNotJustSuccess`, `ConcurrentCaptureWhileOneInFlightReturnsBusy`). Baseline reconciled by measurement this PR: pre-change `ctest -N` showed **2119** total, not the previously documented 2120 — a pre-existing +1 doc drift, now corrected (2119 + 13 = 2132 measured). Previous delta: PR #775 (#718 + partial #765) +20 (`test_mission_state_tick.cpp` 39→46, `test_fault_manager.cpp` 41→47, `test_planner_stall_handler.cpp` 7). For earlier deltas see PROGRESS.md entries #78–#94. |
 
 ---
 
@@ -962,7 +962,7 @@ deterministic and fast.
 
 ## Watchdog — Thread Heartbeat
 
-### test_thread_heartbeat.cpp — 25 tests
+### test_thread_heartbeat.cpp — 27 tests
 
 **What it tests:** Phase 1 of the Process & Thread Watchdog (Epic #88,
 Issue #89).  Three layers:
@@ -976,8 +976,10 @@ Issue #89).  Three layers:
 
 | Suite | Tests | What is validated | Why it catches bugs |
 |-------|-------|-------------------|--------------------|
-| `ThreadHeartbeatTest` | `DefaultValues` | Struct zero-initialised: name empty, timestamp 0, not critical | Catches uninitialised memory in the heartbeat slot |
-| | `CopyPreservesFields` | Copy constructor copies name, atomic timestamp, critical flag | Validates the custom copy ctor for `std::atomic<uint64_t>` (atomics are not default-copyable) |
+| `ThreadHeartbeatTest` | `DefaultValues` | Struct zero-initialised: name empty, timestamp 0, not critical, tid 0 | Catches uninitialised memory in the heartbeat slot |
+| | `CopyPreservesFields` | Copy constructor copies name, atomic timestamp, critical flag, tid | Validates the custom copy ctor for `std::atomic<uint64_t>` (atomics are not default-copyable) |
+| | `RegisterCapturesTidOfRegisteringThread` | Worker thread registers → snapshot tid == worker's `gettid()` | Issue #765: StackTraceCapture needs the kernel tid to signal the stuck thread; catches registration running on the wrong thread |
+| | `ResetForTestingClearsTid` | Reset → fresh registration carries the fresh thread's tid only | Prevents stale tids leaking across test fixtures |
 | | `RegisterSingle` | Returns valid handle, count = 1 | Basic registration path |
 | | `RegisterMultiple` | 3 registrations → 3 unique handles, count = 3 | Catches slot index collision |
 | | `RegisterOverflowReturnsSentinel` | After `kMaxThreads` registrations → next returns `kInvalidHandle` | Prevents OOB write when registry is full |
@@ -1003,6 +1005,46 @@ Issue #89).  Three layers:
 | | `ConcurrentTouchAndSnapshot` | Writer thread touches rapidly while reader takes 1000 snapshots → no torn reads | TSan-targeted: validates that snapshot copies are safe under contention |
 
 **Key files under test:** `util/thread_heartbeat.h`, `util/thread_watchdog.h`
+
+---
+
+## Watchdog — Stuck-Thread Stack-Trace Capture
+
+### test_stack_trace_capture.cpp — 11 tests
+
+**What it tests:** Issue #765 — `StackTraceCapture`, the SIGUSR1-based
+stack-trace capture of stuck threads.  The watchdog thread signals the
+stuck thread via `tgkill`; the async-signal-safe handler claims an
+exclusive write slot (`kRequested→kBusyWriting`), writes a raw
+`backtrace()` into a static buffer, stamps its writer-tid, and publishes
+`kDone`; the watchdog validates the writer-tid and symbolises+logs.
+Covers the full lock-free state machine `{kIdle → kRequested →
+kBusyWriting → kDone | kTimedOut}` including its subtle paths (late
+handler after timeout, slot reclamation, concurrent-capture rejection,
+rate-limit on the timeout path).
+
+| Suite | Tests | What is validated | Why it catches bugs |
+|-------|-------|-------------------|--------------------|
+| `StackTraceCaptureTest` | `InstallIsIdempotent` | Second `install()` returns true, no double-install | Catches double-`sigaction` misbehaviour; config fixed at first install (no refresh race) |
+| | `CaptureOnLiveSpinningThread` | Spinning thread → `kOk`, symbolised frames logged | Happy path: signal delivery + handler + symbolisation |
+| | `CaptureOnThreadBlockedInCvWait` | Thread in `condition_variable::wait` → `kOk` | Validates capture of futex-blocked threads (SA_RESTART semantics) |
+| | `TimeoutWhenTargetMasksSigusr1` | Target masks SIGUSR1 (deterministic D-state stand-in) → `kTimeout` | The likely real #765 scenario: signal cannot be delivered |
+| | `TimedOutSlotIsReclaimedByNextCapture` | After a never-arriving handler, capture of a healthy thread → `kOk` | **Wedge-bug regression**: without leftover-slot reclamation, all later captures return `kBusy` forever |
+| | `LateHandlerAfterTimeoutDoesNotCorruptNextCapture` | Late handler runs (positively confirmed) yet slot stays `kTimedOut`; next capture → `kOk` | **TOCTOU regression (#765 review #1)**: late handler must lose the `kRequested→kBusyWriting` CAS and write nothing — non-vacuous, asserts the lost-slot branch |
+| | `RateLimitAppliesToTimeoutPathNotJustSuccess` | Two captures of a wedged (masked) tid → `kTimeout` then `kRateLimited` | **Regression (#765 review #2)**: a D-state thread must not be re-signalled every ~1 s forever |
+| | `ConcurrentCaptureWhileOneInFlightReturnsBusy` | Second capture while one is in flight → `kBusy` | Single-consumer protocol: concurrent capture rejected, not corrupting |
+| | `DeadTidReturnsSignalSendFailed` | tid outside our thread group → `kSignalSendFailed` (ESRCH) | Stale-heartbeat-slot path (slots are never unregistered) |
+| | `RateLimitSuppressesRepeatCaptureUntilIntervalElapses` | Immediate re-capture → `kRateLimited`; after mock-clock +31 s → `kOk` | Watchdog callback fires every ~1 s while stuck — floor prevents log storms |
+| | `RateLimitIsPerThread` | Thread B unaffected by thread A's floor | Catches a global (rather than per-tid) limiter regression |
+
+Sanitizer handling: wait budgets ×8 under ASan/TSan/UBSan
+(`test_helpers.h::is_sanitizer_build()`); correctness assertions never
+skipped.  The `kNotInstalled` branch is intentionally not unit-tested
+(process-wide signal disposition cannot be cleanly reverted between
+tests — see the fixture comment).
+
+**Key files under test:** `util/stack_trace_capture.h`,
+`util/thread_heartbeat.h` (tid plumbing)
 
 ---
 
