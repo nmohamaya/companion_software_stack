@@ -25,6 +25,7 @@
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
+#include "util/stack_trace_capture.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -747,20 +748,22 @@ int main(int argc, char* argv[]) {
     // handler's own docstring (planner_stall_handler.h §"Capture-by-this")
     // already states the contract; this comment exists to lock the
     // declaration order against a future-reorder regression.
-    auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
-    PlannerStallHandler         stall_handler("planning_loop");
-    drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
-        drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
-    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
-                                                        watchdog);
-    uint32_t                           health_tick = 0;
+    auto                planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
+    PlannerStallHandler stall_handler("planning_loop");
 
     // ── Optional benchmark profiler (Epic #523, Issue #571) ──
     // Opt-in via `benchmark.profiler.enabled`. When active, captures per-tick
     // latency for PlannerLoop / GeofenceCheck / FaultEval and dumps to JSON
     // on shutdown. See DR-022 for the priority-inversion analysis permitting
     // the mutex-protected record path on this flight-critical thread.
+    //
+    // Declared BEFORE `ThreadWatchdog` (Issue #765 PR 2 review, P2): the
+    // stuck-callback installed below captures `profiler_ptr`, so the
+    // profiler MUST outlive `~ThreadWatchdog`'s scan-thread join — same
+    // LIFO must-outlive-the-watchdog rule as `stall_handler` above.  The
+    // previous order (profiler after the watchdog) left `profiler_ptr`
+    // dangling for any stuck-callback firing during the shutdown join
+    // window → use-after-free.  Order is load-bearing; do not reorder.
     const bool benchmark_profiler_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::benchmark::PROFILER_ENABLED, false);
     std::optional<drone::util::LatencyProfiler> benchmark_profiler;
@@ -771,11 +774,60 @@ int main(int argc, char* argv[]) {
     }
     drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
                                                                     : nullptr;
-    // Install the watchdog stuck-callback now that `profiler_ptr` is
-    // known.  Callback fires on the watchdog scan thread when any
-    // registered thread is detected stuck; the handler logs the
-    // diagnostic dump and sets the FAULT_PLANNER_STALL event flag
-    // only for the watched thread (planning_loop).
+
+    // ── Issue #765 PR 2 — stuck-thread stack-trace capture ──
+    // Install the SIGUSR1 handler BEFORE the ThreadWatchdog constructor
+    // (which starts the scan thread): one-shot install() publishes config_
+    // via its installed_ release-store before any capture could run, and no
+    // scan thread exists yet to race it.  Gated on `watchdog.stack_trace.
+    // enabled` (default true — the capture path is passive until a stall).
+    // Durations go through validate_and_clamp (clamp ≥ small floor) before
+    // the unsigned-ns cast inside TraceCaptureConfig, per the signed→
+    // unsigned-cast safety rule.
+    const bool stack_trace_enabled =
+        ctx.cfg.get<bool>(drone::cfg_key::watchdog::stack_trace::ENABLED, true);
+    if (stack_trace_enabled) {
+        const int wait_ms = validate_and_clamp<int>(ctx.cfg,
+                                                    drone::cfg_key::watchdog::stack_trace::WAIT_MS,
+                                                    250, 10, 5000, "watchdog.stack_trace.wait_ms");
+        const int min_interval_s =
+            validate_and_clamp<int>(ctx.cfg, drone::cfg_key::watchdog::stack_trace::MIN_INTERVAL_S,
+                                    30, 0, 3600, "watchdog.stack_trace.min_interval_s");
+        drone::util::TraceCaptureConfig tc_cfg;
+        tc_cfg.wait_timeout = std::chrono::milliseconds(wait_ms);
+        tc_cfg.min_interval = std::chrono::seconds(min_interval_s);
+        if (drone::util::StackTraceCapture::instance().install(tc_cfg)) {
+            DRONE_LOG_INFO("[StackTrace] enabled — wait={}ms min_interval={}s", wait_ms,
+                           min_interval_s);
+        } else {
+            DRONE_LOG_WARN("[StackTrace] install failed — stuck-thread traces unavailable");
+        }
+        // Wire the capturer NOW — before the ThreadWatchdog ctor starts the
+        // scan thread (Issue #765 PR 2 review, P3).  `trace_capturer_` is a
+        // non-atomic std::function read by on_stuck() on the scan thread; by
+        // setting it before any scan thread exists, the write is sequenced
+        // ahead of every read with no synchronisation needed.  (Setting it
+        // after set_stuck_callback would race the scan thread.)  The lambda
+        // captures only the StackTraceCapture singleton — no profiler_ptr /
+        // handler lifetime dependency.
+        stall_handler.set_trace_capturer([](pid_t tid, const char* name) {
+            return drone::util::StackTraceCapture::instance().capture_and_log(tid, name);
+        });
+    }
+
+    drone::util::ThreadWatchdog watchdog;
+    auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
+        drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
+                                                        watchdog);
+    uint32_t                           health_tick = 0;
+
+    // Install the watchdog stuck-callback now that the watchdog exists and
+    // `profiler_ptr` + the trace capturer are already wired.  Callback fires
+    // on the watchdog scan thread when any registered thread is detected
+    // stuck; the handler logs the diagnostic dump, captures the stuck
+    // thread's stack trace (if enabled), and sets the FAULT_PLANNER_STALL
+    // event flag only for the watched thread (planning_loop).
     watchdog.set_stuck_callback(stall_handler.make_callback(profiler_ptr));
 
     // ── Main planning loop (10 Hz) ──────────────────────────

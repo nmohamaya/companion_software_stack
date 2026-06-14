@@ -1330,3 +1330,68 @@ PR #775 rollup review (review-api-contract P3) flagged this as a "dual-purpose s
 - The same single-bit-with-state-dependent-response pattern accumulates a fourth instance (today: VIO_LOST, FC_LINK_LOST, PLANNER_STALL). At four, codify the convention explicitly in `docs/design/API.md` rather than relying on individual DR entries.
 
 **Date:** 2026-05-16 (PR #776 rollup review-api-contract P3 — DR-NNN audit trail)
+
+---
+
+## DR-049: Running an async-signal-safe stack-trace handler ON a flight-critical thread (Issue #765)
+
+**Context:** PR 2 of Issue #765 wires `drone::util::StackTraceCapture` into
+`PlannerStallHandler`. When `ThreadWatchdog` detects the `planning_loop`
+thread stuck, the watchdog (observer) thread calls `capture_and_log()`,
+which delivers `SIGUSR1` via `tgkill` to the stuck thread; the signal
+handler **executes in the stuck thread's own context** and writes a
+`backtrace()` into a static buffer.
+
+`planning_loop` is a flight-critical thread (P4 mission planner tick).
+CLAUDE.md §"Observability on flight-critical threads" says mutex-protected
+observability MUST NOT run on flight-critical threads without a documented
+DR. Running a *signal handler* on that thread is the same class of concern
+(it borrows the thread's stack + execution), so this DR records why it is
+acceptable.
+
+**The concern:** A handler running on a control-loop thread could (a)
+introduce priority inversion (if it took a lock a lower-priority thread
+holds), or (b) perturb the control loop's timing/state.
+
+**Why it is acceptable here:**
+
+1. **Lock-free + allocation-free handler.** The handler touches only
+   lock-free `std::atomic` (asserted `is_always_lock_free`) + `backtrace()`
+   into a pre-allocated static buffer (glibc unwinder pre-warmed at
+   `install()` time, outside signal context). No mutex → no priority-
+   inversion channel. No malloc → no allocator-lock contention.
+2. **It only fires AFTER the thread is already stuck** ≥ the watchdog
+   threshold (`thread_stuck_threshold_ms`, default 5 s). By definition the
+   thread is doing no useful control work at that point — there is no live
+   control state to contaminate. The capture is a post-mortem of an
+   already-failed loop, not an interruption of a healthy one.
+3. **`SA_RESTART` prevents syscall-state perturbation.** If the stuck
+   thread is blocked in a syscall, the handler runs and the syscall
+   resumes transparently — we do NOT inject an `EINTR` into an unaudited
+   call site. (See stack_trace_capture.h for the full SA_RESTART rationale;
+   it is a deliberate deviation from `SignalHandler`'s `sa_flags=0`.)
+4. **Config-gated + rate-limited.** Off via `watchdog.stack_trace.enabled`;
+   at most one capture per `min_interval_s` (default 30 s) per thread, so
+   even a persistently-stuck thread is signalled at most once per window.
+5. **The mutex-using parts run on the OBSERVER thread.** Symbolisation
+   (`backtrace_symbols`, mallocs) and logging happen on the watchdog scan
+   thread in `capture_and_log()`, never in the signal handler. The watchdog
+   is not a control loop; this matches the existing DR-022 precedent (the
+   LatencyProfiler mutex dump is also taken on the watchdog side).
+
+**Decision:** Run the capture. The combination of lock-free/alloc-free
+handler + fires-only-post-stall + SA_RESTART + config-gate + rate-limit
+makes it strictly safer than the failure it diagnoses (a silent 31 s stall
+ending in PX4 disarm — the #765 motivating incident). The alternative —
+no userspace trace — leaves every recurrence a shrug.
+
+**Revisit when:**
+
+- A real-time scheduling policy (SCHED_FIFO/RR) is adopted for
+  `planning_loop` on hardware — re-examine whether signal delivery to a
+  high-priority thread has any latency cost worth gating more tightly.
+- The mutex-snapshot follow-up (still deferred — "which locks does the
+  stuck thread hold") is designed: that WILL need lock introspection and
+  must not reintroduce a priority-inversion path; it gets its own DR.
+
+**Date:** 2026-06-14 (Issue #765 PR 2 — flight-critical-thread signal analysis)

@@ -218,7 +218,7 @@
         "_preflight_timeout_comment": "Issue #718: PREFLIGHT timeout escalation. If Layer 1 (armable never stably true) or Layer 4 (post-ARM attitude/velocity never settle) holds the FSM in PREFLIGHT for more than preflight_timeout_s wall-clock seconds, the planner DISARMs + transitions FSM to IDLE + raises FAULT_FC_PREFLIGHT_TIMEOUT for GCS visibility. preflight_warn_s promotes the per-tick wait log from INFO to WARN before the timeout fires. Set preflight_timeout_s=0 to disable (legacy hold-forever). Defaults give 2.5x margin over the ~22s worst-case observed in the PR #763 smoke sweep.",
         "preflight_warn_s": 30,
         "preflight_timeout_s": 60,
-        "_planner_stall_comment": "Issues #718 / #765: NAVIGATE-time planner-stall escalation. When ThreadWatchdog detects planning_loop stuck for its configured threshold (watchdog.heartbeat_timeout_s, default 5s for critical threads), the watchdog callback raises FAULT_PLANNER_STALL which FaultManager escalates to LOITER. Vehicle is in the air - NEVER disarm. Diagnostic dump (LatencyProfiler snapshot + thread name) is logged on stuck-detection. Deferred from #765 acceptance: stack-trace via SIGUSR1 + backtrace_symbols, mutex-snapshot.",
+        "_planner_stall_comment": "Issues #718 / #765: NAVIGATE-time planner-stall escalation. When ThreadWatchdog detects planning_loop stuck for its configured threshold (watchdog.heartbeat_timeout_s, default 5s for critical threads), the watchdog callback raises FAULT_PLANNER_STALL which FaultManager escalates to LOITER. Vehicle is in the air - NEVER disarm. Diagnostic dump (LatencyProfiler snapshot + thread name) is logged on stuck-detection, plus a SIGUSR1 stack trace of the stuck thread (PR 2, see watchdog.stack_trace). Still deferred from #765 acceptance: mutex-snapshot (which locks the stuck thread holds).",
         "path_planner": {
             "backend": "dstar_lite",
             "ramp_dist_m": 3.0,
@@ -372,6 +372,12 @@
         "_comment": "Process watchdog configuration (Phase 4)",
         "thread_stuck_threshold_ms": 5000,
         "thread_scan_interval_ms": 1000,
+        "_stack_trace_comment": "Issue #765 PR 2: when ThreadWatchdog detects a stuck thread, capture its stack trace via SIGUSR1 + backtrace (drone::util::StackTraceCapture). enabled=true keeps the path passive until a stall actually occurs. wait_ms = bounded wait for the handler to complete (a D-state thread that never delivers hits this and reports a /proc-state hint). min_interval_s = per-thread re-capture floor (the watchdog re-fires the stuck callback every scan while a thread stays stuck; this prevents a trace+log storm). SITL/real-hardware-agnostic — diagnostics only, no FC commands.",
+        "stack_trace": {
+            "enabled": true,
+            "wait_ms": 250,
+            "min_interval_s": 30
+        },
         "processes": {
             "video_capture": {
                 "critical": false,

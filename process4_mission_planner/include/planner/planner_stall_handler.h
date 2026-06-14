@@ -27,12 +27,17 @@
 //      `FaultManager::set_planner_stall()`.  FaultManager escalates to
 //      LOITER — vehicle is in the air, NEVER disarm.
 //
-// What this does NOT do (deferred to follow-up #765 work)
-// ───────────────────────────────────────────────────────
-//   - Stack-trace capture via `pthread_kill(SIGUSR1)` +
-//     `backtrace_symbols`.  Requires async-signal-safe handler + thread-
-//     local buffer + symbolisation outside signal context; non-trivial.
-//     Defer until first-recurrence dump proves insufficient.
+// Stack-trace capture (Issue #765 PR 2 — DONE)
+// ────────────────────────────────────────────
+//   When a `TraceCapturer` is injected via `set_trace_capturer()`,
+//   `on_stuck()` now captures the stuck thread's stack trace via
+//   `drone::util::StackTraceCapture` (SIGUSR1 + `backtrace` + symbolise;
+//   `tgkill` delivery, not `pthread_kill` — see stack_trace_capture.h for
+//   the async-signal-safe state machine and why).  main.cpp wires the
+//   capturer when `watchdog.stack_trace.enabled` is set.
+//
+// What this still does NOT do (deferred — separate epic)
+// ──────────────────────────────────────────────────────
 //   - Mutex-snapshot ("which locks does the stuck thread hold").
 //     Requires codebase-wide instrumented mutex wrappers; separate epic.
 //
@@ -51,6 +56,7 @@
 
 #include "util/diagnostic.h"
 #include "util/latency_profiler.h"
+#include "util/stack_trace_capture.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
@@ -127,6 +133,28 @@ public:
     /// Test seam: peek at the flag without clearing.
     [[nodiscard]] bool peek_event() const { return stalled_.load(std::memory_order_acquire); }
 
+    /// Injectable stack-trace capturer (Issue #765 PR 2).  When set,
+    /// `on_stuck()` invokes it with the stuck thread's kernel tid + name
+    /// so a SIGUSR1-driven backtrace of WHERE the thread is wedged is
+    /// captured and logged.  Signature matches
+    /// `StackTraceCapture::capture_and_log(pid_t, const char*)`.
+    ///
+    /// Dependency-injected (rather than calling the singleton directly) so
+    /// the existing `on_stuck_for_test()` seam stays hermetic — tests
+    /// inject a fake capturer to assert invocation without standing up the
+    /// real SIGUSR1 machinery.  Null (the default) = capture disabled; the
+    /// rest of the diagnostic dump + FAULT_PLANNER_STALL escalation still
+    /// run, so the feature degrades gracefully when unset / config-off.
+    ///
+    /// THREADING CONTRACT (Issue #765 PR 2 review): `trace_capturer_` is a
+    /// non-atomic member READ by `on_stuck()` on the watchdog scan thread.
+    /// Call this ONCE, BEFORE `ThreadWatchdog::set_stuck_callback()` makes
+    /// the scan thread able to invoke `on_stuck()` (ideally before the
+    /// ThreadWatchdog even exists, as main.cpp does).  Setting it after the
+    /// callback is installed races the scan thread's read.  Not re-entrant.
+    using TraceCapturer = std::function<drone::util::TraceCaptureStatus(pid_t, const char*)>;
+    void set_trace_capturer(TraceCapturer capturer) { trace_capturer_ = std::move(capturer); }
+
     /// Test seam: directly invoke the stuck-handler logic with a
     /// synthetic heartbeat record + optional profiler.  Used by
     /// `tests/test_planner_stall_handler.cpp` so tests don't need to
@@ -166,6 +194,16 @@ private:
                             "(benchmark mode not enabled — no per-stage stats to dump)");
         }
 
+        // Issue #765 PR 2 — capture the stuck thread's stack trace.  Runs
+        // for ANY stuck thread (not only the watched one): a trace of where
+        // a stuck thread is wedged is the load-bearing diagnostic for #765,
+        // regardless of whether it raises the planner-stall fault.  Skipped
+        // when no capturer is injected (capture disabled / config-off) or
+        // the heartbeat slot has no captured tid (tid==0 sentinel).
+        if (trace_capturer_ && beat.tid != 0) {
+            (void)trace_capturer_(beat.tid, beat.name);  // logs internally
+        }
+
         if (is_watched_thread) {
             // Only the watched thread (planning_loop) raises the
             // FAULT_PLANNER_STALL event.  Other stuck threads are
@@ -178,6 +216,7 @@ private:
 
     const std::string watched_thread_name_;
     std::atomic<bool> stalled_{false};
+    TraceCapturer     trace_capturer_{};  // null = capture disabled (#765 PR 2)
 };
 
 }  // namespace drone::planner

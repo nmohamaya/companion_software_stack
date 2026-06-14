@@ -18,6 +18,7 @@
 
 #include "planner/planner_stall_handler.h"
 #include "util/latency_profiler.h"
+#include "util/stack_trace_capture.h"  // TraceCaptureStatus (capturer tests)
 #include "util/thread_heartbeat.h"
 
 #include <atomic>
@@ -25,6 +26,7 @@
 #include <thread>
 
 #include <gtest/gtest.h>
+#include <sys/types.h>  // pid_t
 
 using drone::planner::PlannerStallHandler;
 using drone::util::LatencyProfiler;
@@ -168,4 +170,87 @@ TEST(PlannerStallHandlerTest, ConsumeEventIsThreadSafeAcrossWatchdogAndPlanningL
     EXPECT_LE(consumed.load(), kIterations)
         << "consume_event() returned true more times than events were fired — "
            "spurious-true bug.";
+}
+
+// ─── Issue #765 PR 2 — stack-trace capturer injection ───────────────
+
+// Capturer is invoked with the stuck thread's tid + name when set.
+TEST(PlannerStallHandlerTest, TraceCapturerInvokedWithBeatTidAndName) {
+    PlannerStallHandler handler("planning_loop");
+
+    std::atomic<pid_t> seen_tid{0};
+    std::string        seen_name;
+    handler.set_trace_capturer([&](pid_t tid, const char* name) {
+        seen_tid.store(tid, std::memory_order_release);
+        seen_name = name;
+        return drone::util::TraceCaptureStatus::kOk;
+    });
+
+    auto beat = make_beat("planning_loop", /*is_critical=*/true);
+    beat.tid  = 4242;
+    handler.on_stuck_for_test(beat, /*profiler=*/nullptr);
+
+    EXPECT_EQ(seen_tid.load(std::memory_order_acquire), 4242);
+    EXPECT_EQ(seen_name, "planning_loop");
+    // The stall event still fires for the watched thread.
+    EXPECT_TRUE(handler.consume_event());
+}
+
+// No capturer installed → on_stuck() is safe (no crash) and the existing
+// escalation still runs.  Also: a zero tid is never passed to a capturer.
+TEST(PlannerStallHandlerTest, NoCapturerInstalledIsSafe) {
+    PlannerStallHandler handler("planning_loop");
+    auto                beat = make_beat("planning_loop", /*is_critical=*/true);
+    beat.tid                 = 99;
+    // No set_trace_capturer() call.
+    handler.on_stuck_for_test(beat, /*profiler=*/nullptr);  // must not crash
+    EXPECT_TRUE(handler.consume_event());
+}
+
+TEST(PlannerStallHandlerTest, CapturerNotCalledWhenTidIsZero) {
+    PlannerStallHandler handler("planning_loop");
+    std::atomic<int>    calls{0};
+    handler.set_trace_capturer([&](pid_t, const char*) {
+        calls.fetch_add(1, std::memory_order_acq_rel);
+        return drone::util::TraceCaptureStatus::kOk;
+    });
+    auto beat = make_beat("planning_loop", /*is_critical=*/true);
+    beat.tid  = 0;  // unregistered / synthetic — no valid tid to signal
+    handler.on_stuck_for_test(beat, /*profiler=*/nullptr);
+    EXPECT_EQ(calls.load(std::memory_order_acquire), 0);
+}
+
+// A non-watched stuck thread is STILL traced (the trace is the
+// load-bearing diagnostic regardless of which thread), but it does NOT
+// raise the planner-stall fault flag.
+TEST(PlannerStallHandlerTest, NonWatchedThreadStillTracedButNoFault) {
+    PlannerStallHandler handler("planning_loop");
+
+    std::atomic<pid_t> seen_tid{0};
+    handler.set_trace_capturer([&](pid_t tid, const char*) {
+        seen_tid.store(tid, std::memory_order_release);
+        return drone::util::TraceCaptureStatus::kOk;
+    });
+
+    auto beat = make_beat("some_other_thread", /*is_critical=*/false);
+    beat.tid  = 7;
+    handler.on_stuck_for_test(beat, /*profiler=*/nullptr);
+
+    EXPECT_EQ(seen_tid.load(std::memory_order_acquire), 7);  // traced
+    EXPECT_FALSE(handler.consume_event());                   // but no fault
+}
+
+// Escalation is independent of capture OUTCOME: a capturer that fails
+// (kTimeout — the D-state thread we most need to LOITER for) must NOT
+// suppress the FAULT_PLANNER_STALL event.  (#765 PR 2 review #5)
+TEST(PlannerStallHandlerTest, CapturerFailureDoesNotBlockEscalation) {
+    PlannerStallHandler handler("planning_loop");
+    handler.set_trace_capturer([](pid_t, const char*) {
+        return drone::util::TraceCaptureStatus::kTimeout;  // capture failed
+    });
+    auto beat = make_beat("planning_loop", /*is_critical=*/true);
+    beat.tid  = 555;
+    handler.on_stuck_for_test(beat, /*profiler=*/nullptr);
+    // The stall still escalates even though the trace could not be captured.
+    EXPECT_TRUE(handler.consume_event());
 }

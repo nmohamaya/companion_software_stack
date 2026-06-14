@@ -3980,4 +3980,67 @@ integration + DR entry) follows in PR 2.
 
 ---
 
-*Last updated after Improvement #101 (Issue #765 PR 1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #102 — Wire StackTraceCapture into the planner stall handler (Issue #765, PR 2 of 2)
+
+**Date:** 2026-06-14
+
+**What:** Connects PR 1's `StackTraceCapture` infrastructure to the live
+watchdog path. When `ThreadWatchdog` detects the `planning_loop` thread
+stuck, `PlannerStallHandler::on_stuck()` now (in addition to the existing
+LatencyProfiler dump + `FAULT_PLANNER_STALL` → LOITER escalation) captures
+and logs a symbolised stack trace of WHERE the thread is wedged — closing
+the actionable-data gap that motivated #765 (a 31 s silent stall that
+ended in PX4 disarm with no clue what the thread was doing).
+
+**Changes:**
+
+- `common/util/include/util/config_keys.h` — `watchdog::stack_trace`
+  namespace: `ENABLED`, `WAIT_MS`, `MIN_INTERVAL_S`.
+- `config/default.json` — `watchdog.stack_trace = {enabled:true,
+  wait_ms:250, min_interval_s:30}` with rationale comment; updated the
+  stale `_planner_stall_comment` (stack-trace no longer "deferred").
+- `process4_mission_planner/include/planner/planner_stall_handler.h` —
+  injectable `TraceCapturer` (`std::function<TraceCaptureStatus(pid_t,
+  const char*)>`) + `set_trace_capturer()`; `on_stuck()` invokes it for
+  any stuck thread with a valid tid (the trace is the load-bearing
+  diagnostic regardless of which thread; only the watched thread raises
+  the fault). Dependency-injected so the `on_stuck_for_test()` seam stays
+  hermetic. Updated the header's "deferred" comment (stack-trace DONE,
+  mutex-snapshot still deferred).
+- `process4_mission_planner/src/main.cpp` — read the 3 config keys
+  (durations via `validate_and_clamp`), `StackTraceCapture::install()`
+  BEFORE the `ThreadWatchdog` constructor (so config_ publishes before the
+  scan thread exists), and wire the capturer after `set_stuck_callback`.
+- `tests/test_planner_stall_handler.cpp` — +5 tests (capturer invoked
+  with tid+name; no-capturer-safe; tid==0 never reaches capturer;
+  non-watched thread traced but no fault; capture-failure does not block
+  escalation — the last added in the pre-commit-review round).
+- `docs/tracking/DESIGN_RATIONALE.md` — **DR-049**: why running an
+  async-signal-safe stack-trace handler ON a flight-critical thread is
+  acceptable (lock-free/alloc-free handler; fires only post-stall;
+  SA_RESTART; config-gated + rate-limited; mutex parts on the observer
+  thread).
+
+**Test count:** +5 (`test_planner_stall_handler.cpp` 7 → 12). `ctest -N`
+2131 → 2136.
+
+**Pre-commit adversarial review (3-lens + verify) on the wiring diff** found
+7 issues before commit, incl. a **pre-existing P2 use-after-free**: the
+benchmark profiler was declared AFTER the watchdog, so LIFO destruction
+freed it while the watchdog scan thread (whose callback holds
+`profiler_ptr`) was still being joined. Fixed by declaring the profiler
+(and wiring the trace capturer) BEFORE the `ThreadWatchdog` ctor — which
+also closes a `trace_capturer_` ordering race the review flagged. Both are
+defensive-ordering fixes in the spirit of the PR #775 LIFO comment.
+
+**Closes #765** (mutex-snapshot explicitly deferred to a separate epic,
+noted in the issue).
+
+**Why:** Completes the observability-before-remediation arc for #765 —
+PR 1 built the capture mechanism, PR 2 arms it in production. The next
+`planning_loop` stall produces a backtrace instead of a shrug, which is
+the prerequisite for any eventual root-cause fix of the stall itself.
+
+---
+
+*Last updated after Improvement #102 (Issue #765 PR 2). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
