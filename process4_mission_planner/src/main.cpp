@@ -315,6 +315,41 @@ int main(int argc, char* argv[]) {
                            planner_cfg.voxel_instance_promotion_observations);
         }
     }
+    // Issue #764 — camera dynamic-add gates (default = prior behaviour).
+    // min_obstacle_altitude_m rejects ground-texture detections; 0.0 = disabled
+    // (the default — no floor, matching the codebase "0 = disabled" idiom), a
+    // positive value (scenario opt-in) is the floor. Upper clamp kept low: a
+    // value near cruise altitude would start rejecting real obstacle centres
+    // (asymmetric cost — dropping a real obstacle is a collision).
+    planner_cfg.min_obstacle_altitude_m = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::occupancy_grid::MIN_OBSTACLE_ALTITUDE_M,
+        planner_cfg.min_obstacle_altitude_m, 0.0f, 3.0f, "occupancy_grid.min_obstacle_altitude_m");
+    // dynamic_confirmation_hits: observations before a camera cell becomes a
+    // planning obstacle (1 = off). Safety clamp (same hazard as the instance-
+    // promotion gate above): a huge value means camera obstacles NEVER reach the
+    // grid and the drone could collide. Cap at 20 (~1 s @ 20 Hz); < 1 disables
+    // the gate (no suppression). The reactive ObstacleAvoider3D still provides
+    // real-time avoidance during the confirmation window.
+    {
+        constexpr int kMaxDynamicConfirmHits = 20;
+        int           raw_hits               = ctx.cfg.get<int>(
+            drone::cfg_key::mission_planner::occupancy_grid::DYNAMIC_CONFIRMATION_HITS,
+            planner_cfg.dynamic_confirmation_hits);
+        if (raw_hits < 1) {
+            raw_hits = 1;  // off — immediate occupancy (no suppression)
+        } else if (raw_hits > kMaxDynamicConfirmHits) {
+            DRONE_LOG_WARN("[OccGrid] dynamic_confirmation_hits {} above cap {} — camera "
+                           "obstacles would take too long to reach the grid; clamping to {}",
+                           raw_hits, kMaxDynamicConfirmHits, kMaxDynamicConfirmHits);
+            raw_hits = kMaxDynamicConfirmHits;
+        }
+        planner_cfg.dynamic_confirmation_hits = raw_hits;
+        if (planner_cfg.dynamic_confirmation_hits > 1) {
+            DRONE_LOG_INFO("[OccGrid] Dynamic-confirmation gate enabled: {} observations before a "
+                           "camera detection occupies a planning cell (#764)",
+                           planner_cfg.dynamic_confirmation_hits);
+        }
+    }
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,

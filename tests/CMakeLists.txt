@@ -190,6 +190,8 @@ add_drone_test(test_radar_fov_gate         test_radar_fov_gate.cpp)
 add_drone_test(test_cross_veto_decision    test_cross_veto_decision.cpp)
 # Issue #698 Fix #1 — OccupancyGrid3D + cross-veto integration (Phase 2)
 add_drone_test(test_occupancy_grid_cross_veto test_occupancy_grid_cross_veto.cpp)
+# Issue #764 — camera dynamic-add gates (ground reject, NaN guard, confirmation)
+add_drone_test(test_occupancy_grid_dynamic_gating test_occupancy_grid_dynamic_gating.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
