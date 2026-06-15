@@ -1136,6 +1136,39 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 ---
 
+### Fix #764 — D*Lite path-extraction failures from ghost-flooded dynamic occupancy grid (Issue #764)
+
+**Date:** 2026-06-15
+**Severity:** High
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `process4_mission_planner/include/planner/grid_planner_base.h`, `process4_mission_planner/src/main.cpp`, `common/util/include/util/config_keys.h`, `config/default.json`, `config/scenarios/02_obstacle_avoidance.json`
+
+**What:** `02_obstacle_avoidance` failed its "Mission complete" check ~50% of runs (6 PASS / 6 FAIL across 12 logged runs). The drone flew fine but D*Lite logged repeated path-extraction failures with grid-occupancy counts of 119–1441 cells — far more than the 4 physical obstacles — then hovered/STUCK until the 150 s timeout (or, at a final waypoint, escalated to LOITER).
+
+**Error messages (searchable):**
+- `[D*Lite] Path extraction FAILED: search=0ms g(start)=8.4 occupied=151`
+- `[PathPlan] no obstacle-free path — hovering`
+- `[FSM] STUCK count 4 exceeded cap 3 — escalating to LOITER`
+
+**Reproduce:**
+1. `git checkout <commit-before-fix>`
+2. `bash tests/run_scenario_gazebo.sh 02_obstacle_avoidance` repeatedly (~50% timeout-FAIL).
+3. Observe `occupied=` climbing into the hundreds/thousands in `mission_planner.log`.
+
+**Why (Root Cause):** Scenario 02 uses the `color_contour` detector (a known ground/edge false-positive source, ≤64 detections/frame). Camera detections enter the **dynamic** occupancy bucket via `OccupancyGrid3D::update_from_objects()`, which gated only on `min_confidence` — "Dynamic cells are ALWAYS created". The **voxel** path already had a NaN guard, a position clamp, and a `kMinObstacleZ` ground-plane reject; the camera/objects path had **none**. With 2 m inflation and 1 s TTL, persistent ground ghosts bloomed across hundreds of cells. `is_occupied()` checks dynamic+static, so the grid saturated and D*Lite found no corridor. (Note: the issue's hypothesis that `occupied=1441 > 800` was a cap leak is incorrect — `occupied_count()` returns the *dynamic* bucket; the 800 cap bounds only the *static* layer, which is uncapped on the dynamic side.)
+
+**How (Fix):** Brought the camera dynamic-add path up to the voxel path's gating, all config-driven and **disabled by default** (codebase `0/1 = disabled` idiom) so behaviour is preserved for every scenario unless it opts in:
+- `update_from_objects()` — finite-value (NaN) guard; opt-in ground/altitude reject (`min_obstacle_altitude_m`, gate active only when `> 0`); opt-in per-cell N-hit confirmation (`dynamic_confirmation_hits`) before a camera cell occupies a planning cell, with a TTL-swept pending map so scattered depth-noise ghosts never accumulate while a stable obstacle confirms in N frames.
+- `main.cpp` — both keys read via `validate_and_clamp` / an explicit cap so a bad config can't suppress obstacles entirely or indefinitely (clamp `dynamic_confirmation_hits` to `[1,20]`, altitude to `[0,3]`).
+- `config/scenarios/02_obstacle_avoidance.json` opts in (`min_obstacle_altitude_m=0.5`, `dynamic_confirmation_hits=3`).
+
+**Safety:** This is a perception-*suppression* change, so the asymmetric-cost calculus inverts (dropping a real obstacle = collision). Gates bias toward keeping obstacles; thresholds are clamped; the reactive `ObstacleAvoider3D` (8 m influence) backstops the ~0.15 s confirmation window. Recorded as **DR-050**; codified as the new CLAUDE.md rule "Perception-suppression gates must fail safe".
+
+**Found by:** Issue #764, surfaced during the #746 / PR #763 Layer 4 validation sweep.
+
+**Test:** new `tests/test_occupancy_grid_dynamic_gating.cpp` (+5 tests: ground reject, NaN guard, N-hit confirmation accrual, above-floor occupancy, default-behaviour-preserved). Out of scope (follow-up): D*Lite final-WP nearest-free goal-snap for the scenario-26 boxed-goal variant.
+
+---
+
 ### Fix #718 — PREFLIGHT held forever on stuck `armable` or never-settling attitude; no operator alert (Issue #718, partial #765)
 
 **Date fixed:** 2026-05-15

@@ -1395,3 +1395,26 @@ no userspace trace — leaves every recurrence a shrug.
   must not reintroduce a priority-inversion path; it gets its own DR.
 
 **Date:** 2026-06-14 (Issue #765 PR 2 — flight-critical-thread signal analysis)
+
+---
+
+## DR-050: Camera dynamic-occupancy gates default OFF (opt-in), not voxel-parity ON (Issue #764)
+
+**Question:** When adding ground-reject + N-hit confirmation gates to the camera `update_from_objects()` path (to stop `color_contour` ground ghosts flooding the dynamic planning grid), should the gates default ON at the voxel path's value (ground floor 0.3 m), or default OFF (opt-in per scenario)?
+
+**Context:** This is a perception-*suppression* change — a gate that DROPS obstacle detections before the planner. The asymmetric-cost calculus inverts: dropping a *ghost* = brief over-caution (cheap); dropping a *real* obstacle = collision = lost vehicle (catastrophic).
+
+**Arguments for default-ON (voxel parity, 0.3 m floor):**
+- Consistency: the voxel path already rejects sub-0.3 m world-z; matching it makes the two ingestion paths behave the same.
+- Catches the ghost class everywhere by default, not only where a scenario remembers to opt in.
+
+**Arguments for default-OFF (opt-in):**
+- A non-zero default ground floor is a behaviour change for *every* scenario — it broke 7 existing tests that place obstacles below 0.3 m, and could silently drop a low real obstacle in a scenario we haven't validated.
+- The safe direction for a suppression gate is false-accept (keep the obstacle). Default-OFF preserves prior behaviour; a scenario opts in only after its N=10 validation proves the gate doesn't drop real obstacles.
+- Matches the codebase idiom (`max_static_cells=0`, `promotion_hits=0`, `static_cell_ttl_s=0` all mean "disabled").
+
+**Decision:** **Default OFF** — `min_obstacle_altitude_m=0.0` (no floor; gate active only when `> 0`) and `dynamic_confirmation_hits=1` (no confirmation). Scenario 02 opts into `0.5` / `3`. The reactive `ObstacleAvoider3D` backstops the confirmation window; thresholds are config-clamped so a bad value can't suppress obstacles entirely or indefinitely. Generalised into the CLAUDE.md rule "Perception-suppression gates must fail safe" + the `review-data-plumbing` (P1) and `review-fault-recovery` checklists.
+
+**Revisit when:** the N=10 scenario-02 sweep proves the opt-in values are safe and effective → consider promoting the ground floor to a low default (voxel parity) per-scenario once each is validated; or when a less ghost-prone detector replaces `color_contour`.
+
+**Date:** 2026-06-15 (Issue #764)
