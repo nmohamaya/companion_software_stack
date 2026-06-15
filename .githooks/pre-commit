@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — Tier-0 local gate (ADR-016). Install: deploy/install_hooks.sh
+#
+# Runs only on STAGED content (fast) and blocks the commit on hard failures.
+# It catches the consequences of `git add -A` mistakes (proprietary paths,
+# secrets, large blobs reaching the public repo — see tasks/lessons.md) plus
+# formatting and doc-SSOT drift, before they ever reach CI or a review agent.
+# Bypass deliberately with: git commit --no-verify
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 0
+fail=0
+
+mapfile -d '' -t STAGED < <(git diff --cached --name-only --diff-filter=ACM -z)
+[ "${#STAGED[@]}" -eq 0 ] && { echo "pre-commit: no staged files"; exit 0; }
+
+# 1) Security: never commit private/proprietary submodule paths to the public repo.
+for f in "${STAGED[@]}"; do
+    case "$f" in
+        business/* | */business/*)
+            echo "BLOCK: staged private path '$f' (business/ is a private submodule — must never reach the public repo)."
+            fail=1 ;;
+    esac
+done
+
+# 2) Security: .gitmodules must not reference a private/business submodule URL.
+for f in "${STAGED[@]}"; do
+    if [ "$f" = ".gitmodules" ] && git show ":.gitmodules" 2>/dev/null | grep -qiE "business|private"; then
+        echo "BLOCK: staged .gitmodules references a private/business submodule URL."
+        fail=1
+    fi
+done
+
+# 3) Secret scan on staged ADDED lines.
+SECRETS=$(git diff --cached -U0 | grep -E '^\+' | grep -vE '^\+\+\+' \
+    | grep -EI 'AKIA[0-9A-Z]{16}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|(api[_-]?key|secret|password|token)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'' ]{8,}' \
+    || true)
+if [ -n "$SECRETS" ]; then
+    echo "BLOCK: possible secret in staged changes:"
+    echo "$SECRETS" | head -5 | sed 's/^/  /'
+    echo "  (rotate if real; if a false positive, commit with --no-verify)"
+    fail=1
+fi
+
+# 4) Large-file warning (>5 MB staged) — non-blocking.
+for f in "${STAGED[@]}"; do
+    [ -f "$f" ] || continue
+    sz=$(wc -c <"$f" 2>/dev/null || echo 0)
+    [ "$sz" -gt 5242880 ] && echo "WARN: large staged file '$f' ($((sz / 1048576)) MB) — confirm it belongs in git."
+done
+
+# 5) clang-format on staged C/C++.
+FMT="$(command -v clang-format-18 || command -v clang-format || true)"
+if [ -n "$FMT" ]; then
+    cpp=()
+    for f in "${STAGED[@]}"; do
+        case "$f" in *.h | *.cpp | *.hpp | *.cc) [ -f "$f" ] && cpp+=("$f") ;; esac
+    done
+    if [ "${#cpp[@]}" -gt 0 ] && ! "$FMT" --dry-run --Werror "${cpp[@]}" 2>/dev/null; then
+        echo "BLOCK: clang-format violations in staged C/C++ (fix: $FMT -i <files>)."
+        fail=1
+    fi
+fi
+
+# 6) doc-SSOT lint on staged markdown.
+if [ -x deploy/lint_docs_ssot.sh ] && ! deploy/lint_docs_ssot.sh --staged >/dev/null 2>&1; then
+    echo "BLOCK: doc-SSOT lint failed on staged markdown:"
+    deploy/lint_docs_ssot.sh --staged | sed 's/^/  /'
+    fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-commit: FAILED (override deliberately with: git commit --no-verify)"
+    exit 1
+fi
+echo "pre-commit: ok"
+exit 0

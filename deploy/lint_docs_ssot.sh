@@ -30,6 +30,7 @@ MODE="full"
 BASE=""
 case "${1:-}" in
     --changed) MODE="changed"; BASE="${2:-origin/main}" ;;
+    --staged) MODE="staged" ;;
     --help | -h) sed -n '2,25p' "$0"; exit 0 ;;
     "") ;;
     *) echo "unknown arg: $1 (see --help)" >&2; exit 2 ;;
@@ -54,6 +55,11 @@ if [ "$MODE" = "full" ]; then
         done < <(grep -nE "$PATTERN" "$f" 2>/dev/null || true)
     done < <(git ls-files '*.md')
 else
+    if [ "$MODE" = "staged" ]; then
+        DIFFCMD=(git diff --cached --unified=0 -- '*.md')
+    else
+        DIFFCMD=(git diff --unified=0 "$BASE...HEAD" -- '*.md')
+    fi
     cur=""
     while IFS= read -r line; do
         case "$line" in
@@ -66,7 +72,7 @@ else
                 fi
                 ;;
         esac
-    done < <(git diff --unified=0 "$BASE"...HEAD -- '*.md' 2>/dev/null || true)
+    done < <("${DIFFCMD[@]}" 2>/dev/null || true)
 fi
 
 if [ "$violations" -gt 0 ]; then
