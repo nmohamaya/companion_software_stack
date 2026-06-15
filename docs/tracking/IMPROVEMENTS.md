@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-15 (ADR-016 Tier-0 tooling — advisory backlogs to burn down)
+
+#### Promote advisory static-analysis gates (cppcheck, clang-tidy) to blocking
+
+- **P3** (`.github/workflows/ci.yml`) — `cppcheck` and `clang-tidy` ship **advisory** (`continue-on-error`) because their backlogs are unmeasured. **Fix:** triage findings (`deploy/run_cppcheck.sh`, `deploy/run_clang_tidy.sh --all`), fix or baseline-suppress, then drop `continue-on-error`. Likewise adopt a changed-line coverage floor via `deploy/coverage_delta.py --min`. **When to do it:** after the first backlog triage. **Cross-ref:** ADR-016 "Remaining (promotion path)".
+
 ### 2026-06-14 (Issue #765 PR 2 review deferral — test-quality P3)
 
 #### P4 main.cpp stack-trace wiring is unit-test-untested (install ordering, config read, capturer lambda)

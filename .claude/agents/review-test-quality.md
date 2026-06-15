@@ -18,7 +18,7 @@ You are a **read-only** reviewer focused exclusively on test quality. You verify
 - **Test framework:** Google Test (GTest), tests in `tests/` directory
 - **Test patterns:** See `docs/reference/CPP_PATTERNS_GUIDE.md` for project testing conventions
 - **Key pattern:** `ScopedMockClock` for time-dependent tests, `RESOURCE_LOCK "zenoh_session"` for IPC tests
-- **Baseline:** 1259 C++ tests across 57 binaries (see `tests/TESTS.md`)
+- **Baseline:** see `tests/TESTS.md` for the current count + per-suite inventory
 
 ## Motivation
 

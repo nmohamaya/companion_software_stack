@@ -29,6 +29,39 @@ jobs:
         find common process[1-7]_* tests tools \( -name '*.h' -o -name '*.cpp' \) -print0 \
           | xargs -0 clang-format-18 --dry-run --Werror 2>&1
 
+  # ── Doc SSOT gate: no hardcoded test-count totals (ADR-016) ──────
+  # Lints only ADDED lines vs the base, so it blocks NEW drift without
+  # failing on the existing backlog. tests/TESTS.md is the canonical source.
+  doc-lint:
+    runs-on: ubuntu-24.04
+    name: doc-lint
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Lint docs for hardcoded test-count totals
+      run: |
+        BASE_REF="${{ github.base_ref || 'main' }}"
+        git fetch -q origin "${BASE_REF}" || true
+        bash deploy/lint_docs_ssot.sh --changed "origin/${BASE_REF}"
+
+  # ── Static analysis: cppcheck (advisory, non-blocking) ───────────
+  cppcheck:
+    runs-on: ubuntu-24.04
+    name: cppcheck (advisory)
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install cppcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends cppcheck
+    - name: Run cppcheck (advisory — non-blocking)
+      run: |
+        bash deploy/run_cppcheck.sh \
+          || echo "::warning::cppcheck reported issues (advisory, non-blocking — triage tracked in docs/tracking/IMPROVEMENTS.md)"
+
   # ── Build + test matrix ──────────────────────────────────────────
   # Intentionally NOT `needs: format-check` — see docs/how-to/CI_SETUP.md
   # § "Gate ordering" and Issue #758. A red format-check used to mask red
@@ -125,6 +158,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Install dependencies
       run: |
@@ -155,10 +190,19 @@ jobs:
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Debug \
           -DENABLE_COVERAGE=ON \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
           -DALLOW_INSECURE_ZENOH=ON
 
     - name: Build
       run: cmake --build build -j$(nproc)
+
+    - name: clang-tidy changed files (advisory)
+      continue-on-error: true
+      run: |
+        sudo apt-get install -y --no-install-recommends clang-tidy-18 || true
+        BASE_REF="${{ github.base_ref || 'main' }}"
+        git fetch -q origin "${BASE_REF}" || true
+        bash deploy/run_clang_tidy.sh --changed "origin/${BASE_REF}"
 
     - name: Zero counters
       run: lcov --zerocounters --directory build
@@ -184,6 +228,13 @@ jobs:
           --ignore-errors unused \
           --rc lcov_branch_coverage=1
         lcov --list coverage.info --rc lcov_branch_coverage=1
+
+    - name: Changed-line coverage delta (advisory)
+      continue-on-error: true
+      run: |
+        BASE_REF="${{ github.base_ref || 'main' }}"
+        git fetch -q origin "${BASE_REF}" || true
+        python3 deploy/coverage_delta.py --coverage coverage.info --base "origin/${BASE_REF}"
 
     - name: Enforce coverage threshold
       run: |

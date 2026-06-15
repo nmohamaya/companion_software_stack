@@ -47,17 +47,29 @@ Adopt a **tiered, tool-first verification policy**. Each tier runs before — an
 - Agent budget concentrates where it has unique value (judgment), improving signal-to-noise.
 
 **Negative / costs**
-- Upfront tooling investment to close current gaps (clang-tidy is not yet a CI gate; no doc-SSOT linter; no pre-commit hooks; coverage delta not surfaced per-PR). Tracked in `docs/tracking/IMPROVEMENTS.md`.
+- Upfront tooling investment to build and maintain the Tier-0 gates (done — issue #785; see status below). Advisory gates (cppcheck, clang-tidy, coverage-delta) still need their backlogs burned down before promotion to hard gates.
 - Tools cannot judge design or intent — Tier 2/3 agents remain essential, not optional.
 - Requires discipline: the reflex to "fan out the whole roster" must be replaced by "what is the cheapest tier that can decide this?"
 
-## Follow-up (tooling to close Tier-0 gaps)
+## Tier-0 tooling status
 
-These convert recurring agent/LLM work into deterministic gates (logged in IMPROVEMENTS.md):
-1. **clang-tidy CI + pre-commit gate** — it exists only in `deploy/safety_audit.sh` today; promote it to a gate. Front-runs `review-code-quality` and parts of `review-memory-safety`.
-2. **Doc-SSOT linter** — CLAUDE.md already *assumes* one ("the doc-linter should reject docs that hardcode test counts"), but Copilot had to catch the #783 drift. Build it on `deploy/count_tests.sh`.
-3. **Pre-commit hooks** — clang-format, clang-tidy (changed files), the doc-SSOT linter, plus the security guards from `tasks/lessons.md` (no `git add -A`, no stray submodule/`business/` paths reaching the public repo).
-4. **Per-PR coverage delta** — surface changed-line coverage from the existing coverage job so the test-exercises-new-code question is answered by a number, not an agent's reading.
+Implemented for issue #785 — recurring agent/LLM checks turned into deterministic gates:
+
+| Tool | Path | CI surface | Status |
+|---|---|---|---|
+| Doc-SSOT linter (no hardcoded test-count totals outside `tests/TESTS.md`) | `deploy/lint_docs_ssot.sh` | `doc-lint` job | **hard gate** (changed-lines) |
+| cppcheck static analysis | `deploy/run_cppcheck.sh` | `cppcheck` job | advisory |
+| clang-tidy on changed `.cpp` | `deploy/run_clang_tidy.sh` | step in `coverage` job | advisory |
+| Changed-line coverage delta | `deploy/coverage_delta.py` | step in `coverage` job | advisory |
+| Pre-commit hooks (clang-format + doc-SSOT + security guards) | `.githooks/pre-commit`, `deploy/install_hooks.sh` | local (`core.hooksPath`) | opt-in |
+| Repeated-TSan helper (signal-handler/lock-free rule) | `tools/tsan_repeat.sh` | local / pre-push | helper |
+
+All are also runnable via `deploy/run_ci_local.sh` (jobs `DOC`/`CPPCHECK`/`TIDY`/`COVDELTA`).
+
+### Remaining (promotion path)
+
+1. **Burn down backlogs, then promote advisory → hard gate.** The doc-SSOT linter found ~96 pre-existing hardcoded totals; cppcheck/clang-tidy have unmeasured backlogs. The changed-files/changed-lines scoping prevents growth; clean the backlog incrementally, then flip the advisory jobs to blocking. Tracked in `docs/tracking/IMPROVEMENTS.md`.
+2. **Adopt a changed-line coverage floor** via `coverage_delta.py --min` once a threshold is agreed.
 
 ## Revisit when
 

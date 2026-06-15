@@ -285,7 +285,7 @@ Present the complete audit report:
 --- BLOCKING ---
 [1]  Build Verification     PASS
 [2]  Safety Audit           PASS (28/29 rules, 1 WARN)
-[3]  Test Coverage          PASS (1259 tests, 100% pass)
+[3]  Test Coverage          PASS (all tests pass — see tests/TESTS.md)
 [4]  Sanitizers             PASS (ASan + TSan + UBSan clean)
 [5]  Security Scan          PASS
 [7]  Config Audit           WARN (geofence disabled in default.json)

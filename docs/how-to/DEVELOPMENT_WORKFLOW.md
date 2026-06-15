@@ -355,7 +355,7 @@ bash deploy/build.sh --test-filter ipc  # build + run IPC tests only
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
 
-- All tests must pass (current baseline: ~1007 tests — verify with `ctest -N --test-dir build | grep "Total Tests:"`)
+- All tests must pass (verify the current baseline with `ctest -N --test-dir build | grep "Total Tests:"` — see tests/TESTS.md)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh test binaries use `RESOURCE_LOCK` to avoid parallel session exhaustion under `ctest -j`
