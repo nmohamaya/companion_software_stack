@@ -751,7 +751,7 @@ cases.
 
 ---
 
-### test_planner_stall_handler.cpp — 7 tests
+### test_planner_stall_handler.cpp — 12 tests
 
 **What it tests:** [`drone::planner::PlannerStallHandler`](../process4_mission_planner/include/planner/planner_stall_handler.h) — the `ThreadWatchdog::set_stuck_callback` handler installed by P4 main.cpp ([#718](https://github.com/nmohamaya/companion_software_stack/issues/718) + partial [#765](https://github.com/nmohamaya/companion_software_stack/issues/765)). Responsibilities: log diagnostic dump (LatencyProfiler snapshot + thread name) when any registered thread is detected stuck; set the `FAULT_PLANNER_STALL` event flag ONLY for the watched thread (`planning_loop` by default — other threads are logged but don't trigger LOITER escalation, they're handled by their own paths / process restart).
 
@@ -764,10 +764,15 @@ cases.
 | `DiagnosticDumpWithProfilerDoesNotCrash` | The LatencyProfiler-snapshot dump path (called with a non-null profiler) runs cleanly — no exceptions, no asan trips |
 | `MakeCallbackProducesValidStuckCallback` | The callback object returned by `make_callback()` correctly captures the handler (the watchdog scan thread fires the callback; the handler must outlive it) |
 | `ConsumeEventIsThreadSafeAcrossWatchdogAndPlanningLoop` | The `std::atomic<bool>` with explicit acquire/release ordering keeps the setter-thread (watchdog scan) + consumer-thread (planning loop) coherent under 1000-iteration contention |
+| `TraceCapturerInvokedWithBeatTidAndName` (#765 PR 2) | When a `TraceCapturer` is injected, `on_stuck()` calls it with the stuck thread's `beat.tid` + name; the watched-thread fault still fires |
+| `NoCapturerInstalledIsSafe` (#765 PR 2) | Default path (no capturer) does not crash; escalation still runs |
+| `CapturerNotCalledWhenTidIsZero` (#765 PR 2) | A `beat.tid==0` (unregistered/synthetic) never reaches the capturer — guards `tgkill(0)` |
+| `NonWatchedThreadStillTracedButNoFault` (#765 PR 2) | A non-watched stuck thread IS traced (the trace is the load-bearing diagnostic regardless of thread) but does NOT raise the planner-stall fault |
+| `CapturerFailureDoesNotBlockEscalation` (#765 PR 2) | A capturer returning a failure status (kTimeout) does NOT suppress FAULT_PLANNER_STALL — escalation is independent of capture outcome |
 
-**Why these tests matter:** The handler is the bridge between `ThreadWatchdog` (fires on the scan thread) and `FaultManager` (consumes on the planning loop thread). The atomic ordering MUST be right or stall events get lost in the race; the watched-thread filter MUST be right or every stuck thread escalates to LOITER (which is wrong — non-planner threads have their own recovery paths). Pre-#718, the watchdog only logged on stuck-detection — there was no escalation. This handler is the first time a stuck `planning_loop` actually triggers a fault response.
+**Why these tests matter:** The handler is the bridge between `ThreadWatchdog` (fires on the scan thread) and `FaultManager` (consumes on the planning loop thread). The atomic ordering MUST be right or stall events get lost in the race; the watched-thread filter MUST be right or every stuck thread escalates to LOITER (which is wrong — non-planner threads have their own recovery paths). Pre-#718, the watchdog only logged on stuck-detection — there was no escalation. This handler is the first time a stuck `planning_loop` actually triggers a fault response. PR 2 (#765) adds the injectable stack-trace capturer so `on_stuck()` records WHERE the thread is wedged.
 
-**Deferred from #765 acceptance** (tracked in the issue for follow-up): stack-trace capture via `pthread_kill(SIGUSR1)` + `backtrace_symbols` (async-signal-safety mechanics non-trivial), mutex-snapshot ("which locks does the stuck thread hold" — needs codebase-wide instrumented mutex wrappers).
+**Still deferred from #765 acceptance** (tracked in the issue): mutex-snapshot ("which locks does the stuck thread hold" — needs codebase-wide instrumented mutex wrappers). Stack-trace capture itself is DONE (PR 1 #782 + this PR's wiring).
 
 **Key files under test:** `process4_mission_planner/include/planner/planner_stall_handler.h`, `common/util/include/util/thread_watchdog.h`, `common/util/include/util/latency_profiler.h`
 

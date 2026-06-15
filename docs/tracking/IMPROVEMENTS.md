@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-14 (Issue #765 PR 2 review deferral — test-quality P3)
+
+#### P4 main.cpp stack-trace wiring is unit-test-untested (install ordering, config read, capturer lambda)
+
+- **P3** (`process4_mission_planner/src/main.cpp` ~lines 754–790) — the production glue for #765 stack-trace capture (read `watchdog.stack_trace.*` config + clamp; `StackTraceCapture::install()` before the `ThreadWatchdog` ctor; wire `set_trace_capturer` before `set_stuck_callback`) has **no integration test**. `StackTraceCapture` itself is unit-tested (`test_stack_trace_capture.cpp`) and `PlannerStallHandler`'s capturer invocation is unit-tested (`test_planner_stall_handler.cpp`), but the *ordering invariant* in main.cpp — which is load-bearing (a wrong order reintroduces the `trace_capturer_` race + the profiler use-after-free the PR 2 review caught) — is enforced only by comments + review, not a test. **When to do it:** when P4 main.cpp gains a testable harness, or when the next bug traces to a main.cpp wiring-order regression. **Cross-ref:** PR #765 PR 2 review (review-test-quality, P3). The two ordering bugs it guards against are documented in the main.cpp comments and DR-049.
+
 ### 2026-06-12 (proactive — noticed while implementing Issue #765 PR 1)
 
 #### DEVELOPMENT_WORKFLOW.md hardcodes a CI-job count that has already drifted

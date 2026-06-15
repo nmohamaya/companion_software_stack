@@ -726,6 +726,13 @@ inline constexpr const char* DISK_CRIT_PERCENT = "system_monitor.thresholds.disk
 // ═══════════════════════════════════════════════════════════
 namespace watchdog {
 inline constexpr const char* PROCESSES = "watchdog.processes";
+
+// Issue #765 — stuck-thread stack-trace capture (StackTraceCapture).
+namespace stack_trace {
+inline constexpr const char* ENABLED        = "watchdog.stack_trace.enabled";
+inline constexpr const char* WAIT_MS        = "watchdog.stack_trace.wait_ms";
+inline constexpr const char* MIN_INTERVAL_S = "watchdog.stack_trace.min_interval_s";
+}  // namespace stack_trace
 }  // namespace watchdog
 
 // ═══════════════════════════════════════════════════════════
