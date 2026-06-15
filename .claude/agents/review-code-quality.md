@@ -47,6 +47,7 @@ GitHub Copilot review frequently flags code quality issues that the safety-focus
 - [ ] **Log message quality** — Log messages missing context (thread, module, key values). Log levels inappropriate (DEBUG for rare important events, ERROR for routine operations).
 - [ ] **Include hygiene** — Unused includes, missing forward declarations, includes that pull in large transitive dependency graphs.
 - [ ] **Scope minimization** — Variables declared too early or with too wide a scope. Large blocks that could be extracted into well-named helper functions.
+- [ ] **Non-portable libc / GNU extensions** (Issue [#765](https://github.com/nmohamaya/companion_software_stack/issues/765)) — flag GNU/glibc-only libc extensions when the stack may build against another libc (musl on some container/embedded targets). Common offenders: `fopen(path, "...e")` / `"...x"` mode-string flags, `qsort_r` argument-order differences, the GNU-vs-POSIX `strerror_r` signature, `secure_getenv`, and other `_GNU_SOURCE`-gated functions. Prefer the portable form (e.g. `fopen(path, "r")` plus an explicit `FD_CLOEXEC` via `fcntl`, instead of the `"e"` mode) or guard behind a feature check. Ref: `common/util/include/util/stack_trace_capture.h` deliberately uses `fopen(..., "r")` (not `"re"`) for musl portability.
 
 ## Output Format
 
