@@ -4051,4 +4051,37 @@ the prerequisite for any eventual root-cause fix of the stall itself.
 
 ---
 
-*Last updated after Improvement #102 (Issue #765 PR 2). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #103 — Tool-First Verification: ADR-016 Tier-0 tooling (Issue #785)
+
+**Date:** 2026-06-15  
+**Category:** Dev-tooling / CI  
+**Files Added:**
+- `tools/tsan_repeat.sh` — dedicated TSan build + Nx repeated run of test targets
+- `deploy/lint_docs_ssot.sh` — doc-SSOT linter (no hardcoded test-count totals)
+- `deploy/run_cppcheck.sh`, `deploy/run_clang_tidy.sh` — static-analysis wrappers
+- `deploy/coverage_delta.py` — changed-line coverage delta
+- `.githooks/pre-commit`, `deploy/install_hooks.sh` — local pre-commit gate
+
+**Files Modified:**
+- `.github/workflows/ci.yml` — `doc-lint` gate + `cppcheck` advisory job + clang-tidy/coverage-delta steps in the coverage job
+- `deploy/run_ci_local.sh` — `DOC`/`CPPCHECK`/`TIDY`/`COVDELTA` jobs
+- `docs/adr/ADR-016-tool-first-verification.md` — Tier-0 status table
+
+**What:** Implemented the Tier-0 deterministic gates defined in ADR-016 so
+mechanical defects are caught by tools that *prove* a property rather than by
+agent/LLM tokens that *reason* about it. The doc-SSOT linter is a hard gate
+(changed-lines, so it blocks new drift without failing on the backlog);
+cppcheck, clang-tidy, and the changed-line coverage delta are advisory until
+their backlogs are burned down; the pre-commit hook enforces clang-format,
+doc-SSOT, and security guards (no proprietary `business/` paths, secrets, or
+large blobs reaching the public repo).
+
+**Why:** The #765 review showed a full agent fan-out (~45 sub-agents) could
+exhaust the Claude Max session allowance, while deterministic tools (TSan, the
+doc-SSOT linter) and free reviewers (Copilot/CI) caught the real defects.
+ADR-016 codifies the policy; this turns it into running gates. Counts and
+inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #103 (Issue #785 ADR-016 Tier-0 tooling). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
