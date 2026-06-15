@@ -50,7 +50,6 @@ jobs:
   cppcheck:
     runs-on: ubuntu-24.04
     name: cppcheck (advisory)
-    continue-on-error: true
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -58,8 +57,10 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends cppcheck
-    - name: Run cppcheck
-      run: bash deploy/run_cppcheck.sh
+    - name: Run cppcheck (advisory — non-blocking)
+      run: |
+        bash deploy/run_cppcheck.sh \
+          || echo "::warning::cppcheck reported issues (advisory, non-blocking — triage tracked in docs/tracking/IMPROVEMENTS.md)"
 
   # ── Build + test matrix ──────────────────────────────────────────
   # Intentionally NOT `needs: format-check` — see docs/how-to/CI_SETUP.md
