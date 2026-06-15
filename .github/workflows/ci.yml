@@ -169,7 +169,6 @@ jobs:
           libeigen3-dev \
           nlohmann-json3-dev \
           libgtest-dev \
-          clang-tidy-18 \
           lcov unzip
 
     - name: Install Zenoh
@@ -199,6 +198,7 @@ jobs:
     - name: clang-tidy changed files (advisory)
       continue-on-error: true
       run: |
+        sudo apt-get install -y --no-install-recommends clang-tidy-18 || true
         BASE_REF="${{ github.base_ref || 'main' }}"
         git fetch -q origin "${BASE_REF}" || true
         bash deploy/run_clang_tidy.sh --changed "origin/${BASE_REF}"
