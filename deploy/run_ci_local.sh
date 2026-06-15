@@ -8,11 +8,15 @@
 #
 # Jobs (tags):
 #   FMT       clang-format-18 check
+#   DOC       doc-SSOT lint (no hardcoded test-count totals) — gate
 #   BUILD     Debug build + test (Zenoh)
+#   CPPCHECK  cppcheck static analysis (advisory)
+#   TIDY      clang-tidy on changed files (advisory)
 #   ASAN      AddressSanitizer
 #   TSAN      ThreadSanitizer
 #   UBSAN     UBSanitizer
 #   COV       Coverage build + lcov report
+#   COVDELTA  changed-line coverage delta (advisory; needs COV first)
 #
 # The script mirrors the CI matrix in .github/workflows/ci.yml.
 # If you want to save the results, pipe to a file: bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log
@@ -91,7 +95,7 @@ should_run() {
     if [[ "$MODE" == "single" ]]; then
         [[ "$SINGLE_JOB" == "$tag" ]]
     elif [[ "$MODE" == "quick" ]]; then
-        [[ "$tag" == "FMT" || "$tag" == "BUILD" ]]
+        [[ "$tag" == "FMT" || "$tag" == "DOC" || "$tag" == "BUILD" ]]
     else
         return 0  # all
     fi
@@ -232,6 +236,43 @@ job_cov() {
     generate_coverage_report
 }
 
+# ── Job: doc-SSOT lint (gate) ────────────────────────────────
+# shellcheck disable=SC2317  # called indirectly via run_job
+job_doc() {
+    cd "$PROJECT_DIR"
+    bash deploy/lint_docs_ssot.sh --changed "${CI_BASE:-origin/main}"
+}
+
+# ── Job: cppcheck (advisory — never fails local CI) ──────────
+# shellcheck disable=SC2317  # called indirectly via run_job
+job_cppcheck() {
+    cd "$PROJECT_DIR"
+    bash deploy/run_cppcheck.sh || echo "  (cppcheck advisory — findings above do not fail local CI)"
+    return 0
+}
+
+# ── Job: clang-tidy on changed files (advisory) ──────────────
+# shellcheck disable=SC2317  # called indirectly via run_job
+job_tidy() {
+    cd "$PROJECT_DIR"
+    bash deploy/run_clang_tidy.sh --changed "${CI_BASE:-origin/main}" \
+        || echo "  (clang-tidy advisory — findings above do not fail local CI)"
+    return 0
+}
+
+# ── Job: changed-line coverage delta (advisory; needs COV) ───
+# shellcheck disable=SC2317  # called indirectly via run_job
+job_covdelta() {
+    cd "$PROJECT_DIR"
+    if [[ -f "${BUILD_DIR}/coverage.info" ]]; then
+        python3 deploy/coverage_delta.py --coverage "${BUILD_DIR}/coverage.info" \
+            --base "${CI_BASE:-origin/main}" || true
+    else
+        echo "  (no ${BUILD_DIR}/coverage.info — run the COV job first; skipping)"
+    fi
+    return 0
+}
+
 # ── Run selected jobs ────────────────────────────────────────
 echo -e "${BOLD}══════════════════════════════════════════════════════${RESET}"
 echo -e "${BOLD}  Local CI Runner  (mode: ${MODE})${RESET}"
@@ -239,12 +280,16 @@ echo -e "${BOLD}═════════════════════�
 
 START_ALL=$(date +%s)
 
-should_run "FMT"   && run_job "FMT"   "Format check (clang-format-18)"     job_fmt
-should_run "BUILD" && run_job "BUILD" "Build + test (Debug)"               job_build
-should_run "ASAN"  && run_job "ASAN"  "Build + test (ASan)"                job_asan
-should_run "TSAN"  && run_job "TSAN"  "Build + test (TSan)"                job_tsan
-should_run "UBSAN" && run_job "UBSAN" "Build + test (UBSan)"               job_ubsan
-should_run "COV"   && run_job "COV"   "Coverage (Debug + lcov)"            job_cov
+should_run "FMT"      && run_job "FMT"      "Format check (clang-format-18)"   job_fmt
+should_run "DOC"      && run_job "DOC"      "Doc-SSOT lint (gate)"             job_doc
+should_run "BUILD"    && run_job "BUILD"    "Build + test (Debug)"             job_build
+should_run "CPPCHECK" && run_job "CPPCHECK" "cppcheck (advisory)"             job_cppcheck
+should_run "TIDY"     && run_job "TIDY"     "clang-tidy changed (advisory)"   job_tidy
+should_run "ASAN"     && run_job "ASAN"     "Build + test (ASan)"             job_asan
+should_run "TSAN"     && run_job "TSAN"     "Build + test (TSan)"             job_tsan
+should_run "UBSAN"    && run_job "UBSAN"    "Build + test (UBSan)"            job_ubsan
+should_run "COV"      && run_job "COV"      "Coverage (Debug + lcov)"         job_cov
+should_run "COVDELTA" && run_job "COVDELTA" "Coverage delta (advisory)"       job_covdelta
 
 # ── Summary ──────────────────────────────────────────────────
 ELAPSED_ALL=$(( $(date +%s) - START_ALL ))
