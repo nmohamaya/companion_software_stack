@@ -219,7 +219,7 @@ Show a summary of all generated entries:
 ✓ PROGRESS.md: Improvement #<N> entry (always)
 ✓ ROADMAP.md: Issue #<X> marked complete + metrics updated
 ✗ BUG_FIXES.md: Not applicable (not a bug fix)
-✓ TESTS.md: Total updated 1259 → 1272, 1 new suite added
+✓ TESTS.md: Total updated <old> → <new>, 1 new suite added
 
 --- Design Files ---
 ✓ API.md: New IPC message type added

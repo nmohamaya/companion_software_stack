@@ -38,7 +38,7 @@ For organizations that need to use this software **without the AGPL 3.0 copyleft
 | Tier | Drone Stack | Agent Pipeline |
 |------|-------------|----------------|
 | **Source License** | Proprietary use rights for the public codebase | Not included |
-| **Enterprise** | + full test suite (1259+ tests) + design documentation | Not included |
+| **Enterprise** | + full test suite (see tests/TESTS.md) + design documentation | Not included |
 | **Integration** | + dedicated integration support | **Included: full pipeline, skills, orchestrator** |
 
 ### What Each Tier Enables

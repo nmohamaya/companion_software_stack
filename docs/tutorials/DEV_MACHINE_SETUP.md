@@ -462,7 +462,7 @@ ctest --output-on-failure -j$(nproc)
   Cosys-AirSim : 5.4 — Cosys-AirSim HAL backends available (ExternalProject)
 ```
 
-**Expected ctest:** `1500+ tests passed, 0 failed, 0 hanging`.
+**Expected ctest:** `all tests pass, 0 failed, 0 hanging` (see tests/TESTS.md for the current total).
 
 ---
 

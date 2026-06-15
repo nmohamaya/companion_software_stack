@@ -741,7 +741,7 @@ $ python -m orchestrator deploy-issue 315 --pipeline --base integration/epic-300
 
   Running Validation (orchestrator validate)...
   [1/5] Build verification       PASS
-  [2/5] Test count verification   PASS  (1309 tests)
+  [2/5] Test count verification   PASS  (<N> tests)
   [3/5] Test execution            PASS
   [4/5] Include verification      PASS
   [5/5] PR sanity                 PASS
@@ -1127,7 +1127,7 @@ deserialization, and added 24 new unit tests.
 
 ## Build & Test Status
 Build: PASS (zero warnings)
-Tests: 1259 → 1283 (24 added, 0 failures)
+Tests: <before> → <after> (24 added, 0 failures)
 
 ═══════════════════════════════════════════════════════
 
