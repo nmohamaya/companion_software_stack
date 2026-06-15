@@ -33,6 +33,7 @@ Do **not** write an ADR for:
 | [ADR-013](ADR-013-stereo-radar-redundancy-vs-fusion.md) | Stereo + Radar Defence-in-Depth vs Unified Fusion | ✅ Accepted | Perception | 2026-05-03 |
 | [ADR-014](ADR-014-stereo-inertial-vio-algorithm-selection.md) | Stereo-Inertial VIO Algorithm Selection (SWVIO) | ✅ Accepted | SLAM/VIO | 2026-05-13 |
 | [ADR-015](ADR-015-integration-branch-rollup-strategy.md) | Integration-Branch Rollup Strategy | ✅ Accepted | Workflow | 2026-05-13 |
+| [ADR-016](ADR-016-tool-first-verification.md) | Tool-First Verification — Reserve Agent Tokens for Judgment | ✅ Accepted | Workflow | 2026-06-15 |
 
 Status legend: ✅ Accepted · 🟡 Proposed · ⚠️ Superseded · ❌ Rejected
 
