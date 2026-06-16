@@ -324,6 +324,16 @@ int main(int argc, char* argv[]) {
     planner_cfg.min_obstacle_altitude_m = validate_and_clamp<float>(
         ctx.cfg, drone::cfg_key::mission_planner::occupancy_grid::MIN_OBSTACLE_ALTITUDE_M,
         planner_cfg.min_obstacle_altitude_m, 0.0f, 3.0f, "occupancy_grid.min_obstacle_altitude_m");
+    // Issue #789 — min_promotion_altitude_m suppresses STATIC promotion while the
+    // drone is below this altitude (takeoff window), so the ground/landing-pad it
+    // sees while climbing don't flood the static layer. 0.0 = disabled (default).
+    // Upper clamp [0,5]: a value above cruise would suppress promotion for the
+    // whole flight; the clamp bounds the fail-safe gate so a typo can't disable
+    // strategic promotion indefinitely (reactive avoider still backstops).
+    planner_cfg.min_promotion_altitude_m = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::occupancy_grid::MIN_PROMOTION_ALTITUDE_M,
+        planner_cfg.min_promotion_altitude_m, 0.0f, 5.0f,
+        "occupancy_grid.min_promotion_altitude_m");
     // dynamic_confirmation_hits: observations before a camera cell becomes a
     // planning obstacle (1 = off). Safety clamp (same hazard as the instance-
     // promotion gate above): a huge value means camera obstacles NEVER reach the

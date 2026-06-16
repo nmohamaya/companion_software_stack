@@ -94,7 +94,8 @@ public:
                              float static_cell_ttl_s                     = 0.0f,
                              int   voxel_instance_promotion_observations = 0,
                              float min_obstacle_altitude_m               = 0.0f,
-                             int   dynamic_confirmation_hits             = 1)
+                             int   dynamic_confirmation_hits             = 1,
+                             float min_promotion_altitude_m              = 0.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -121,7 +122,8 @@ public:
                                   : 0u)
         , voxel_instance_promotion_observations_(voxel_instance_promotion_observations)
         , min_obstacle_altitude_m_(min_obstacle_altitude_m)
-        , dynamic_confirmation_hits_(dynamic_confirmation_hits) {}
+        , dynamic_confirmation_hits_(dynamic_confirmation_hits)
+        , min_promotion_altitude_m_(min_promotion_altitude_m) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -622,12 +624,24 @@ public:
                                                   static_cast<float>(drone_pose.translation[1]),
                                                   static_cast<float>(drone_pose.translation[2]));
 
+        // Issue #789 — takeoff promotion guard. While the drone is climbing off
+        // the pad (below the promotion-altitude floor) it sees the ground + the
+        // landing pad; suppress STATIC promotion so those phantoms don't flood
+        // the static layer and saturate the cell cap. Dynamic ingestion (TTL
+        // layer) + reactive ObstacleAvoider3D stay active, so this is fail-safe:
+        // a real obstacle is still seen reactively, and promotion resumes once
+        // the drone clears the floor (well before it translates toward obstacles).
+        const float drone_alt_m              = static_cast<float>(drone_pose.translation[2]);
+        const bool  below_promotion_altitude = (min_promotion_altitude_m_ > 0.0f &&
+                                               drone_alt_m < min_promotion_altitude_m_);
+
         // Stamp newly detected cells
         int accepted        = 0;
         int suppressed      = 0;
         int excluded_cells  = 0;
-        int ground_rejected = 0;  // Issue #764 — dropped by the altitude-floor prefilter
-        int nan_rejected    = 0;  // dropped by the non-finite (NaN/Inf) position guard
+        int ground_rejected = 0;     // Issue #764 — dropped by the altitude-floor prefilter
+        int nan_rejected    = 0;     // dropped by the non-finite (NaN/Inf) position guard
+        int takeoff_suppressed = 0;  // Issue #789 — promotions blocked by the takeoff altitude gate
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             if (obj.confidence < min_confidence_) continue;
@@ -737,7 +751,14 @@ public:
             const bool radar_bypass = allow_radar_bypass && obj.has_radar &&
                                       obj.radar_update_count > 0;
             const bool effective_pause = landing_now || (paused_now && !radar_bypass);
-            const bool can_promote     = !skip_promotion && depth_ok && !effective_pause;
+            // Issue #789 — the takeoff altitude gate is the final promotion guard.
+            const bool can_promote = !skip_promotion && depth_ok && !effective_pause &&
+                                     !below_promotion_altitude;
+            // Count detections that would have promoted but for the altitude gate
+            // (i.e. the gate is the *sole* blocker) — surfaced in the [Grid] diag.
+            if (below_promotion_altitude && !skip_promotion && depth_ok && !effective_pause) {
+                ++takeoff_suppressed;
+            }
 
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
@@ -854,14 +875,14 @@ public:
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             DRONE_LOG_INFO(
                 "[Grid] {} objs (accepted={}, suppressed={}, ground_rejected={}, nan_rejected={}, "
-                "excluded_cells={}), "
+                "takeoff_suppressed={}, excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
                 "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={}",
                 objects.num_objects, accepted, suppressed, ground_rejected, nan_rejected,
-                excluded_cells, occupied_.size(), static_occupied_.size(), promoted_count_,
-                hd_map_static_count_, max_static_cells_, total_predictions_applied_, drone_cell.x,
-                drone_cell.y, drone_cell.z, total_cross_veto_deferred_, total_fov_silence_promoted_,
-                total_age_cap_evicted_);
+                takeoff_suppressed, excluded_cells, occupied_.size(), static_occupied_.size(),
+                promoted_count_, hd_map_static_count_, max_static_cells_,
+                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
+                total_cross_veto_deferred_, total_fov_silence_promoted_, total_age_cap_evicted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -1306,6 +1327,9 @@ private:
     // 1 = confirmation off. Scenarios opt into positive values.
     float min_obstacle_altitude_m_{0.0f};  // reject camera detections below this world-z (0 = off)
     int   dynamic_confirmation_hits_{1};   // observations before a camera cell occupies (1 = off)
+    // Issue #789 — suppress STATIC promotion while the drone is below this altitude
+    // (takeoff window); 0 = off. Dynamic ingestion + reactive avoider unaffected.
+    float min_promotion_altitude_m_{0.0f};
     // Per-instance observation tracking for the Phase 3 gate.  Keyed by the
     // stable instance_id from Phase 2's tracker.  Each entry counts the
     // number of distinct insert_voxels() batches that have referenced this

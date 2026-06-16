@@ -1215,6 +1215,39 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 ---
 
+### Fix #789 — Occupancy grid floods with ground/landing-pad false promotions during takeoff (Issue #789)
+
+**Date:** 2026-06-16
+**Severity:** High
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `process4_mission_planner/include/planner/grid_planner_base.h`, `process4_mission_planner/src/main.cpp`, `common/util/include/util/config_keys.h`, `config/default.json`, `config/scenarios/18_perception_avoidance.json`
+
+**What:** In sensor-driven scenarios with no HD-map (`18_perception_avoidance`), the **static** occupancy layer saturated the 800-cell cap **during takeoff**. The first `[Grid]` line 0.1 s after takeoff completion already showed `promoted=13`, exploding to `308 → 545 → 800` while the drone sat over the origin (`drone=(-2,-3)…(5,2)`) — nowhere near the 4 real obstacles. The saturated grid forced the planner into backward paths → `STUCK` → backoff, drifting the drone into the green cylinder at (10,10).
+
+**Error messages (searchable):**
+- `[Grid] ... static (promoted=800, hd_map=0, max=800 ...) drone=(5,2,2)`
+- `[PlanBase] Rejecting backward path (dot=-0.47) — keeping cached path`
+- `[FSM] STUCK detected (1/3) ... — backing off`
+
+**Reproduce:**
+1. `git checkout <commit-before-fix>`
+2. `bash tests/run_scenario_gazebo.sh config/scenarios/18_perception_avoidance.json`
+3. Observe `promoted=` climbing to the 800 cap in the first `[Grid]` lines while `drone=` is near the origin, before the mission leg begins.
+
+**Why (Root Cause):** Promotion (dynamic → permanent static) runs from the first detection. During the takeoff climb the drone is low over the **red landing pad** at (0,0); `color_contour` detects the pad + ground texture, the `gpu_lidar`-emulated radar returns ground hits everywhere (so `require_radar_for_promotion` cannot discriminate — `has_any_radar` is true for phantoms), and the depth estimator is disabled (range is radar-only). `OccupancyGrid3D` had a `landing_pause_` that suppresses promotion during landing (Issue #340) but **no symmetric takeoff/altitude gate**; and scenario 18 never set `min_obstacle_altitude_m`, so `ground_rejected=0` all run.
+
+**How (Fix):** Added an opt-in, fail-safe **takeoff altitude gate** that suppresses *static promotion only* while the drone is below a configurable floor:
+- `update_from_objects()` — compute drone altitude from the pose already passed in; when `min_promotion_altitude_m > 0 && drone_alt < floor`, fold `!below_promotion_altitude` into `can_promote`. Dynamic ingestion (`occupied_[c]` stamping) happens *before* the promotion block, so the dynamic TTL layer + reactive `ObstacleAvoider3D` are unaffected — a real obstacle is still seen reactively, and promotion resumes once the drone clears the floor (well before it translates toward obstacles). Added a `takeoff_suppressed` counter to the `[Grid]` diagnostic.
+- `main.cpp` — `validate_and_clamp` the key to `[0,5]` m so a typo can't suppress promotion for the whole flight.
+- `config/scenarios/18_perception_avoidance.json` opts in (`min_promotion_altitude_m=2.0`, plus `min_obstacle_altitude_m=0.5` as defense-in-depth).
+
+**Safety:** Perception-*suppression* change — follows the CLAUDE.md "Perception-suppression gates must fail safe" rule: backstopped by the reactive avoider + dynamic layer, bounded to the takeoff window, threshold config-clamped, recorded as **DR-052**.
+
+**Found by:** Issue #764 follow-up validation on scenario 18 (run `2026-06-16_113325_PASS` — passed only because the collision detector was structurally blind; see separate test-harness issue).
+
+**Test:** `tests/test_occupancy_grid_dynamic_gating.cpp` +3 (`OccupancyGridTakeoffGate`): promotion suppressed below the floor while the dynamic layer still populates (fail-safe), promotion resumes above the floor, gate disabled (0.0) preserves prior behaviour. Verified fails-without / passes-with.
+
+---
+
 ### Fix #718 — PREFLIGHT held forever on stuck `armable` or never-settling attitude; no operator alert (Issue #718, partial #765)
 
 **Date fixed:** 2026-05-15

@@ -36,7 +36,9 @@
                 "max_static_cells": 800,
                 "require_radar_for_promotion": true,
                 "prediction_enabled": false,
-                "_comment": "2m grid, 2m inflation, 1s TTL. require_radar_for_promotion: only radar-touched objects can promote to static — prevents camera-only ground feature false promotions. prediction_enabled=false: camera-only depth/velocity too noisy (Issue #340). max_static_cells=800 safety cap."
+                "min_promotion_altitude_m": 2.0,
+                "min_obstacle_altitude_m": 0.5,
+                "_comment": "2m grid, 2m inflation, 1s TTL. require_radar_for_promotion: only radar-touched objects can promote to static — prevents camera-only ground feature false promotions. prediction_enabled=false: camera-only depth/velocity too noisy (Issue #340). max_static_cells=800 safety cap. min_promotion_altitude_m=2.0 (Issue #789): suppress static promotion while the drone is below 2m (takeoff climb off the red landing pad) so ground/pad phantoms don't flood the static layer. min_obstacle_altitude_m=0.5 (Issue #764): reject camera detections below 0.5m world-z (ground texture). Both fail-safe: dynamic layer + reactive avoider stay active."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",

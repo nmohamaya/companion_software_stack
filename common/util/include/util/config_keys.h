@@ -473,6 +473,12 @@ inline constexpr const char* MIN_OBSTACLE_ALTITUDE_M =
     "mission_planner.occupancy_grid.min_obstacle_altitude_m";
 inline constexpr const char* DYNAMIC_CONFIRMATION_HITS =
     "mission_planner.occupancy_grid.dynamic_confirmation_hits";
+// Issue #789 — suppress STATIC promotion while the drone is below this altitude
+// (takeoff window): camera sees the ground/landing-pad while low and would flood
+// the static layer with phantoms. 0 = off. Dynamic layer + reactive avoider stay
+// active, so this is a fail-safe perception-suppression gate.
+inline constexpr const char* MIN_PROMOTION_ALTITUDE_M =
+    "mission_planner.occupancy_grid.min_promotion_altitude_m";
 inline constexpr const char* PROMOTION_HITS = "mission_planner.occupancy_grid.promotion_hits";
 inline constexpr const char* RADAR_PROMOTION_HITS =
     "mission_planner.occupancy_grid.radar_promotion_hits";

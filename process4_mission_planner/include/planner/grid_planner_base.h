@@ -52,11 +52,14 @@ struct GridPlannerConfig {
     // Issue #764 — camera dynamic-add gates (both default to prior behaviour).
     float min_obstacle_altitude_m = 0.0f;  // reject camera detections below this world-z (0 = off)
     int   dynamic_confirmation_hits = 1;   // observations before a camera cell occupies (1 = off)
-    int   z_band_cells              = 0;   // Z-band limit: restrict search to ±N cells around
-                                           // start/goal Z range (0 = unlimited, full 3D search)
-    int promotion_hits = 0;                // Promote dynamic cell to static after N observations
-                                           // (0 = disabled, no promotion)
-    uint32_t radar_promotion_hits = 3;     // Radar update count for immediate static promotion
+    // Issue #789 — suppress STATIC promotion while drone is below this altitude
+    // (takeoff window flood guard); 0 = off, dynamic + reactive layers unaffected.
+    float min_promotion_altitude_m = 0.0f;
+    int   z_band_cells             = 0;  // Z-band limit: restrict search to ±N cells around
+                                         // start/goal Z range (0 = unlimited, full 3D search)
+    int promotion_hits = 0;              // Promote dynamic cell to static after N observations
+                                         // (0 = disabled, no promotion)
+    uint32_t radar_promotion_hits = 3;   // Radar update count for immediate static promotion
     float    min_promotion_depth_confidence = 0.3f;  // Min depth confidence for promotion [0-1]
                                                      // Scenario configs override to 0.8 to block
     // camera-only (0.01-0.7), allowing radar-confirmed (1.0)
@@ -243,7 +246,8 @@ public:
                 config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
                 config.require_radar_for_promotion, config.voxel_promotion_hits,
                 config.static_cell_ttl_s, config.voxel_instance_promotion_observations,
-                config.min_obstacle_altitude_m, config.dynamic_confirmation_hits) {}
+                config.min_obstacle_altitude_m, config.dynamic_confirmation_hits,
+                config.min_promotion_altitude_m) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

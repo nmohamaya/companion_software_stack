@@ -1421,6 +1421,31 @@ no userspace trace — leaves every recurrence a shrug.
 
 ---
 
+## DR-052: Takeoff promotion gate keys on drone altitude (opt-in), not FSM phase (Issue #789)
+
+> DR-051 is reserved for the #764 D*Lite A*-fallback PR (#788) — both PRs branch off #787, so #789 uses DR-052 to avoid a merge-time number collision.
+
+**Question:** To stop the occupancy grid promoting the ground/landing-pad it sees during takeoff (saturating the static cap → planner STUCK → collision, Issue #789), should promotion be suppressed by (a) the drone's *altitude* being below a floor, or (b) the *FSM phase* (a `set_takeoff_pause` mirroring the existing `set_landing_pause`)?
+
+**Context:** Perception-*suppression* change — the asymmetric-cost calculus inverts (dropping a real obstacle = collision). The existing `landing_pause_` (Issue #340) is FSM/phase-driven and wired from the tick loop; the natural instinct is to mirror it for takeoff.
+
+**Arguments for FSM-phase pause (mirror `landing_pause_`):**
+- Symmetric with the landing case; one obvious pattern.
+- The FSM already knows it is in `TAKEOFF`.
+
+**Arguments for altitude gate:**
+- Self-contained in `OccupancyGrid3D` (it already receives the pose) → unit-testable in microseconds without standing up the FSM. The phase pause needs an integration test.
+- Decoupled from phase *names*: it also protects any low-altitude window, and aligns with the existing cold-start data-hygiene rule ("don't trust first/low observations").
+- The actual hazard is physical ("the drone is low, so it sees the ground"), which is precisely altitude — not a phase label.
+
+**Decision:** **Altitude gate** — `min_promotion_altitude_m` (default `0.0` = off; gate active only when `> 0`), folded into the existing `can_promote` decision in `update_from_objects()`. Suppresses **static promotion only**; the dynamic TTL layer (`occupied_[c]` stamping precedes the promotion block) and the reactive `ObstacleAvoider3D` stay active, so a real obstacle is still seen reactively and promotion resumes once the drone clears the floor — well before it translates toward obstacles. Threshold config-clamped to `[0,5]` m so a typo can't suppress promotion for the whole flight. Scenario 18 opts into `2.0` m. Real obstacles cannot be permanently dropped: the drone climbs vertically off the pad (no obstacles directly above), the reactive layer covers the takeoff window, and the gate is opt-in + clamped. Follows the CLAUDE.md "Perception-suppression gates must fail safe" rule.
+
+**Revisit when:** a scenario needs promotion *during* a low-altitude cruise (e.g. terrain-following below the floor) — then the gate would need an AGL reference instead of raw pose-z, or a phase qualifier; or once a less ground-prone detector + selective radar make the takeoff flood impossible at the source.
+
+**Date:** 2026-06-16 (Issue #789)
+
+---
+
 ## DR-053: Camera dynamic-add gates are NOT exempted for radar-confirmed tracks (Issue #764 / Copilot PR #787)
 
 > DR-051 (#788 A*-fallback) and DR-052 (#789 takeoff gate) are taken by sibling PRs branched off #787; this review-fix uses DR-053 to avoid a merge-time collision.

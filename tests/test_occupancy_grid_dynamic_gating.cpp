@@ -38,6 +38,21 @@ OccupancyGrid3D make_grid(float min_obstacle_altitude_m, int dynamic_confirmatio
                            dynamic_confirmation_hits);
 }
 
+// Grid wired for the takeoff promotion-gate tests (#789): static promotion
+// ENABLED (hit-count path, 2 hits), depth gate open, generous static cap.
+// Only min_promotion_altitude_m varies per test (last param).
+OccupancyGrid3D make_promoting_grid(float min_promotion_altitude_m) {
+    return OccupancyGrid3D(/*resolution=*/1.0f, /*extent=*/20.0f, /*inflation=*/1.0f,
+                           /*cell_ttl_s=*/3.0f, /*min_confidence=*/0.3f, /*promotion_hits=*/2,
+                           /*radar_promotion_hits=*/3, /*min_promotion_depth_confidence=*/0.0f,
+                           /*max_static_cells=*/100, /*prediction_enabled=*/false,
+                           /*prediction_dt_s=*/2.0f, /*require_radar_for_promotion=*/false,
+                           /*voxel_promotion_hits=*/3, /*static_cell_ttl_s=*/0.0f,
+                           /*voxel_instance_promotion_observations=*/0,
+                           /*min_obstacle_altitude_m=*/0.0f, /*dynamic_confirmation_hits=*/1,
+                           min_promotion_altitude_m);
+}
+
 // Single camera detection (no radar) at (px,py,pz), confidence 0.9. Placed away
 // from the origin so it never lands in the drone's self-exclusion zone.
 drone::ipc::DetectedObjectList make_detection(float px, float py, float pz) {
@@ -144,4 +159,47 @@ TEST(OccupancyGridDynamicGating, TtlZeroDoesNotBreakConfirmation) {
     grid.update_from_objects(obstacle, pose);
     EXPECT_TRUE(grid.is_occupied({5, 5, 5}))
         << "3/3 with TTL=0 must still confirm — the staleness reset must not suppress entirely";
+}
+
+// ── 6. Issue #789 — takeoff promotion gate (min_promotion_altitude_m) ──────
+// While the drone is below the promotion-altitude floor (climbing off the pad),
+// camera detections must NOT promote to the permanent static layer — but the
+// dynamic TTL layer must still populate so the reactive avoider keeps working.
+TEST(OccupancyGridTakeoffGate, BelowPromotionAltitudeSuppressesStaticPromotion) {
+    OccupancyGrid3D  grid     = make_promoting_grid(/*min_promotion_alt=*/2.0f);
+    auto             obstacle = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 1.0;  // drone at 1 m — below the 2 m promotion floor (taking off)
+
+    // Feed more than promotion_hits (=2) observations; none must promote.
+    for (int i = 0; i < 4; ++i) grid.update_from_objects(obstacle, pose);
+
+    EXPECT_EQ(grid.promoted_count(), 0)
+        << "static promotion must be suppressed while the drone is below the promotion floor";
+    EXPECT_GT(grid.occupied_count(), 0u) << "fail-safe: the dynamic TTL layer must still populate "
+                                            "(reactive avoider backstop intact)";
+}
+
+TEST(OccupancyGridTakeoffGate, AbovePromotionAltitudeAllowsPromotion) {
+    OccupancyGrid3D  grid     = make_promoting_grid(/*min_promotion_alt=*/2.0f);
+    auto             obstacle = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 3.0;  // drone at 3 m — above the floor (cruise/survey)
+
+    for (int i = 0; i < 4; ++i) grid.update_from_objects(obstacle, pose);
+
+    EXPECT_GT(grid.promoted_count(), 0)
+        << "once the drone clears the promotion floor, a stable obstacle must promote to static";
+}
+
+TEST(OccupancyGridTakeoffGate, DisabledGatePromotesEvenWhenLow) {
+    OccupancyGrid3D  grid     = make_promoting_grid(/*min_promotion_alt=*/0.0f);  // gate OFF
+    auto             obstacle = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 1.0;  // low, but the gate is disabled (default behaviour)
+
+    for (int i = 0; i < 4; ++i) grid.update_from_objects(obstacle, pose);
+
+    EXPECT_GT(grid.promoted_count(), 0) << "min_promotion_altitude_m=0 must preserve prior "
+                                           "behaviour: promote regardless of altitude";
 }
