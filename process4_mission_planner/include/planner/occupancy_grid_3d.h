@@ -626,22 +626,34 @@ public:
         int accepted        = 0;
         int suppressed      = 0;
         int excluded_cells  = 0;
-        int ground_rejected = 0;  // Issue #764 — dropped by the finite/ground prefilter
+        int ground_rejected = 0;  // Issue #764 — dropped by the altitude-floor prefilter
+        int nan_rejected    = 0;  // dropped by the non-finite (NaN/Inf) position guard
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             if (obj.confidence < min_confidence_) continue;
 
-            // Issue #764 — phantom-cell + ground-plane guards on the camera
-            // dynamic-add path (the voxel path already has these; the objects
-            // path did not). A non-finite position would land in world_to_grid
-            // as an arbitrary phantom cell; a detection below
+            // Issue #764 — phantom-cell + ground-plane guards on the
+            // `update_from_objects` dynamic-add path (the voxel path already had
+            // these; the objects path did not). A non-finite position would land
+            // in world_to_grid as an arbitrary phantom cell; a detection below
             // `min_obstacle_altitude_m_` is ground texture / shadow that
             // color_contour latches onto — the 2D inflation disk sits at the
             // object's Z, so a ground-Z detection contributes only ground
             // cells. Real obstacles at cruise altitude are well above the floor.
+            //
+            // These gates apply to EVERY object on this path, not only camera-only
+            // detections (a radar-confirmed track below the floor is dropped here
+            // too). That is deliberate and fail-safe: (a) the gates are opt-in
+            // (default 0 = off); (b) the reactive ObstacleAvoider3D consumes the
+            // raw DetectedObjectList — not this grid — so a real low obstacle
+            // dropped here is still avoided in real time; and (c) a blanket
+            // radar-exemption would re-open the lidar-as-radar ground flood
+            // (gpu_lidar returns ground hits everywhere → "radar-confirmed" loses
+            // meaning). See DR-053. Bias stays toward keeping obstacles via the
+            // reactive backstop, not via grid promotion of unreliable returns.
             if (!std::isfinite(obj.position_x) || !std::isfinite(obj.position_y) ||
                 !std::isfinite(obj.position_z)) {
-                ++ground_rejected;
+                ++nan_rejected;
                 continue;
             }
             if (min_obstacle_altitude_m_ > 0.0f && obj.position_z < min_obstacle_altitude_m_) {
@@ -792,8 +804,12 @@ public:
         }
 
         // Expire stale cells (only when we actually have new data to avoid
-        // running the prune loop with no benefit on empty-detection frames)
-        if (objects.num_objects > 0 || !occupied_.empty()) {
+        // running the prune loop with no benefit on empty-detection frames).
+        // `!dyn_pending_.empty()` is required so abandoned pending-confirmation
+        // entries are still swept when detections go silent while occupied_ is
+        // empty (dynamic_confirmation_hits_ > 1, < N observations seen) —
+        // otherwise they leak indefinitely (Copilot PR #787).
+        if (objects.num_objects > 0 || !occupied_.empty() || !dyn_pending_.empty()) {
             for (auto it = occupied_.begin(); it != occupied_.end();) {
                 if (now_ns - it->second > cell_ttl_ns_) {
                     changed_cells_.push_back({it->first, false});
@@ -827,14 +843,14 @@ public:
         // surface gating activity in the run summary.
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             DRONE_LOG_INFO(
-                "[Grid] {} objs (accepted={}, suppressed={}, ground_rejected={}, "
+                "[Grid] {} objs (accepted={}, suppressed={}, ground_rejected={}, nan_rejected={}, "
                 "excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
                 "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={}",
-                objects.num_objects, accepted, suppressed, ground_rejected, excluded_cells,
-                occupied_.size(), static_occupied_.size(), promoted_count_, hd_map_static_count_,
-                max_static_cells_, total_predictions_applied_, drone_cell.x, drone_cell.y,
-                drone_cell.z, total_cross_veto_deferred_, total_fov_silence_promoted_,
+                objects.num_objects, accepted, suppressed, ground_rejected, nan_rejected,
+                excluded_cells, occupied_.size(), static_occupied_.size(), promoted_count_,
+                hd_map_static_count_, max_static_cells_, total_predictions_applied_, drone_cell.x,
+                drone_cell.y, drone_cell.z, total_cross_veto_deferred_, total_fov_silence_promoted_,
                 total_age_cap_evicted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
@@ -1135,7 +1151,15 @@ private:
                     // predicted cells and already-occupied refreshes bypass it.
                     if (was_absent && dynamic_confirmation_hits_ > 1 && obj != nullptr) {
                         DynPending& pend = dyn_pending_[c];
-                        if (now_ns - pend.last_ns > cell_ttl_ns_) pend.count = 0;  // stale → reset
+                        // Staleness reset only when a TTL window is configured. With
+                        // cell_ttl_ns_ == 0 (TTL disabled) `now_ns - last_ns > 0` is
+                        // true on every later observation, which would reset count to
+                        // 0 each time → the cell could NEVER reach the confirmation
+                        // threshold → camera obstacles suppressed entirely (Copilot
+                        // PR #787). Guard the reset so TTL=0 means "never stale".
+                        if (cell_ttl_ns_ > 0 && now_ns - pend.last_ns > cell_ttl_ns_) {
+                            pend.count = 0;  // stale → reset
+                        }
                         pend.last_ns = now_ns;
                         if (++pend.count < static_cast<uint32_t>(dynamic_confirmation_hits_)) {
                             continue;  // not yet confirmed — do not occupy or promote

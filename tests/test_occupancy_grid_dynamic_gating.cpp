@@ -116,3 +116,32 @@ TEST(OccupancyGridDynamicGating, DefaultHitsOneOccupiesImmediately) {
     EXPECT_TRUE(grid.is_occupied({5, 5, 5}))
         << "confirmation_hits=1 must preserve prior behaviour: occupy on first observation";
 }
+
+// ── 5. TTL=0 must not break confirmation (Copilot PR #787) ────────────────
+// With dynamic_obstacle_ttl_s=0 (cell_ttl_ns_==0) AND dynamic_confirmation_hits>1,
+// the staleness reset `now_ns - last_ns > 0` would fire on every later observation,
+// resetting the pending count to 0 each time → the cell could NEVER reach the
+// threshold → camera obstacles suppressed entirely. The fix guards the reset on
+// `cell_ttl_ns_ > 0`, so a stable obstacle still confirms when TTL is disabled.
+TEST(OccupancyGridDynamicGating, TtlZeroDoesNotBreakConfirmation) {
+    // ttl_s = 0 (TTL disabled), confirmation_hits = 3, promotion off.
+    OccupancyGrid3D  grid(/*resolution=*/1.0f, /*extent=*/20.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/0.0f, /*min_confidence=*/0.3f, /*promotion_hits=*/0,
+                         /*radar_promotion_hits=*/3, /*min_promotion_depth_confidence=*/0.5f,
+                         /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/2.0f, /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/3, /*static_cell_ttl_s=*/0.0f,
+                         /*voxel_instance_promotion_observations=*/0,
+                         /*min_obstacle_altitude_m=*/0.0f,
+                         /*dynamic_confirmation_hits=*/3);
+    auto             obstacle = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(obstacle, pose);
+    EXPECT_FALSE(grid.is_occupied({5, 5, 5})) << "1/3: pending";
+    grid.update_from_objects(obstacle, pose);
+    EXPECT_FALSE(grid.is_occupied({5, 5, 5})) << "2/3: pending (must NOT reset under TTL=0)";
+    grid.update_from_objects(obstacle, pose);
+    EXPECT_TRUE(grid.is_occupied({5, 5, 5}))
+        << "3/3 with TTL=0 must still confirm — the staleness reset must not suppress entirely";
+}
