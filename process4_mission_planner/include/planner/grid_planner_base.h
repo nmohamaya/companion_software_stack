@@ -39,7 +39,11 @@ struct GridPlannerConfig {
     float path_speed_mps     = 2.0f;   // cruise speed along path
     float smoothing_alpha    = 0.35f;  // EMA smoothing for velocity output
     int   max_iterations     = 50000;  // search iteration limit
-    float max_search_time_ms = 0.0f;   // wall-clock timeout (0 = disabled)
+    float max_search_time_ms = 0.0f;   // wall-clock search timeout, 0 = disabled. NOTE
+                                       // (#764 A* fallback): a single plan() can spend up
+                                       // to ~2x this — compute_shortest_path() then the A*
+                                       // fallback each honour it independently. Size the
+                                       // planner tick budget for the 2x worst case.
     float ramp_dist_m        = 3.0f;   // distance to begin speed ramp-down
     float min_speed_mps      = 1.0f;   // minimum speed during ramp-down
     int   snap_search_radius = 8;      // goal snap search radius (grid cells)
@@ -338,9 +342,39 @@ public:
             GridCell start = grid_.world_to_grid(px, py, pz);
             GridCell goal  = grid_.world_to_grid(target.x, target.y, target.z);
 
+            // Issue #764 mode (c) — project the goal onto the drone's current
+            // z-plane before snapping/searching. The grid search is purely
+            // horizontal (every neighbour has dz=0), so a start and goal on
+            // different z-planes are unreachable by construction → a spurious
+            // `No path` (g(start)=inf) during takeoff/landing/descent when
+            // pose.z != target.z (observed at the home WP: start z=2, goal z=3
+            // → STUCK → LOITER instead of landing). Altitude is already driven
+            // independently toward target.z by the velocity command (see
+            // "altitude controlled independently" in the path-follow branch),
+            // so projecting the search plane loses no vertical motion — it only
+            // keeps the horizontal search solvable.
+            goal.z = start.z;
+
             // ── Goal snapping — cached per waypoint ──────────
             GridCell pre_snap = goal;
             goal              = snap_goal(start, goal, target);
+
+            // Issue #764 mode (c), residual: the projection above only fixes the
+            // *fresh* snap (snap_goal searches at orig_goal.z == start.z). But
+            // snap_goal's cache-hit branch rebuilds the goal from a stored *world*
+            // position (snapped_xyz_) captured at an earlier altitude — when the
+            // drone climbs/descends (RTL climb, landing descent) start.z moves but
+            // the cached z does not, so the cache returns a goal on a stale z-plane
+            // and the horizontal search is unreachable again (observed at the home
+            // WP: cached goal z=2, current start z=3 → 9× spurious `No path`, run
+            // saved only by RTL takeover). Re-assert the co-planar invariant as the
+            // LAST step before the search so it holds for *every* snap_goal return
+            // path — lateral, nearest-free fallback, and cache hit alike. Safe even
+            // if (x,y,start.z) is nominally occupied: cost() treats the goal cell as
+            // always-passable (dstar_lite_planner.h "Start and goal cells are always
+            // passable"), and altitude is still driven independently toward target.z.
+            goal.z = start.z;
+
             if (goal != pre_snap) {
                 DRONE_LOG_INFO("[PlanBase] Goal snapped: ({},{},{}) → ({},{},{})", pre_snap.x,
                                pre_snap.y, pre_snap.z, goal.x, goal.y, goal.z);
@@ -734,6 +768,17 @@ private:
 
             if (snapped) {
                 snapped_xyz_ = grid_.grid_to_world(goal);
+                // Issue #764 mode (c) consistency (Copilot PR #788): the snap is
+                // purely LATERAL (x,y). The search goal z is projected onto the
+                // drone's flight plane (see plan(): goal.z = start.z), but the
+                // altitude the drone actually flies to — and that
+                // MissionFSM::waypoint_reached/overshot check via
+                // snapped_goal_xyz() — is the waypoint's target.z (altitude is
+                // driven independently toward target.z). Storing the search-plane
+                // or a stale z here would make the snap-based reached/overshot
+                // check use the wrong altitude → a laterally-snapped waypoint
+                // could never register as reached. Carry target.z.
+                snapped_xyz_[2] = target.z;
                 // NaN/Inf guard — reject snaps that produce non-finite coordinates.
                 // This can happen if grid_to_world produces degenerate values from
                 // extreme cell indices near grid boundaries.

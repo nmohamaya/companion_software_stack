@@ -17,9 +17,11 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <queue>
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -30,6 +32,27 @@ public:
     explicit DStarLitePlanner(const GridPlannerConfig& config = {}) : GridPlannerBase(config) {}
 
     std::string name() const override { return "DStarLitePlanner"; }
+
+    // Issue #764 — telemetry: how often the greedy g-descent stalled and the
+    // A* fallback ran / recovered a path. A persistently non-zero `recovered`
+    // count means D*Lite's incremental g-field is leaving holes for this
+    // workload (the fallback is masking it correctly, but worth noting).
+    [[nodiscard]] uint64_t astar_fallback_count() const noexcept { return astar_fallback_count_; }
+    [[nodiscard]] uint64_t astar_fallback_recovered() const noexcept {
+        return astar_fallback_recovered_;
+    }
+
+    // Test seam (Issue #764): run the A* fallback extraction directly so the
+    // guaranteed-correct fallback can be unit-tested without first reproducing
+    // D*Lite's greedy-stall state. Sets the start/goal passability anchors that
+    // cost() keys off. DO NOT call from production — production reaches A* only
+    // via do_search()'s greedy-stall fallback path.
+    bool extract_astar_for_test(const GridCell& start, const GridCell& goal,
+                                std::vector<std::array<float, 3>>& out) {
+        last_start_ = start;
+        last_goal_  = goal;
+        return extract_path_astar(start, goal, out);
+    }
 
 private:
     // 8-connected horizontal neighbours for 2D search at flight altitude.
@@ -126,12 +149,33 @@ protected:
                            "g(start)={:.0f} occupied={}",
                            out_world_path.size(), search_ms, first[0], first[1], first[2], last[0],
                            last[1], last[2], g(last_start_), grid_.occupied_count());
-        } else {
-            DRONE_LOG_INFO("[D*Lite] Path extraction FAILED: search={:.0f}ms g(start)={:.1f} "
-                           "occupied={}",
-                           search_ms, g(last_start_), grid_.occupied_count());
+            return true;
         }
-        return path_ok;
+
+        // Issue #764 — the greedy g-descent in extract_path() stalled even
+        // though compute_shortest_path reported a finite g(start) (a path
+        // exists).  D*Lite's g-field is lazy: cells off the realized descent
+        // keep g=inf, so the greedy walk can hit a "g-hole" and report "no
+        // progress" on an otherwise-traversable grid.  Fall back to a
+        // guaranteed-correct A* over the SAME grid/cost() — it honours
+        // occupancy/inflation/corner-cutting identically (never bypasses an
+        // obstacle).  Reached only on the stall path, so the common case keeps
+        // D*Lite's fast incremental walk.  See DESIGN_RATIONALE DR-051.
+        ++astar_fallback_count_;
+        if (extract_path_astar(last_start_, last_goal_, out_world_path) &&
+            out_world_path.size() >= 2) {
+            ++astar_fallback_recovered_;
+            DRONE_LOG_INFO("[D*Lite] greedy stall → A* fallback recovered {} pts "
+                           "(search={:.0f}ms g(start)={:.1f} occupied={})",
+                           out_world_path.size(), search_ms, g(last_start_),
+                           grid_.occupied_count());
+            return true;
+        }
+
+        DRONE_LOG_INFO("[D*Lite] Path extraction FAILED (greedy + A* fallback): "
+                       "search={:.0f}ms g(start)={:.1f} occupied={}",
+                       search_ms, g(last_start_), grid_.occupied_count());
+        return false;
     }
 
 private:
@@ -463,6 +507,119 @@ private:
         return out.size() >= 2;
     }
 
+    // ── A* fallback extraction (Issue #764) ───────────────────
+    // Guaranteed-correct path search over the SAME grid and cost() as D*Lite,
+    // used only when the greedy g-descent in extract_path() stalls on a lazy
+    // g-field hole. Reuses cost() (occupancy/inflation/corner-cutting/z-band).
+    // Heuristic: octile distance with the SAME unit costs cost() uses (cardinal
+    // 1.0, diagonal 1.414) — admissible AND consistent for this 8-connected grid,
+    // so the closed set is provably safe (Copilot PR #788: plain Euclidean
+    // slightly overestimates the 1.414 diagonal and is not strictly admissible).
+    // Finds a path if one exists *within* max_iterations / max_search_time_ms;
+    // never bypasses an obstacle.
+    bool extract_path_astar(const GridCell& start, const GridCell& goal,
+                            std::vector<std::array<float, 3>>& out) const {
+        out.clear();
+
+        // Trivial path: already at the goal (Copilot PR #788 — the size>=2
+        // enforcement below would otherwise report a 1-point path as failure and
+        // trigger a spurious hover). Emit a degenerate 2-point "hold" path.
+        if (start == goal) {
+            const auto w = grid_.grid_to_world(start);
+            out.push_back(w);
+            out.push_back(w);
+            return true;
+        }
+
+        // Octile heuristic consistent with cost() (cardinal 1.0, diagonal 1.414).
+        auto octile = [](const GridCell& a, const GridCell& b) {
+            const int dx   = std::abs(a.x - b.x);
+            const int dy   = std::abs(a.y - b.y);
+            const int dmin = std::min(dx, dy);
+            const int dmax = std::max(dx, dy);
+            return 1.414f * static_cast<float>(dmin) + 1.0f * static_cast<float>(dmax - dmin);
+        };
+
+        struct ANode {
+            float    f = 0.0f;
+            GridCell cell{};
+            bool     operator<(const ANode& o) const { return f > o.f; }  // min-heap
+        };
+        std::priority_queue<ANode>                           open;
+        std::unordered_map<GridCell, float, GridCellHash>    gscore;
+        std::unordered_map<GridCell, GridCell, GridCellHash> came_from;
+        std::unordered_set<GridCell, GridCellHash>           closed;
+
+        gscore[start] = 0.0f;
+        open.push({octile(start, goal), start});
+
+        const int  max_steps   = config_.max_iterations;
+        const bool use_timeout = (config_.max_search_time_ms > 0.0f);
+        const auto deadline    = use_timeout ? std::chrono::steady_clock::now() +
+                                                std::chrono::microseconds(static_cast<int64_t>(
+                                                    config_.max_search_time_ms * 1000.0f))
+                                             : std::chrono::steady_clock::time_point{};
+        int        expansions  = 0;
+
+        while (!open.empty()) {
+            const GridCell cur = open.top().cell;
+            open.pop();
+            if (cur == goal) {
+                std::vector<GridCell> rev{goal};
+                bool                  reached_start = false;
+                for (GridCell c = goal; c != start;) {
+                    auto it = came_from.find(c);
+                    if (it == came_from.end()) break;  // broken chain — incomplete
+                    c = it->second;
+                    rev.push_back(c);
+                    if (c == start) {
+                        reached_start = true;
+                        break;
+                    }
+                }
+                // Copilot PR #788: a broken came_from chain must NOT yield a
+                // "valid" path that doesn't start at `start` — that would feed the
+                // controller a path beginning mid-grid. Treat as no-path.
+                if (!reached_start) {
+                    DRONE_LOG_DEBUG("[D*Lite] A* reconstruction incomplete — no valid path");
+                    out.clear();
+                    return false;
+                }
+                out.reserve(rev.size());
+                for (auto rit = rev.rbegin(); rit != rev.rend(); ++rit) {
+                    out.push_back(grid_.grid_to_world(*rit));
+                }
+                return out.size() >= 2;
+            }
+            if (!closed.insert(cur).second) continue;  // already expanded (consistent heuristic)
+            if (++expansions > max_steps) {
+                DRONE_LOG_DEBUG("[D*Lite] A* fallback hit step limit {}", max_steps);
+                return false;
+            }
+            if (use_timeout && (expansions & 63) == 0 &&
+                std::chrono::steady_clock::now() >= deadline) {
+                DRONE_LOG_DEBUG("[D*Lite] A* fallback timeout");
+                return false;
+            }
+            const float cur_g = gscore[cur];
+            for (int n = 0; n < kNumNeighbors; ++n) {
+                GridCell nb{cur.x + kHorizNeighbours[n][0], cur.y + kHorizNeighbours[n][1],
+                            cur.z + kHorizNeighbours[n][2]};
+                if (closed.count(nb)) continue;
+                const float c = cost(cur, nb);
+                if (c >= kInf) continue;
+                const float tentative = cur_g + c;
+                auto        it        = gscore.find(nb);
+                if (it == gscore.end() || tentative < it->second) {
+                    gscore[nb]    = tentative;
+                    came_from[nb] = cur;
+                    open.push({tentative + octile(nb, goal), nb});
+                }
+            }
+        }
+        return false;  // genuinely no path
+    }
+
     // ── D* Lite state ────────────────────────────────────────
     std::unordered_map<GridCell, float, GridCellHash>                          g_;
     std::unordered_map<GridCell, float, GridCellHash>                          rhs_;
@@ -475,6 +632,10 @@ private:
     int                                                                        z_band_cells_ = 0;
     int                                                                        z_min_        = -50;
     int                                                                        z_max_        = 50;
+
+    // Issue #764 — A* fallback telemetry (single-threaded planning loop).
+    uint64_t astar_fallback_count_     = 0;
+    uint64_t astar_fallback_recovered_ = 0;
 };
 
 }  // namespace drone::planner

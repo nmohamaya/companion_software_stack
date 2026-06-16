@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **104 C++ + 5 shell + 1 Python** | **2131 (no SDK, 8 Cosys-SDK tests skipped) / 2139 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #764 D*Lite ghost-flood fix +6 tests (new `test_occupancy_grid_dynamic_gating.cpp`: ground reject, NaN guard, N-hit confirmation accrual, above-floor occupancy, default-behaviour-preserved, + TTL=0-must-still-confirm regression from Copilot review). Measured `ctest -N` total this PR = **2139** (+SDK) / 2131 (no SDK); the +6 is the new file, the remainder reconciles post-#765 merges (#783/#784/#785) to the measured value (SSOT discipline — measure, don't carry forward). Previous PR: Issue #765 stack-trace capture +12 tests (`test_stack_trace_capture.cpp` 10, `test_thread_heartbeat.cpp` tid plumbing). For earlier deltas see PROGRESS.md. |
+| **Total** | **104 C++ + 5 shell + 1 Python** | **2137 (no SDK, 8 Cosys-SDK tests skipped) / 2145 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #764 **modes b+c** (D*Lite A* fallback extraction + landing-WP z-plane projection) +6 tests in `test_dstar_lite_planner.cpp` (A* finds path on open grid; A* no-path through a full wall; no-spurious-hover across churn; plan succeeds with start/goal on different z-planes; snap-cache survives an altitude change — mode-c residual; A* start==goal is a trivial path not failure — Copilot PR #788). On top of #787 (now merged: D*Lite ghost-flood fix +6 in `test_occupancy_grid_dynamic_gating.cpp` incl. TTL=0-must-still-confirm regression) → 2131/2139 + 6 = **2137** (no SDK) / **2145** (+SDK). For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -830,7 +830,7 @@ clamp + AABB-aware distance) after empirical sweep showed Cosys scenario 33 pass
 
 ---
 
-### test_dstar_lite_planner.cpp — 103 tests
+### test_dstar_lite_planner.cpp — 109 tests
 
 **What it tests:** D* Lite incremental path planner — occupancy grid basics (including
 Issue #635 static-cell TTL + Issue #636 promotion-state reset + HD-map immunity + radar

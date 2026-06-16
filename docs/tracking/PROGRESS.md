@@ -4102,4 +4102,34 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #104 (Issue #764 D*Lite ghost-flood fix). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #105 — D*Lite A* fallback extraction (Issue #764 mode b)
+
+**Date:** 2026-06-15  
+**Category:** Navigation  
+**Files Modified:**
+- `process4_mission_planner/include/planner/dstar_lite_planner.h` — `extract_path_astar()` guaranteed-correct fallback + wiring in `do_search()` (greedy-stall path) + `astar_fallback_count()`/`recovered()` telemetry + test seam
+
+**Files:** `tests/test_dstar_lite_planner.cpp` (+3 tests)
+
+**What:** After Fix #764 bounded the occupancy grid (mode a), scenario 02 still failed ~50% via a distinct, dominant mode: D*Lite's greedy `extract_path()` stalled on lazy-g-field holes (`Path extraction FAILED` at `occupied=0`, finite `g(start)`) → hover → STUCK → LOITER. Added a guaranteed-correct A* fallback over the same grid/`cost()`, invoked only on greedy stall, so **"path exists ⇒ planner finds it"**.
+
+**Why:** Dominant cause of the #764 ~50% timeout (run-2 validation, 2026-06-15); completes #764 alongside the perception fix. Design choice (A* fallback vs fixing D*Lite g-consistency) recorded as **DR-051**. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+### Improvement #106 — D*Lite landing-WP z-plane projection (Issue #764 mode c)
+
+**Date:** 2026-06-15  
+**Category:** Navigation  
+**Files Modified:**
+- `process4_mission_planner/include/planner/grid_planner_base.h` — project the search goal onto the drone's current z-plane (`goal.z = start.z`) **both before AND after `snap_goal()`**. The post-snap re-projection is required because `snap_goal()`'s cache-hit branch rebuilds the goal from a stored world position captured at an earlier altitude (stale z); re-asserting the invariant last keeps the search co-planar across altitude changes (RTL climb / landing descent). `snapped_xyz_` also carries `target.z` so `snapped_goal_xyz()` (used by `MissionFSM::waypoint_reached/overshot`) stays consistent with the altitude the drone actually flies to.
+
+**Files:** `tests/test_dstar_lite_planner.cpp` (+2 tests: `PlanSucceedsWhenStartAndGoalOnDifferentZ`, `PlanSnapCacheSurvivesAltitudeChange`)
+
+**What:** Third and final #764 failure mode (after a & b): `plan()` built the search start at `pose.z` but the goal at `target.z`; the purely-horizontal grid search (dz=0 neighbours) cannot bridge z-planes, so during landing/descent (`pose.z` < `target.z`) the home waypoint was intermittently unreachable → spurious `No path` → STUCK → LOITER instead of landing (~1 in 3 runs). The pre-snap projection fixed the fresh case but the snap cache re-introduced the stale z on cache-hit (observed live: home goal snapped to z=2 while start z=3, saved only by RTL); the post-snap re-projection closes that residual. Vertical motion is already driven independently toward `target.z`.
+
+**Why:** Completes the #764 fix set; the landing-phase intermittent failure was the last cause of the sub-90% rate. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #106 (Issue #764 landing z-projection). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
