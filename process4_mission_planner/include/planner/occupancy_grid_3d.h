@@ -822,6 +822,16 @@ public:
             // Issue #764 — evict stale pending-confirmation entries (cells that
             // stopped being observed before reaching the threshold) so abandoned
             // ghosts don't leak memory.
+            //
+            // Note the deliberate asymmetry with the accrual guard above (which
+            // skips the staleness *reset* when cell_ttl_ns_ == 0): under TTL=0 a
+            // cell observed every consecutive frame still confirms (accrual
+            // updates last_ns to now_ns before this sweep runs in the same call,
+            // so delta == 0, not > 0 → not evicted), while a cell NOT observed
+            // this frame is evicted (delta > 0). That is exactly TTL=0's
+            // single-frame semantics — and it is what prevents the leak fix from
+            // PR #787 from regressing. An early-skip on cell_ttl_ns_ == 0 here
+            // would re-leak unobserved pending entries, so do NOT add one.
             for (auto it = dyn_pending_.begin(); it != dyn_pending_.end();) {
                 if (now_ns - it->second.last_ns > cell_ttl_ns_) {
                     it = dyn_pending_.erase(it);
