@@ -92,7 +92,9 @@ public:
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f,
                              bool require_radar_for_promotion = false, int voxel_promotion_hits = 3,
                              float static_cell_ttl_s                     = 0.0f,
-                             int   voxel_instance_promotion_observations = 0)
+                             int   voxel_instance_promotion_observations = 0,
+                             float min_obstacle_altitude_m               = 0.0f,
+                             int   dynamic_confirmation_hits             = 1)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -117,7 +119,9 @@ public:
                                   ? static_cast<uint64_t>(
                                         std::max(0.0, static_cast<double>(static_cell_ttl_s)) * 1e9)
                                   : 0u)
-        , voxel_instance_promotion_observations_(voxel_instance_promotion_observations) {}
+        , voxel_instance_promotion_observations_(voxel_instance_promotion_observations)
+        , min_obstacle_altitude_m_(min_obstacle_altitude_m)
+        , dynamic_confirmation_hits_(dynamic_confirmation_hits) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -127,6 +131,7 @@ public:
     void clear_dynamic() {
         occupied_.clear();
         hit_count_.clear();
+        dyn_pending_.clear();  // Issue #764 — pending dynamic-confirmation counters
     }
 
     /// Clear all static obstacles (both HD-map and runtime-promoted).
@@ -618,12 +623,43 @@ public:
                                                   static_cast<float>(drone_pose.translation[2]));
 
         // Stamp newly detected cells
-        int accepted       = 0;
-        int suppressed     = 0;
-        int excluded_cells = 0;
+        int accepted        = 0;
+        int suppressed      = 0;
+        int excluded_cells  = 0;
+        int ground_rejected = 0;  // Issue #764 — dropped by the altitude-floor prefilter
+        int nan_rejected    = 0;  // dropped by the non-finite (NaN/Inf) position guard
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             if (obj.confidence < min_confidence_) continue;
+
+            // Issue #764 — phantom-cell + ground-plane guards on the
+            // `update_from_objects` dynamic-add path (the voxel path already had
+            // these; the objects path did not). A non-finite position would land
+            // in world_to_grid as an arbitrary phantom cell; a detection below
+            // `min_obstacle_altitude_m_` is ground texture / shadow that
+            // color_contour latches onto — the 2D inflation disk sits at the
+            // object's Z, so a ground-Z detection contributes only ground
+            // cells. Real obstacles at cruise altitude are well above the floor.
+            //
+            // These gates apply to EVERY object on this path, not only camera-only
+            // detections (a radar-confirmed track below the floor is dropped here
+            // too). That is deliberate and fail-safe: (a) the gates are opt-in
+            // (default 0 = off); (b) the reactive ObstacleAvoider3D consumes the
+            // raw DetectedObjectList — not this grid — so a real low obstacle
+            // dropped here is still avoided in real time; and (c) a blanket
+            // radar-exemption would re-open the lidar-as-radar ground flood
+            // (gpu_lidar returns ground hits everywhere → "radar-confirmed" loses
+            // meaning). See DR-053. Bias stays toward keeping obstacles via the
+            // reactive backstop, not via grid promotion of unreliable returns.
+            if (!std::isfinite(obj.position_x) || !std::isfinite(obj.position_y) ||
+                !std::isfinite(obj.position_z)) {
+                ++nan_rejected;
+                continue;
+            }
+            if (min_obstacle_altitude_m_ > 0.0f && obj.position_z < min_obstacle_altitude_m_) {
+                ++ground_rejected;
+                continue;
+            }
 
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
 
@@ -768,13 +804,37 @@ public:
         }
 
         // Expire stale cells (only when we actually have new data to avoid
-        // running the prune loop with no benefit on empty-detection frames)
-        if (objects.num_objects > 0 || !occupied_.empty()) {
+        // running the prune loop with no benefit on empty-detection frames).
+        // `!dyn_pending_.empty()` is required so abandoned pending-confirmation
+        // entries are still swept when detections go silent while occupied_ is
+        // empty (dynamic_confirmation_hits_ > 1, < N observations seen) —
+        // otherwise they leak indefinitely (Copilot PR #787).
+        if (objects.num_objects > 0 || !occupied_.empty() || !dyn_pending_.empty()) {
             for (auto it = occupied_.begin(); it != occupied_.end();) {
                 if (now_ns - it->second > cell_ttl_ns_) {
                     changed_cells_.push_back({it->first, false});
                     hit_count_.erase(it->first);  // reset observation count
                     it = occupied_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            // Issue #764 — evict stale pending-confirmation entries (cells that
+            // stopped being observed before reaching the threshold) so abandoned
+            // ghosts don't leak memory.
+            //
+            // Note the deliberate asymmetry with the accrual guard above (which
+            // skips the staleness *reset* when cell_ttl_ns_ == 0): under TTL=0 a
+            // cell observed every consecutive frame still confirms (accrual
+            // updates last_ns to now_ns before this sweep runs in the same call,
+            // so delta == 0, not > 0 → not evicted), while a cell NOT observed
+            // this frame is evicted (delta > 0). That is exactly TTL=0's
+            // single-frame semantics — and it is what prevents the leak fix from
+            // PR #787 from regressing. An early-skip on cell_ttl_ns_ == 0 here
+            // would re-leak unobserved pending entries, so do NOT add one.
+            for (auto it = dyn_pending_.begin(); it != dyn_pending_.end();) {
+                if (now_ns - it->second.last_ns > cell_ttl_ns_) {
+                    it = dyn_pending_.erase(it);
                 } else {
                     ++it;
                 }
@@ -793,13 +853,15 @@ public:
         // surface gating activity in the run summary.
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             DRONE_LOG_INFO(
-                "[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
+                "[Grid] {} objs (accepted={}, suppressed={}, ground_rejected={}, nan_rejected={}, "
+                "excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
                 "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={}",
-                objects.num_objects, accepted, suppressed, excluded_cells, occupied_.size(),
-                static_occupied_.size(), promoted_count_, hd_map_static_count_, max_static_cells_,
-                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
-                total_cross_veto_deferred_, total_fov_silence_promoted_, total_age_cap_evicted_);
+                objects.num_objects, accepted, suppressed, ground_rejected, nan_rejected,
+                excluded_cells, occupied_.size(), static_occupied_.size(), promoted_count_,
+                hd_map_static_count_, max_static_cells_, total_predictions_applied_, drone_cell.x,
+                drone_cell.y, drone_cell.z, total_cross_veto_deferred_, total_fov_silence_promoted_,
+                total_age_cap_evicted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -1089,7 +1151,33 @@ private:
                     if (static_occupied_.count(c) > 0) continue;
 
                     bool was_absent = (occupied_.count(c) == 0);
-                    occupied_[c]    = now_ns;
+
+                    // Issue #764 — dynamic-confirmation gate. A camera-detected
+                    // cell must be observed `dynamic_confirmation_hits_` times
+                    // within the TTL window before it becomes a planning
+                    // obstacle. Scattered depth-noise ghosts (each cell seen
+                    // ~once) never confirm; stable obstacles confirm in N
+                    // frames. Gates only fresh detection cells (obj != nullptr);
+                    // predicted cells and already-occupied refreshes bypass it.
+                    if (was_absent && dynamic_confirmation_hits_ > 1 && obj != nullptr) {
+                        DynPending& pend = dyn_pending_[c];
+                        // Staleness reset only when a TTL window is configured. With
+                        // cell_ttl_ns_ == 0 (TTL disabled) `now_ns - last_ns > 0` is
+                        // true on every later observation, which would reset count to
+                        // 0 each time → the cell could NEVER reach the confirmation
+                        // threshold → camera obstacles suppressed entirely (Copilot
+                        // PR #787). Guard the reset so TTL=0 means "never stale".
+                        if (cell_ttl_ns_ > 0 && now_ns - pend.last_ns > cell_ttl_ns_) {
+                            pend.count = 0;  // stale → reset
+                        }
+                        pend.last_ns = now_ns;
+                        if (++pend.count < static_cast<uint32_t>(dynamic_confirmation_hits_)) {
+                            continue;  // not yet confirmed — do not occupy or promote
+                        }
+                        dyn_pending_.erase(c);  // confirmed → occupy below
+                    }
+
+                    occupied_[c] = now_ns;
                     if (was_absent) {
                         changed_cells_.push_back({c, true});
                     }
@@ -1212,6 +1300,12 @@ private:
     // is rejected unconditionally.  0 = disabled, voxels write directly to
     // the grid as before (current default).
     int voxel_instance_promotion_observations_{0};
+    // Issue #764 — camera dynamic-add gates. Declared last to match the ctor
+    // init-list order (the two trailing ctor params). Both default to prior
+    // behaviour (codebase "0/1 = disabled" idiom): 0.0 = no ground floor,
+    // 1 = confirmation off. Scenarios opt into positive values.
+    float min_obstacle_altitude_m_{0.0f};  // reject camera detections below this world-z (0 = off)
+    int   dynamic_confirmation_hits_{1};   // observations before a camera cell occupies (1 = off)
     // Per-instance observation tracking for the Phase 3 gate.  Keyed by the
     // stable instance_id from Phase 2's tracker.  Each entry counts the
     // number of distinct insert_voxels() batches that have referenced this
@@ -1258,6 +1352,16 @@ private:
     // Hit counter for promotion: tracks how many update cycles each cell has been observed.
     // Cells that reach promotion_hits_ are moved to static_occupied_ and removed from here.
     std::unordered_map<GridCell, int, GridCellHash> hit_count_;
+
+    // Issue #764 — pending dynamic-confirmation counters for camera cells not
+    // yet observed `dynamic_confirmation_hits_` times. Scattered depth-noise
+    // ghosts never accumulate; stable obstacles confirm in N frames. Swept on
+    // the same TTL as `occupied_` so abandoned pending cells don't leak.
+    struct DynPending {
+        uint32_t count   = 0;
+        uint64_t last_ns = 0;
+    };
+    std::unordered_map<GridCell, DynPending, GridCellHash> dyn_pending_;
     // Change tracking for incremental planners (D* Lite).
     std::vector<std::pair<GridCell, bool>> changed_cells_;
 };

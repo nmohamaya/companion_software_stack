@@ -1395,3 +1395,51 @@ no userspace trace — leaves every recurrence a shrug.
   must not reintroduce a priority-inversion path; it gets its own DR.
 
 **Date:** 2026-06-14 (Issue #765 PR 2 — flight-critical-thread signal analysis)
+
+---
+
+## DR-050: Camera dynamic-occupancy gates default OFF (opt-in), not voxel-parity ON (Issue #764)
+
+**Question:** When adding ground-reject + N-hit confirmation gates to the camera `update_from_objects()` path (to stop `color_contour` ground ghosts flooding the dynamic planning grid), should the gates default ON at the voxel path's value (ground floor 0.3 m), or default OFF (opt-in per scenario)?
+
+**Context:** This is a perception-*suppression* change — a gate that DROPS obstacle detections before the planner. The asymmetric-cost calculus inverts: dropping a *ghost* = brief over-caution (cheap); dropping a *real* obstacle = collision = lost vehicle (catastrophic).
+
+**Arguments for default-ON (voxel parity, 0.3 m floor):**
+- Consistency: the voxel path already rejects sub-0.3 m world-z; matching it makes the two ingestion paths behave the same.
+- Catches the ghost class everywhere by default, not only where a scenario remembers to opt in.
+
+**Arguments for default-OFF (opt-in):**
+- A non-zero default ground floor is a behaviour change for *every* scenario — it broke 7 existing tests that place obstacles below 0.3 m, and could silently drop a low real obstacle in a scenario we haven't validated.
+- The safe direction for a suppression gate is false-accept (keep the obstacle). Default-OFF preserves prior behaviour; a scenario opts in only after its N=10 validation proves the gate doesn't drop real obstacles.
+- Matches the codebase idiom (`max_static_cells=0`, `promotion_hits=0`, `static_cell_ttl_s=0` all mean "disabled").
+
+**Decision:** **Default OFF** — `min_obstacle_altitude_m=0.0` (no floor; gate active only when `> 0`) and `dynamic_confirmation_hits=1` (no confirmation). Scenario 02 opts into `0.5` / `3`. The reactive `ObstacleAvoider3D` backstops the confirmation window; thresholds are config-clamped so a bad value can't suppress obstacles entirely or indefinitely. Generalised into the CLAUDE.md rule "Perception-suppression gates must fail safe" + the `review-data-plumbing` (P1) and `review-fault-recovery` checklists.
+
+**Revisit when:** the N=10 scenario-02 sweep proves the opt-in values are safe and effective → consider promoting the ground floor to a low default (voxel parity) per-scenario once each is validated; or when a less ghost-prone detector replaces `color_contour`.
+
+**Date:** 2026-06-15 (Issue #764)
+
+---
+
+## DR-053: Camera dynamic-add gates are NOT exempted for radar-confirmed tracks (Issue #764 / Copilot PR #787)
+
+> DR-051 (#788 A*-fallback) and DR-052 (#789 takeoff gate) are taken by sibling PRs branched off #787; this review-fix uses DR-053 to avoid a merge-time collision.
+
+**Question:** Copilot (PR #787) flagged that the `update_from_objects` ground-altitude reject and the N-hit dynamic-confirmation gate apply to *all* objects, including radar-confirmed tracks — a radar-confirmed obstacle below the floor is dropped, and a radar-confirmed cell is delayed N frames. Should radar-confirmed detections **bypass** these suppression gates?
+
+**Context:** Perception-*suppression* change; the asymmetric-cost calculus inverts (dropping a real obstacle = collision). The instinct is "radar is accurate → never suppress it."
+
+**Arguments for exempting radar-confirmed:**
+- Radar gives accurate range from the first hit; a radar-confirmed obstacle is the high-confidence subset and shouldn't be treated as a ground ghost.
+- Matches the spirit of `require_radar_for_promotion` (radar as the trusted modality).
+
+**Arguments against exempting (keep gates uniform):**
+- **Radar selectivity is backend-dependent.** In Gazebo SITL the "radar" is `gpu_lidar`-emulated and returns ground hits *everywhere* — "radar-confirmed" then loses meaning, and a blanket exemption re-opens the exact ground flood these gates exist to stop (Issue #789, scenario 18). The grid cannot tell selective radar from non-selective lidar.
+- **The reactive avoider already backstops it.** `ObstacleAvoider3D` consumes the raw `DetectedObjectList` directly — *not* this grid — so a real low / not-yet-confirmed obstacle dropped from the **planning** grid is still avoided in **real time**. The gates only delay/skip *strategic* grid promotion, never real-time avoidance.
+- The gates are opt-in (default 0 = off) and config-clamped; only scenarios whose obstacle geometry has been validated against the thresholds enable them.
+
+**Decision:** **Do not exempt radar-confirmed tracks.** Keep the gates uniform; rely on the reactive `ObstacleAvoider3D` (raw-`DetectedObjectList` consumer) as the real-time backstop, per the CLAUDE.md "Perception-suppression gates must fail safe" rule. The NaN guard stays universal (a non-finite position is garbage regardless of modality). Clarified the in-code comment to state the gates apply to all objects and why. (Copilot's companion suggestion — a test asserting radar bypasses the gates — is therefore moot: there is no bypass.)
+
+**Revisit when:** a backend exposes a *selective* radar with a trustworthy per-detection confidence that can distinguish real returns from ground clutter → then a radar-confidence-qualified exemption (not a blanket `has_radar` one) could let high-confidence radar obstacles promote immediately while still rejecting lidar ground returns.
+
+**Date:** 2026-06-16 (Issue #764 / Copilot PR #787)

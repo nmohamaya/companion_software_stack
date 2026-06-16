@@ -467,6 +467,12 @@ inline constexpr const char* INFLATION_RADIUS_M =
 inline constexpr const char* DYNAMIC_OBSTACLE_TTL_S =
     "mission_planner.occupancy_grid.dynamic_obstacle_ttl_s";
 inline constexpr const char* MIN_CONFIDENCE = "mission_planner.occupancy_grid.min_confidence";
+// Issue #764 — camera dynamic-add gates (bring update_from_objects() up to the
+// voxel path's safety; both default to prior behaviour).
+inline constexpr const char* MIN_OBSTACLE_ALTITUDE_M =
+    "mission_planner.occupancy_grid.min_obstacle_altitude_m";
+inline constexpr const char* DYNAMIC_CONFIRMATION_HITS =
+    "mission_planner.occupancy_grid.dynamic_confirmation_hits";
 inline constexpr const char* PROMOTION_HITS = "mission_planner.occupancy_grid.promotion_hits";
 inline constexpr const char* RADAR_PROMOTION_HITS =
     "mission_planner.occupancy_grid.radar_promotion_hits";

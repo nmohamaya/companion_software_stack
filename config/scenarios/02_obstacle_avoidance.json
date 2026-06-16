@@ -30,11 +30,13 @@
                 "inflation_radius_m": 2.0,
                 "dynamic_obstacle_ttl_s": 1.0,
                 "min_confidence": 0.4,
+                "min_obstacle_altitude_m": 0.5,
+                "dynamic_confirmation_hits": 3,
                 "promotion_hits": 8,
                 "min_promotion_depth_confidence": 0.8,
                 "max_static_cells": 800,
                 "prediction_enabled": false,
-                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=8: filters transient detections (0.4s at 20Hz) before promoting to static. HD-map suppression (Issue #389) prevents duplicating cells near pre-mapped obstacles. max_static_cells=800 safety cap. prediction_enabled=false: camera-depth noise makes velocity extrapolation unreliable (Issue #340), and HD-map already provides obstacle positions."
+                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=8: filters transient detections (0.4s at 20Hz) before promoting to static. HD-map suppression (Issue #389) prevents duplicating cells near pre-mapped obstacles. max_static_cells=800 safety cap. prediction_enabled=false: camera-depth noise makes velocity extrapolation unreliable (Issue #340), and HD-map already provides obstacle positions. #764: min_obstacle_altitude_m=0.5 + dynamic_confirmation_hits=3 filter color_contour ground/depth-noise ghosts that flooded the dynamic planning grid (D*Lite path-extraction failures); the reactive ObstacleAvoider3D still avoids in real time during the ~0.15s confirmation window."
             },
             "static_obstacles": [
                 {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 1.7, "_color": "RED"},

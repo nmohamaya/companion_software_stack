@@ -4084,4 +4084,22 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #103 (Issue #785 ADR-016 Tier-0 tooling). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #104 — D*Lite ghost-flood fix: camera dynamic-occupancy gates (Issue #764)
+
+**Date:** 2026-06-15  
+**Category:** Navigation / Perception  
+**Files Modified:**
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — NaN guard + opt-in ground-floor reject + opt-in N-hit dynamic-confirmation gate (TTL-swept pending map) on `update_from_objects()`
+- `grid_planner_base.h`, `config_keys.h`, `process4_mission_planner/src/main.cpp` (clamped reads), `config/default.json` (gates disabled by default), `config/scenarios/02_obstacle_avoidance.json` (opt-in)
+- `CLAUDE.md` + `.claude/agents/review-data-plumbing.md` + `review-fault-recovery.md` — new "Perception-suppression gates must fail safe" safety rule
+
+**Files Added:**
+- `tests/test_occupancy_grid_dynamic_gating.cpp` (+5 tests)
+
+**What:** `02_obstacle_avoidance` failed its mission-completion check ~50% of runs: the `color_contour` detector flooded the dynamic occupancy grid with ground ghosts (hundreds of cells), saturating it so D*Lite could not extract a path → hover/STUCK → timeout. The camera `update_from_objects()` path lacked the NaN/ground/confirmation gating the voxel path already had. Added those gates, config-driven and **disabled by default** (behaviour-preserving), with scenario 02 opting in.
+
+**Why:** Restores the navigation-reliability target (≥90% mission completion) for the Option-1 sprint (#765 → #764 → #696/#727). Because this *suppresses* perception data, the asymmetric-cost calculus inverts — analysis recorded as **DR-050** and generalised into a new CLAUDE.md rule. Counts remain SSOT in [tests/TESTS.md](../../tests/TESTS.md). Follow-up: D*Lite final-WP nearest-free goal-snap (scenario-26 boxed-goal variant).
+
+---
+
+*Last updated after Improvement #104 (Issue #764 D*Lite ghost-flood fix). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
