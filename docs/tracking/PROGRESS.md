@@ -4132,4 +4132,20 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #106 (Issue #764 landing z-projection). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #107 — Takeoff promotion gate: stop ground/landing-pad flood during climb (Issue #789)
+
+**Date:** 2026-06-16  
+**Category:** Navigation / Perception  
+**Files Modified:**
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — opt-in `min_promotion_altitude_m` gate folded into `can_promote` in `update_from_objects()`; suppresses *static promotion only* while the drone is below the floor (dynamic TTL layer + reactive avoider unaffected); `takeoff_suppressed` counter in the `[Grid]` diagnostic
+- `grid_planner_base.h`, `config_keys.h`, `process4_mission_planner/src/main.cpp` (clamped read `[0,5]`), `config/default.json` (disabled by default), `config/scenarios/18_perception_avoidance.json` (opt-in `2.0` m + `min_obstacle_altitude_m=0.5`)
+
+**Files Added:** none (tests appended to `tests/test_occupancy_grid_dynamic_gating.cpp`, +3)
+
+**What:** In sensor-driven scenarios with no HD-map (scenario 18), the static occupancy layer saturated the 800-cell cap *during takeoff* — the drone promoted the red landing pad + ground texture it sees while climbing low over the origin (`promoted` hit 800 at `drone=(5,2)`, nowhere near the real obstacles). The saturated grid forced the planner into backward paths → STUCK → backoff, drifting into the green cylinder. `OccupancyGrid3D` had a `landing_pause_` but no symmetric takeoff gate.
+
+**Why:** Closes #789. Stacked on #787 (reuses the #764 mode-a grid-gating infra). Perception-*suppression* change → fail-safe per the CLAUDE.md rule (backstopped by reactive avoider + dynamic layer, bounded to the takeoff window, config-clamped); analysis recorded as **DR-052** (altitude gate vs FSM-phase pause). Counts remain SSOT in [tests/TESTS.md](../../tests/TESTS.md). Out of scope (separate issue): the Gazebo collision-detection harness gap (no contact sensors on obstacle models → a strike yields PASS).
+
+---
+
+*Last updated after Improvement #107 (Issue #789 takeoff promotion gate). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

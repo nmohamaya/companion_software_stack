@@ -236,6 +236,8 @@
             "min_obstacle_altitude_m": 0.0,
             "dynamic_confirmation_hits": 1,
             "_comment_764": "Camera dynamic-add gates (#764), both DISABLED by default (0/1 = off, codebase idiom) to preserve prior behaviour. min_obstacle_altitude_m>0 rejects ground-texture camera detections below that world-z; dynamic_confirmation_hits>1 requires N observations before a camera cell occupies a planning cell. Scenarios with a noisy detector (e.g. color_contour) opt into positive values to stop ghost flooding of the dynamic planning grid.",
+            "min_promotion_altitude_m": 0.0,
+            "_comment_789": "Takeoff promotion guard (#789), DISABLED by default (0 = off). When >0, STATIC promotion is suppressed while the drone is below this altitude (climbing off the pad), so the ground/landing-pad it sees while low don't flood the static layer (saturating max_static_cells). Dynamic ingestion + reactive ObstacleAvoider3D stay active, so it's fail-safe. Sensor-driven no-HD-map scenarios (e.g. 18) opt into a positive value (~2m).",
             "min_promotion_depth_confidence": 0.5,
             "max_static_cells": 0,
             "require_radar_for_promotion": false,
