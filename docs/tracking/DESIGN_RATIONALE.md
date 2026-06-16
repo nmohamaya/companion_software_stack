@@ -1443,3 +1443,25 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** a backend exposes a *selective* radar with a trustworthy per-detection confidence that can distinguish real returns from ground clutter → then a radar-confidence-qualified exemption (not a blanket `has_radar` one) could let high-confidence radar obstacles promote immediately while still rejecting lidar ground returns.
 
 **Date:** 2026-06-16 (Issue #764 / Copilot PR #787)
+
+---
+
+## DR-051: A* fallback vs fixing D*Lite g-consistency (Issue #764 mode b)
+
+**Question:** D*Lite's greedy `extract_path()` stalls on lazy-g-field holes — extraction fails at `occupied=0` with a finite `g(start)`. Fix by (A) adding a guaranteed-correct A* fallback on extraction failure, or (B) making `compute_shortest_path` produce a fully consistent g-field so greedy extraction never stalls?
+
+**Arguments for (B) fix g-consistency:**
+- Addresses the "true" root (the g-field) rather than adding a second search.
+- One algorithm to maintain, not two.
+
+**Arguments for (A) A* fallback:**
+- D*Lite's incremental-consistency invariant (key/`km` updates across a moving start + changing goal) is subtle and easy to get *subtly* wrong; a latent mistake in a safety-critical planner is high-cost and hard to catch.
+- A* is simple, well-understood, and **guaranteed correct** (finds a path iff one exists) using the *same* `cost()` — it cannot bypass an obstacle.
+- Invoked only on the rare stall path, so the common case keeps D*Lite's fast incremental walk; at this grid scale A* is sub-millisecond.
+- Matches the "make the planning algorithm robust" intent — defense-in-depth over a fragile invariant.
+
+**Decision:** **(A)** — A* fallback on greedy-extraction failure. `astar_fallback_count()` / `astar_fallback_recovered()` telemetry surfaces how often the g-field leaves holes.
+
+**Revisit when:** the fallback fires on the majority of replans (then D*Lite's incremental value is illusory at this grid scale → switch the backend to plain A*), or the g-consistency root cause is independently fixed.
+
+**Date:** 2026-06-15 (Issue #764 mode b)

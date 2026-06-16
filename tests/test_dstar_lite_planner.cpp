@@ -3223,3 +3223,207 @@ TEST(OccupancyGrid3DTest, Issue635_HdMapCellsImmuneToStaticTtl) {
     EXPECT_EQ(grid.static_count(), hd_count)
         << "HD-map cell count must stay constant across sweeps";
 }
+
+// ─── Issue #764 mode (b) — A* fallback extraction (greedy g-descent stall) ───
+// D*Lite's greedy extract_path() can stall on a lazy g-field hole (cells off
+// the realized descent keep g=inf) and report a spurious no-path even on a
+// near-empty grid — the dominant cause of scenario-02's ~50% mission timeout.
+// extract_path_astar() is the guaranteed-correct fallback. These exercise the
+// fallback algorithm directly (via the test seam) plus the end-to-end property.
+
+TEST(AStarFallbackTest, FindsPathOnOpenGrid) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.5f;
+    config.max_iterations     = 50000;
+    DStarLitePlanner planner(config);
+
+    std::vector<std::array<float, 3>> path;
+    const bool ok = planner.extract_astar_for_test({0, 0, 5}, {7, 0, 5}, path);
+
+    EXPECT_TRUE(ok) << "A* fallback must find a path on an empty grid";
+    ASSERT_GE(path.size(), 2u);
+    EXPECT_NEAR(path.front()[0], 0.0f, 1.0f);
+    EXPECT_NEAR(path.back()[0], 7.0f, 1.0f);
+}
+
+// Copilot PR #788 — A* must report the trivial start==goal case as a (valid)
+// path, not failure. The size>=2 enforcement would otherwise treat the
+// already-at-goal 1-point path as no-path and trigger a spurious hover.
+TEST(AStarFallbackTest, StartEqualsGoalIsTrivialPathNotFailure) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.5f;
+    config.max_iterations     = 50000;
+    DStarLitePlanner planner(config);
+
+    std::vector<std::array<float, 3>> path;
+    const bool ok = planner.extract_astar_for_test({4, 4, 5}, {4, 4, 5}, path);
+
+    EXPECT_TRUE(ok) << "start==goal must be reported as a valid (trivial) path, not no-path";
+    ASSERT_GE(path.size(), 2u) << "degenerate hold path must satisfy the >=2 contract";
+    EXPECT_NEAR(path.front()[0], 4.0f, 0.01f);
+    EXPECT_NEAR(path.back()[0], 4.0f, 0.01f);
+}
+
+TEST(AStarFallbackTest, NoPathWhenWallFullySeparates) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 8.0f;
+    config.inflation_radius_m = 0.5f;
+    config.max_iterations     = 50000;
+    DStarLitePlanner planner(config);
+
+    // Full wall at x=4 spanning the whole y-extent at z=5 — no way around.
+    drone::ipc::DetectedObjectList objs{};
+    uint32_t                       idx = 0;
+    for (int y = -8; y <= 8; ++y) {
+        objs.objects[idx].position_x = 4.0f;
+        objs.objects[idx].position_y = static_cast<float>(y);
+        objs.objects[idx].position_z = 5.0f;
+        objs.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objs.num_objects = idx;
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(objs, pose);
+
+    std::vector<std::array<float, 3>> path;
+    const bool ok = planner.extract_astar_for_test({0, 0, 5}, {7, 0, 5}, path);
+    EXPECT_FALSE(ok) << "A* fallback must report no path through a full wall — it honours "
+                        "occupancy identically to D*Lite and never bypasses an obstacle";
+}
+
+TEST(AStarFallbackTest, PlanNoSpuriousHoverAcrossWaypointChurn) {
+    // Regression guard for the mode-(b) bug: on an open field where a path
+    // always exists, plan() must never fall back to hovering across the
+    // moving-start + changing-goal churn that scenario 02 produces. If the
+    // greedy descent stalls, the A* fallback recovers — so hover_fallback_count
+    // stays 0.
+    GridPlannerConfig config;
+    config.resolution_m       = 2.0f;
+    config.grid_extent_m      = 30.0f;
+    config.inflation_radius_m = 2.0f;
+    config.max_iterations     = 200000;
+    DStarLitePlanner planner(config);
+
+    const std::array<std::array<float, 3>, 5> wps = {
+        {{-4, 22, 4}, {14, 22, 4}, {22, 14, 4}, {14, -4, 4}, {0, 0, 4}}};
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 4.0;
+
+    for (size_t i = 0; i < wps.size(); ++i) {
+        Waypoint t{wps[i][0], wps[i][1], wps[i][2], 0.0f, 3.0f, 1.5f, false};
+        for (int step = 0; step < 3; ++step) {
+            auto cmd = planner.plan(pose, t);
+            EXPECT_TRUE(cmd.valid) << "wp " << i << " step " << step;
+            // Advance the drone partway toward the target (moves the start cell).
+            pose.translation[0] += (wps[i][0] - pose.translation[0]) * 0.3;
+            pose.translation[1] += (wps[i][1] - pose.translation[1]) * 0.3;
+        }
+    }
+
+    EXPECT_EQ(planner.hover_fallback_count(), 0u)
+        << "open field: plan() must never spuriously hover (greedy stall must be A*-recovered)";
+    EXPECT_LE(planner.astar_fallback_recovered(), planner.astar_fallback_count());
+}
+
+// ─── Issue #764 mode (c) — start/goal on different z-planes (landing/descent) ───
+// The 2D-horizontal search (all neighbours dz=0) must project the goal onto the
+// drone's current z-plane, else a start/goal on different z (takeoff/landing/
+// descent, when pose.z != target.z) is unreachable → spurious no-path → hover →
+// STUCK → LOITER instead of landing. Altitude is driven independently.
+TEST(AStarFallbackTest, PlanSucceedsWhenStartAndGoalOnDifferentZ) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.5f;
+    config.max_iterations     = 50000;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 2.0;  // drone below the waypoint altitude (descending)
+
+    Waypoint target{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 1.5f, false};  // goal z=5 != start z=2
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.cached_path().empty())
+        << "different-z start/goal must still yield a horizontal path (mode c projection)";
+    EXPECT_EQ(planner.hover_fallback_count(), 0u) << "must not spuriously hover on a z-mismatch";
+    EXPECT_GT(cmd.velocity_x, 0.0f) << "should move horizontally toward the goal";
+    EXPECT_GT(cmd.velocity_z, 0.0f) << "altitude driven independently toward target.z (climb)";
+}
+
+// ─── Issue #764 mode (c), residual — snap cache must not re-introduce a z-mismatch ───
+// The pre-snap projection (goal.z = start.z) only fixes the *fresh* snap. snap_goal's
+// cache-hit branch rebuilds the goal from a stored *world* position captured at an
+// earlier altitude; when the drone changes altitude (RTL climb / landing descent) with
+// the target unchanged, the cache returns a goal on a stale z-plane → the horizontal
+// search is unreachable again → spurious `No path` → hover. (Observed live in run
+// 2026-06-16_094045: cached home goal z=2, current start z=3, 9× `No path`, mission
+// saved only by RTL takeover.) The post-snap re-projection must keep the goal co-planar
+// across the altitude change.
+TEST(AStarFallbackTest, PlanSnapCacheSurvivesAltitudeChange) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.5f;
+    config.max_iterations     = 50000;
+    config.replan_interval_s = 0.0f;  // force a fresh search each tick (as the live tick loop does)
+    DStarLitePlanner planner(config);
+
+    // Occupy the goal cell (and a small cluster around it) at z=2 so the first
+    // plan() snaps the goal laterally and caches the snapped world position.
+    drone::ipc::DetectedObjectList objs{};
+    uint32_t                       idx = 0;
+    for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            objs.objects[idx].position_x = 10.0f + static_cast<float>(dx);
+            objs.objects[idx].position_y = 0.0f + static_cast<float>(dy);
+            objs.objects[idx].position_z = 2.0f;
+            objs.objects[idx].confidence = 0.9f;
+            ++idx;
+        }
+    }
+    objs.num_objects = idx;
+
+    // Plan 1: drone at z=2, target at z=2 → goal projected to z=2, occupied → snap
+    // fires and caches snapped_xyz_ at the z=2 plane.
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 2.0;
+    planner.update_obstacles(objs, pose);
+    Waypoint target{10.0f, 0.0f, 2.0f, 0.0f, 3.0f, 1.5f, false};
+    auto     cmd1 = planner.plan(pose, target);
+    ASSERT_TRUE(cmd1.valid);
+    ASSERT_FALSE(planner.cached_path().empty()) << "plan 1 should snap+path at z=2";
+
+    // Plan 2: drone has climbed to z=4 (e.g. RTL climb), SAME target → snap cache
+    // hit returns the goal on the stale z=2 plane. The fresh horizontal search must
+    // run on the drone's *current* z-plane (z=4), so the produced path must be
+    // co-planar with the start. Without the post-snap re-projection the path stays
+    // on the stale z=2 plane — the drone chases the wrong altitude (live: surfaced
+    // as `No path` + RTL rescue).
+    pose.translation[2] = 4.0;
+    auto cmd2           = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd2.valid);
+    ASSERT_FALSE(planner.cached_path().empty())
+        << "cache-hit goal must still yield a path after an altitude change (mode c residual)";
+    EXPECT_NEAR(planner.cached_path().front()[2], 4.0f, 0.5f)
+        << "path must be on the drone's current z-plane (z=4), not the stale cached snap plane";
+    EXPECT_NEAR(planner.cached_path().back()[2], 4.0f, 0.5f)
+        << "goal must be re-projected onto the current z-plane (z=4), not the cached z=2";
+    EXPECT_EQ(planner.hover_fallback_count(), 0u)
+        << "stale snap-cache z must not cause a spurious hover after an altitude change";
+    EXPECT_GT(cmd2.velocity_x, 0.0f) << "should still move horizontally toward the goal";
+}

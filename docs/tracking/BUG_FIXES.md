@@ -1136,6 +1136,52 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 ---
 
+### Fix #764c — D*Lite spurious "No path" when start/goal are on different z-planes (Issue #764, mode c)
+
+**Date:** 2026-06-15
+**Severity:** High
+**Files:** `process4_mission_planner/include/planner/grid_planner_base.h`
+
+**What:** With modes a & b fixed, scenario 02 flew the full field but intermittently failed **at the home/landing waypoint** (~1 in 3 runs). At the final WP the planner logged `Goal snapped: (0,0,3) → (-4,8,3)` then repeated `No path: start=(3,-2,2) goal=(-4,8,3) g(start)=1e9 occupied=0` → STUCK → LOITER instead of landing.
+
+**Error messages (searchable):**
+- `[D*Lite] No path: start=(...,2) goal=(...,3) g(start)=1000000000 ... occupied=0`
+- `[FSM] STUCK count 4 exceeded cap 3 — escalating to LOITER`
+
+**Why (Root Cause):** `GridPlannerBase::plan()` built the search **start** at the drone's current altitude (`pose.z`) but the **goal** at the waypoint altitude (`target.z`). The grid search is purely horizontal — every neighbour has `dz=0` — so a start and goal on different z-planes are unreachable *by construction* (`g(start)=∞`). During landing/descent `pose.z` drifts below `target.z`, so the planner could not find a path home → hover → STUCK → LOITER. (The code already drove altitude *independently* in the path-follow branch — "D* Lite paths use the drone's current Z which can drift/collapse, so altitude must be controlled independently" — but the search **goal cell** still used `target.z`.)
+
+**How (Fix):** Project the goal onto the start's z-plane before snapping/searching (`goal.z = start.z`). The 2D search is then always co-planar and solvable; vertical motion is unchanged (already driven toward `target.z` by the velocity command). This also removes the spurious goal-snap, which was triggered by occupancy at the wrong z-plane.
+
+**Found by:** Issue #764 validation (run `2026-06-15_183020_FAIL`).
+
+**Test:** `tests/test_dstar_lite_planner.cpp` +1 (`PlanSucceedsWhenStartAndGoalOnDifferentZ`): a goal at z≠pose.z yields a horizontal path (not hover) with vertical velocity toward target.z.
+
+**Residual (2026-06-16) — snap cache re-introduced the z-mismatch:** A subsequent validation run (`2026-06-16_094045_PASS`, but only because RTL took over) showed the fix above was *necessary but not sufficient*. The pre-snap `goal.z = start.z` only fixes the **fresh** snap — `snap_goal()` searches at `orig_goal.z == start.z`. But `snap_goal()`'s **cache-hit branch** rebuilds the goal from a stored *world* position (`snapped_xyz_`) captured at an earlier altitude. When the drone changes altitude with the target unchanged (RTL climb / landing descent), the cache returns a goal on the **stale z-plane** — observed at the home WP: `Goal snapped: (0,0,3) → (0,-1,2)` (z 3→2) → 9× `No path: start=(3,-1,3) goal=(0,-1,2) g(start)=1e9`. The horizontal search at z=3 cannot reach a z=2 goal; the run was saved only by RTL takeover (in `2026-06-15_183020` the same condition escalated to STUCK→LOITER→FAIL instead). **Fix:** re-assert the co-planar invariant as the **last** step after `snap_goal()` returns (`goal.z = start.z`), so it holds for *every* return path — lateral snap, nearest-free fallback, and cache hit alike. Safe even if `(x,y,start.z)` is nominally occupied: `cost()` treats the goal cell as always-passable. **Test:** `tests/test_dstar_lite_planner.cpp` +1 (`PlanSnapCacheSurvivesAltitudeChange`): snap+cache a goal at z=2, then replan at z=4 with the same target → the produced path must be co-planar with the new start (z=4), not the stale cached z=2. Verified fails-without-fix / passes-with-fix.
+
+---
+
+### Fix #764b — D*Lite `extract_path` stalls on a near-empty grid (Issue #764, mode b)
+
+**Date:** 2026-06-15
+**Severity:** High
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`
+
+**What:** With the ghost-flood fixed (Fix #764), `02_obstacle_avoidance` still failed ~50%. The planner logged `No path: 0` but `Path extraction FAILED: 56` with a *finite* `g(start)=8.1` and **`occupied=0`** (empty grid) — D*Lite found a cost but could not reconstruct the path, so the drone hovered → STUCK → LOITER. This is the dominant cause of the ~50%.
+
+**Error messages (searchable):**
+- `[D*Lite] Path extraction FAILED: search=0ms g(start)=8.1 occupied=0`
+- `[PathPlan] no obstacle-free path — hovering in place`
+
+**Why (Root Cause):** `compute_shortest_path()` terminates as soon as `last_start_` is locally consistent, so `g(start)` is correct but cells *off* the realized descent keep `g=∞`. The greedy `extract_path()` follows `argmin(cost + g(neighbour))`; when it reaches a cell whose neighbours are all unexpanded (`g=∞`) it returns `false` ("no progress") even on a traversable grid — D*Lite's lazy-g-field / greedy-extraction fragility.
+
+**How (Fix):** Added `extract_path_astar()` — a guaranteed-correct A* over the SAME grid and `cost()` (honours occupancy/inflation/corner-cutting/z-band identically; never bypasses an obstacle), reusing the Euclidean heuristic (consistent → closed-set safe), bounded by `max_iterations`/`max_search_time_ms`. `do_search()` invokes it only when the greedy `extract_path` stalls but `compute_shortest_path` reported a finite `g(start)` (a path exists). Surfaces `astar_fallback_count()`/`astar_fallback_recovered()` telemetry. Chose the fallback over chasing D*Lite's incremental-consistency invariant in a safety-critical planner — see DR-051.
+
+**Found by:** Issue #764 validation (run 2, 2026-06-15) after Fix #764 bounded the grid.
+
+**Test:** `tests/test_dstar_lite_planner.cpp` +3 (A* finds a path on an open grid; A* reports no-path through a full wall; plan() no-spurious-hover across waypoint churn).
+
+---
+
 ### Fix #764 — D*Lite path-extraction failures from ghost-flooded dynamic occupancy grid (Issue #764)
 
 **Date:** 2026-06-15
