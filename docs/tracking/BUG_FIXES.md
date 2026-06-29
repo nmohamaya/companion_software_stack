@@ -1957,7 +1957,7 @@ EXPECT_TRUE(signaled);  // reliably true (exits early, typically ~200ms–1.3s)
 
 **Found by:** #791 (filed after the #789 scenario-18 strike passed 20/20); root-caused by inspecting the empty `gz_contacts.log` + `contact_helper.out`.
 
-**Limitations / verification:** the live-Gazebo unknown is whether contact sensors on `<static>` obstacles fire in this gz version — verified by step 1 of the PR's verification (clean run must produce non-empty ground contacts). If they don't, fail-closed surfaces it loudly (FAIL, not silent PASS) and the fallback is a ground-truth-pose proximity check.
+**Limitations / verification:** the live-Gazebo unknown is whether contact sensors on `<static>` obstacles fire in this gz version — verified by step 1 of the PR's verification (clean run must produce non-empty ground contacts). If they don't, fail-closed surfaces it loudly (FAIL, not silent PASS) and the fallback is a ground-truth-pose proximity check — **now implemented as an always-on independent gate in #796** (`tests/lib_check_proximity.py`), so collision detection no longer depends on gz contact plumbing alone.
 
 **Test:** helper exit codes verified functionally (empty+`--expect-nonempty`→3; empty→0; drone-vs-obstacle→1; drone-vs-ground allowlisted→0). End-to-end via live Gazebo (see PR).
 
