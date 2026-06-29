@@ -119,6 +119,19 @@ def test_empty_log_without_flag_passes() -> None:
     assert rc == 0, f"empty pose log without flag is legacy PASS, got {rc}"
 
 
+def test_below_obstacle_passes() -> None:
+    # Directly under the cylinder (spans z 0..6) at z=-1 → no Z-overlap.
+    rc = _run(_odom([(10, 10, -1)]))
+    assert rc == 0, f"flying below the obstacle must PASS, got {rc}"
+
+
+def test_malformed_sdf_is_infra_failure() -> None:
+    # A world SDF that won't parse → infrastructure failure (exit 2), the
+    # runner-consumed contract branch — must not silently PASS.
+    rc = _run(_odom([(0, 0, 4)]), "<<< not valid xml >>>")
+    assert rc == 2, f"malformed world SDF must be infra failure (2), got {rc}"
+
+
 def _main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

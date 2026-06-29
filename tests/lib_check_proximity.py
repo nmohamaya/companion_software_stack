@@ -108,6 +108,16 @@ def parse_obstacles(sdf_path: Path, name_prefix: str = "obstacle_") -> list[Obst
         if len(parts) < 3:
             continue
         x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+        # Review P3: the clearance math assumes axis-aligned boxes and a vertical
+        # cylinder axis. The SDF <pose> rpy is dropped — WARN (don't silently
+        # mis-measure) if an obstacle is rotated, so a future tilted obstacle
+        # can't produce a silent false-PASS (the class #791/#796 exist to kill).
+        if len(parts) >= 6 and any(abs(float(p)) > 1e-3 for p in parts[3:6]):
+            print(
+                f"[proximity] WARN: obstacle '{name}' has non-zero rotation "
+                f"(rpy={parts[3:6]}); clearance uses an axis-aligned approximation.",
+                file=sys.stderr,
+            )
         # First geometry under this model (collision or visual — identical here).
         cyl = next((e for e in model.iter() if _local_name(e.tag) == "cylinder"), None)
         box = next((e for e in model.iter() if _local_name(e.tag) == "box"), None)
@@ -231,6 +241,21 @@ def main() -> int:
             return 3
         print(f"[proximity] PASS: no parseable pose samples in {args.pose_log}.")
         return 0
+
+    # Review P2: gz-sim-odometry-publisher publishes pose relative to the spawn
+    # point; this gate compares against WORLD-frame obstacle coords, valid only
+    # when the drone spawns at the world origin (PX4 PX4_GZ_MODEL_POSE default
+    # "0,0,0.3"). The first (at-rest, pre-takeoff) sample should sit at origin —
+    # WARN if it's far, a sign the odom frame isn't world-aligned and clearances
+    # would be offset, rather than silently mis-measuring.
+    fx, fy, _fz = poses[0]
+    if math.hypot(fx, fy) > 5.0:
+        print(
+            f"[proximity] WARN: first pose ({fx:.1f},{fy:.1f}) is far from the world "
+            f"origin — odometry may be spawn-relative / not world-aligned; clearances "
+            f"may be offset. Verify the drone spawns at (0,0).",
+            file=sys.stderr,
+        )
 
     # Worst (most negative) clearance per obstacle across the whole trace.
     penetrations: list[tuple[str, float, tuple[float, float, float]]] = []
