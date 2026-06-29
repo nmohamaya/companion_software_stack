@@ -1252,7 +1252,7 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 **Date:** 2026-06-29
 **Severity:** Critical (safety — planner thread death → uncontrolled hover)
-**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `process4_mission_planner/src/main.cpp`
 
 **What:** During `scenario 18` (`perception_avoidance`, SURVEY) the P4 `planning_loop` thread **hung** — the drone sat hovering with a dead planner emitting no new trajectory commands. The #765 stuck-thread stack-trace capture dumped the same call site every 30 s (an unbounded loop, not slowness).
 
@@ -1270,7 +1270,7 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 - `has_radar_size` now also requires `std::isfinite(obj.estimated_radius_m)` (a non-finite radius falls back to the config inflation, never the `int`-cast UB path).
 - `obj_inflation` clamps **in float before the `int` cast** (`(int)std::clamp(std::ceil(…), 1.0f, (float)max(1,half_extent_cells_))`) — an inflation disk larger than the grid is meaningless (cells beyond it are out of bounds), so the grid half-extent is the natural, always-finite bound, and clamping the float first means the cast never sees an out-of-`int`-range value. Mirrors the existing `kMaxPredictionSteps` cap idiom.
 
-**Codebase-wide sibling (agent review, PR #793):** `add_static_obstacle` (the HD-map path) had the identical unguarded pattern — `radius_m`/`height_m` flow from config JSON into `r_cells`/`h_cells` with no finiteness guard or clamp, then an `O(r²·h)` triple loop. A config typo (`Infinity`/`NaN`/`1e9`) would hang the planner at startup. Applied the same fix: reject non-finite geometry, clamp `r_cells`/`h_cells` to the grid extent (clamp-in-float-then-cast). Other radius→cell sites checked and confirmed bounded: `insert_voxels` (`kInflate=1` const), prediction inflation (`kMaxPredictionSteps=200`).
+**Codebase-wide sibling (agent review, PR #793):** `add_static_obstacle` (the HD-map path) had the identical unguarded pattern — `radius_m`/`height_m` flow from config JSON into `r_cells`/`h_cells` with no finiteness guard or clamp, then an `O(r²·h)` triple loop. A config typo (`Infinity`/`NaN`/`1e9`) would hang the planner at startup. Applied the same fix: reject non-finite geometry, clamp `r_cells`/`h_cells` to the grid extent (clamp-in-float-then-cast). Other radius→cell sites checked and confirmed bounded: `insert_voxels` (`kInflate=1` const), prediction inflation (`kMaxPredictionSteps=200`). **Config-level guard:** `main.cpp` now `validate_and_clamp`s the grid `resolution_m` (`[0.05,5.0]`) and `grid_extent_m` (`[1.0,500.0]`) — these two keys had missed the helper the sibling grid keys already use, so a non-finite `resolution` (→ `(int)(extent/resolution)` ctor UB) or a tiny `resolution` (→ huge `half_extent_cells_` defeating the inflation clamp) could still cause the hang/UB; clamping at the config read makes `half_extent_cells_` always a trustworthy bound. (Ctor-level sanitization for non-config callers deferred to IMPROVEMENTS.md.)
 
 **Found by:** Live scenario-18 run `2026-06-29_160721` on the merged-main binary; the #765 stall-detector + stack-trace capture surfaced the exact call site. The HD-map sibling was found by the PR #793 review agent (codebase-wide sweep for the same pattern). Pre-existing ctor gap (no `extent`/`resolution` finiteness guard) logged to IMPROVEMENTS.md.
 

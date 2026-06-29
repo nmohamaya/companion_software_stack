@@ -16,11 +16,11 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
-### 2026-06-29 (PR #793 agent-review deferral — OccupancyGrid3D ctor finiteness guard)
+### 2026-06-29 (PR #793 agent-review — OccupancyGrid3D ctor defense-in-depth; production path already fixed)
 
-#### Guard `OccupancyGrid3D` ctor `extent` / `resolution` for finiteness + positivity
+#### `OccupancyGrid3D` ctor itself should sanitize `extent` / `resolution` (defense-in-depth)
 
-- **P3** (`process4_mission_planner/include/planner/occupancy_grid_3d.h` ctor) — `half_extent_cells_ = (int)(extent / resolution)` has no finiteness/positivity guard. A misconfigured `extent`/`resolution` (0, negative, NaN, Inf) could make `half_extent_cells_` 0 or garbage, degrading the clamp bounds added in #792 (and the `int` cast of a non-finite ratio is UB). Pre-existing latent issue, separate from the #792 hang fix. **Fix:** validate `std::isfinite(extent) && extent > 0 && std::isfinite(resolution) && resolution > 0` in the ctor (clamp to sane defaults + WARN), so all cell-count derivations have a trustworthy basis. **When to do it:** next time the grid ctor / config plumbing is touched, or alongside a config-validation pass. **Cross-ref:** PR #793 review agent, P3.
+- **P3** (`process4_mission_planner/include/planner/occupancy_grid_3d.h` ctor) — `half_extent_cells_ = (int)(extent / resolution)` and every other `resolution`-derived member are computed in the ctor init-list with no finiteness/positivity guard; a non-finite ratio is UB. **The production path is already guarded** as of PR #793 — `main.cpp` now `validate_and_clamp`s `resolution_m` ([0.05,5.0]) and `grid_extent_m` ([1.0,500.0]) before constructing the grid, so the grid is never built with pathological geometry in production. What remains is **defense-in-depth for non-config callers** (unit tests, future programmatic construction): a caller passing `resolution=0`/`NaN` directly to the ctor still hits UB. **Fix (when touched):** sanitize in the ctor init-list via a small static helper (clamp finite+positive, fall back to defaults). Lower priority since no production path reaches it. **Cross-ref:** PR #793 review agent, P3.
 
 ### 2026-06-15 (ADR-016 Tier-0 tooling — advisory backlogs to burn down)
 
