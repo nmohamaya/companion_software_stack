@@ -209,10 +209,19 @@ int main(int argc, char* argv[]) {
     auto planner_backend = ctx.cfg.get<std::string>(
         drone::cfg_key::mission_planner::path_planner::BACKEND, "potential_field");
     drone::planner::GridPlannerConfig planner_cfg;
-    planner_cfg.resolution_m = ctx.cfg.get<float>(
-        drone::cfg_key::mission_planner::path_planner::RESOLUTION_M, planner_cfg.resolution_m);
-    planner_cfg.grid_extent_m = ctx.cfg.get<float>(
-        drone::cfg_key::mission_planner::path_planner::GRID_EXTENT_M, planner_cfg.grid_extent_m);
+    // Issue #792 — resolution/extent feed half_extent_cells_ and every
+    // resolution-derived cell count in OccupancyGrid3D; a non-finite or
+    // pathological config (0, negative, NaN, Inf, or a tiny resolution that
+    // explodes half_extent) would cause UB / unbounded loops. These two keys
+    // had missed the validate_and_clamp the sibling grid keys use — guard them
+    // so the grid is always constructed with sane geometry and the radar/HD-map
+    // inflation clamps have a trustworthy half_extent bound.
+    planner_cfg.resolution_m = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::path_planner::RESOLUTION_M,
+        planner_cfg.resolution_m, 0.05f, 5.0f, "path_planner.resolution_m");
+    planner_cfg.grid_extent_m = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::path_planner::GRID_EXTENT_M,
+        planner_cfg.grid_extent_m, 1.0f, 500.0f, "path_planner.grid_extent_m");
     planner_cfg.inflation_radius_m =
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::INFLATION_RADIUS_M,
                            planner_cfg.inflation_radius_m);
@@ -239,8 +248,9 @@ int main(int argc, char* argv[]) {
 
     // Occupancy-grid-specific settings: scenario configs use occupancy_grid.* keys
     // to configure these fields instead of the path_planner.* defaults.
-    planner_cfg.resolution_m = ctx.cfg.get<float>(
-        drone::cfg_key::mission_planner::occupancy_grid::RESOLUTION_M, planner_cfg.resolution_m);
+    planner_cfg.resolution_m = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::occupancy_grid::RESOLUTION_M,
+        planner_cfg.resolution_m, 0.05f, 5.0f, "occupancy_grid.resolution_m");
     planner_cfg.inflation_radius_m =
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::INFLATION_RADIUS_M,
                            planner_cfg.inflation_radius_m);

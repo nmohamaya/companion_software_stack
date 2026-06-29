@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-29 (PR #793 agent-review — OccupancyGrid3D ctor defense-in-depth; production path already fixed)
+
+#### `OccupancyGrid3D` ctor itself should sanitize `extent` / `resolution` (defense-in-depth)
+
+- **P3** (`process4_mission_planner/include/planner/occupancy_grid_3d.h` ctor) — `half_extent_cells_ = (int)(extent / resolution)` and every other `resolution`-derived member are computed in the ctor init-list with no finiteness/positivity guard; a non-finite ratio is UB. **The production path is already guarded** as of PR #793 — `main.cpp` now `validate_and_clamp`s `resolution_m` ([0.05,5.0]) and `grid_extent_m` ([1.0,500.0]) before constructing the grid, so the grid is never built with pathological geometry in production. What remains is **defense-in-depth for non-config callers** (unit tests, future programmatic construction): a caller passing `resolution=0`/`NaN` directly to the ctor still hits UB. **Fix (when touched):** sanitize in the ctor init-list via a small static helper (clamp finite+positive, fall back to defaults). Lower priority since no production path reaches it. **Cross-ref:** PR #793 review agent, P3.
+
 ### 2026-06-15 (ADR-016 Tier-0 tooling — advisory backlogs to burn down)
 
 #### Promote advisory static-analysis gates (cppcheck, clang-tidy) to blocking
