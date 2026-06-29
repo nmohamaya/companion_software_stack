@@ -4178,4 +4178,18 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #109 (Issue #791 Gazebo collision detection). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #110 — Trustworthy scenario reporting + fail-safe contact gate (Issue #799 Phase C)
+
+**Date:** 2026-06-29  
+**Category:** Test integrity / Observability  
+**Files Modified:**
+- `tests/lib_scenario_logging.sh` — `_report_overall_assessment()` now gates the "VIO pose staleness" verdict on an actual `Escalation:` event and adds an over-promotion ("no obstacle-free path") branch; `_report_planner_stats()` path-failure counter now matches the planner's real strings (`Path extraction FAILED`, `no obstacle-free path`, `A* fallback recovered`)
+- `tests/run_scenario_gazebo.sh` — contact gate `--expect-nonempty` is now fail-closed by default (armed unless the scenario explicitly sets `contact_expect_nonempty: false`)
+
+**What:** The scenario-18 over-promotion FAIL (#799) was masked three ways — the report blamed "VIO pose staleness — Gazebo timing artifact, recommend re-running" (zero actual escalations; it matched benign `pose` lines), reported `Path failures: 0` (grep matched none of the planner's real failure strings), and the contact gate reported PASS on a 0-byte log. Phase C makes the report tell the truth and the contact gate fail-closed.
+
+**Why:** Phase C of #799 (observability first, so every subsequent validation run reports the real cause). A report that misattributes a real navigation defect as "flaky / re-run" lets the bug recur unnoticed; the fail-open contact gate is the silent no-op #791/#794 set out to kill. Validated by regenerating the report from the #799 failed-run logs → now reports the over-promotion root cause + `Path failures: 3 / Hover-fallbacks: 15`. See [docs/tracking/BUG_FIXES.md](BUG_FIXES.md) Fix #58.
+
+---
+
+*Last updated after Improvement #110 (Issue #799 Phase C — trustworthy scenario reporting). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-29 (Issue #799 Phase C — found while fixing the scenario report generator)
+
+#### `_report_ipc_latency()` uses a multi-byte em-dash as a `sort -t` delimiter
+
+- **P3** (`tests/lib_scenario_logging.sh:793`) — `sort -t'—' -k2` passes a 3-byte UTF-8 em-dash to `sort -t`, which only accepts a single-byte delimiter → emits `sort: multi-character tab '—'` on every report run and the `-k2` field sort silently does nothing (the IPC-latency section is sorted by whole line, not by the intended field). Harmless today (the section usually shows "no latency data found") but it's noise + a latent mis-sort. **Fix:** examine an actual `[Latency]` line format and replace with an `awk`-based sort or a single-byte delimiter. Verify the field layout before changing. **When to do it:** next touch of the latency section, or alongside a report-generator pass. **Cross-ref:** Issue #799 Phase C.
+
 ### 2026-06-29 (PR #793 agent-review — OccupancyGrid3D ctor defense-in-depth; production path already fixed)
 
 #### `OccupancyGrid3D` ctor itself should sanitize `extent` / `resolution` (defense-in-depth)
