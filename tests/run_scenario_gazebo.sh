@@ -871,6 +871,18 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
     CONTACT_DRONE_PATTERN=$(json_get "$SCENARIO_FILE" \
         "flight_quality_gates.contact_drone_pattern" "x500_companion")
 
+    # Issue #791 — fail-closed.  With contact sensors on the obstacles AND
+    # ground_plane (test_world.sdf), a real flight ALWAYS logs ground contacts at
+    # takeoff/landing, so an EMPTY contacts log means /world/<name>/contacts isn't
+    # publishing (Contact system plugin or sensors missing/broken) — the gate then
+    # cannot certify no-collision and must FAIL, not silently PASS (the exact gap
+    # that let #789's takeoff strike report PASS).  Default true; a scenario that
+    # legitimately expects zero contacts can opt out.
+    CONTACT_EXPECT_NONEMPTY=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.contact_expect_nonempty" "true")
+    CONTACT_EXPECT_FLAG=""
+    [[ "$CONTACT_EXPECT_NONEMPTY" == "true" ]] && CONTACT_EXPECT_FLAG="--expect-nonempty"
+
     # Capture Python helper exit code separately so we can distinguish
     # exit 1 (drone-vs-obstacle contact) from exit 2 (capture file missing
     # / unreadable — an infrastructure failure, not a flight-quality
@@ -880,6 +892,7 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
     python3 "${SCRIPT_DIR}/lib_check_contacts.py" "$CONTACT_CAPTURE_LOG" \
             --drone-pattern "$CONTACT_DRONE_PATTERN" \
             --allowlist "$CONTACT_ALLOWLIST" \
+            ${CONTACT_EXPECT_FLAG} \
             > "$CONTACT_HELPER_OUT" 2>&1
     CONTACT_HELPER_RC=$?
     tee -a "$COMBINED_LOG" < "$CONTACT_HELPER_OUT"
@@ -887,6 +900,12 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
         check "Contact-sensor: no drone-vs-obstacle contacts" 0
     elif [[ $CONTACT_HELPER_RC -eq 2 ]]; then
         check "Contact-sensor: capture file missing (infrastructure failure)" 1
+        echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC}   ${SCENARIO_LOG_DIR}/gz_contacts.stderr"
+    elif [[ $CONTACT_HELPER_RC -eq 3 ]]; then
+        # Issue #791 — fail-closed: topic published nothing despite contact
+        # sensors being expected (Contact plugin/sensors not firing).
+        check "Contact-sensor: contacts topic empty but expected — sensors/Contact-plugin not publishing (fail-closed #791)" 1
         echo -e "    ${YELLOW}Capture log:${NC} $CONTACT_CAPTURE_LOG"
         echo -e "    ${YELLOW}gz stderr:${NC}   ${SCENARIO_LOG_DIR}/gz_contacts.stderr"
     else

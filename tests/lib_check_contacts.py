@@ -40,6 +40,8 @@ Exit codes:
     0  — no drone-vs-obstacle contacts detected (PASS)
     1  — at least one drone-vs-obstacle contact detected (FAIL)
     2  — input file missing / unreadable (treated as FAIL by the runner)
+    3  — log empty but --expect-nonempty set: contact topic not publishing
+         (Contact plugin / sensors missing or broken) — fail-closed (Issue #791)
 
 Usage:
     python3 tests/lib_check_contacts.py <gz_contacts_log> \\
@@ -234,6 +236,17 @@ def main() -> int:
         action="store_true",
         help="Print every detected drone-vs-obstacle pair (overrides --max-events).",
     )
+    parser.add_argument(
+        "--expect-nonempty",
+        action="store_true",
+        help=(
+            "Fail-closed (Issue #791): treat an EMPTY contacts log as a failure "
+            "(exit 3) instead of PASS.  Use when the world has contact sensors "
+            "(test_world.sdf) so a real flight ALWAYS logs ground contacts at "
+            "takeoff/landing — an empty log then means the Contact plugin / "
+            "sensors aren't publishing and the gate cannot certify no-collision."
+        ),
+    )
     args = parser.parse_args()
     if args.verbose:
         args.max_events = sys.maxsize
@@ -247,8 +260,24 @@ def main() -> int:
         return 2
 
     if args.log_path.stat().st_size == 0:
-        # Empty log — gz topic ran but received no messages.  Treat as
-        # PASS: scenarios without obstacles produce no contact events.
+        # Empty log — gz topic ran but received no messages.
+        # Issue #791: with contact sensors on the world's obstacles AND
+        # ground_plane (test_world.sdf), a real flight ALWAYS produces ground
+        # contacts at takeoff/landing.  So under --expect-nonempty an empty log
+        # is NOT "a clean run" — it means the Contact system plugin / sensors
+        # aren't publishing, and the gate cannot certify no-collision.  Fail
+        # closed (exit 3) rather than the historical fail-open PASS that let a
+        # structurally-blind detector green-light real strikes.
+        if args.expect_nonempty:
+            print(
+                f"[contact-sensor] FAIL: contacts log is EMPTY but contact sensors are "
+                f"expected ({args.log_path}).  The /world/<name>/contacts topic published "
+                f"nothing — Contact system plugin or per-model contact sensors are missing "
+                f"or not firing.  Cannot certify no-collision (fail-closed, Issue #791).",
+                file=sys.stderr,
+            )
+            return 3
+        # Legacy/opt-out behaviour: no sensors expected → empty == clean.
         print(
             f"[contact-sensor] PASS: no contact events captured during the run "
             f"({args.log_path} is empty)."
