@@ -1937,6 +1937,32 @@ EXPECT_TRUE(signaled);  // reliably true (exits early, typically ~200ms–1.3s)
 
 ---
 
+### Fix #791 — Gazebo scenarios couldn't detect obstacle collisions → false PASS (Issue #791)
+
+**Date:** 2026-06-29
+**Severity:** Critical (test integrity — a real obstacle strike reported PASS)
+**Files:** `sim/worlds/test_world.sdf`, `tests/lib_check_contacts.py`, `tests/run_scenario_gazebo.sh`
+
+**What:** A Gazebo scenario that physically hit an obstacle still reported `PASS` (masked #789's takeoff-flood strike; same symptom in #727's scenario-25/26). The collision gate was fail-*open*.
+
+**Error messages (searchable):**
+- `[contact-sensor] PASS: no contact events captured during the run (... is empty).` — while the drone visibly hit an obstacle.
+
+**Why (Root Cause):** The runner's #740 Layer-3 contact gate subscribes to `/world/<name>/contacts` and `lib_check_contacts.py` classifies drone-vs-obstacle contacts — but that topic was **never populated**: `test_world.sdf` had **no `<sensor type="contact">` on any model** and **no `Contact` system plugin** (only GUI plugins). So Gazebo emitted no contact events. Compounding it, the helper's empty-log path returned **PASS** ("no obstacles → no contacts"), so a structurally-blind detector green-lit every strike.
+
+**How (Fix):**
+- `test_world.sdf` — add the `gz-sim-contact-system` plugin to `<world>` and a `<sensor type="contact">` to each obstacle's collision (red/green/blue cylinders + orange box) **and** `ground_plane` (so a real flight always logs allowlisted ground contacts at takeoff/landing — the proof the topic is live). `landing_pad` is visual-only (no collision), so the drone actually touches `ground_plane`.
+- `lib_check_contacts.py` — add `--expect-nonempty` (exit code **3**): an empty log is no longer PASS but "topic not publishing → cannot certify no-collision" (fail-closed).
+- `run_scenario_gazebo.sh` — pass `--expect-nonempty` (default true via `flight_quality_gates.contact_expect_nonempty`) and FAIL on exit 3. After the fix the gate fails **closed**: real strike → FAIL; missing sensors / dead topic / broken capture → FAIL.
+
+**Found by:** #791 (filed after the #789 scenario-18 strike passed 20/20); root-caused by inspecting the empty `gz_contacts.log` + `contact_helper.out`.
+
+**Limitations / verification:** the live-Gazebo unknown is whether contact sensors on `<static>` obstacles fire in this gz version — verified by step 1 of the PR's verification (clean run must produce non-empty ground contacts). If they don't, fail-closed surfaces it loudly (FAIL, not silent PASS) and the fallback is a ground-truth-pose proximity check.
+
+**Test:** helper exit codes verified functionally (empty+`--expect-nonempty`→3; empty→0; drone-vs-obstacle→1; drone-vs-ground allowlisted→0). End-to-end via live Gazebo (see PR).
+
+---
+
 ### Fix #21 — Fault Injector Race Condition — Direct SHM Overwrite
 
 **Date:** 2026-03-08

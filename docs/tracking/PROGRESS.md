@@ -4163,4 +4163,19 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #108 (Issue #792 radar-inflation clamp). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #109 — Gazebo collision detection: contact sensors + fail-closed gate (Issue #791)
+
+**Date:** 2026-06-29  
+**Category:** Simulation / Test integrity  
+**Files Modified:**
+- `sim/worlds/test_world.sdf` — `gz-sim-contact-system` plugin + `<sensor type="contact">` on all 4 obstacles and `ground_plane` (so `/world/test_world/contacts` actually publishes)
+- `tests/lib_check_contacts.py` — `--expect-nonempty` (exit 3): an empty log is a fail-closed "topic not publishing", not PASS
+- `tests/run_scenario_gazebo.sh` — pass `--expect-nonempty` (default true via `flight_quality_gates.contact_expect_nonempty`) + FAIL on exit 3
+
+**What:** A Gazebo scenario that physically hit an obstacle reported `PASS` — the #740 Layer-3 contact gate parsed a `/world/<name>/contacts` topic that was never populated (no contact sensors / no Contact plugin in the world), and the helper's empty-log path returned PASS. Surfaced by #789's takeoff strike passing 20/20.
+
+**Why:** Closes #791 (P1 test integrity). Converts the collision gate from fail-*open* to fail-*closed*: real strike → FAIL; missing sensors / dead topic / broken capture → FAIL. Numbered #109 to avoid collision with the in-flight #793 (#792, which holds #108). Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #109 (Issue #791 Gazebo collision detection). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

@@ -26,6 +26,13 @@
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type="adiabatic"/>
 
+    <!-- Issue #791 — Contact system: publishes /world/test_world/contacts for any
+         collision carrying a <sensor type="contact">. Without it the obstacle/
+         ground contact sensors below produce nothing and the scenario runner's
+         collision gate (tests/run_scenario_gazebo.sh #740 Layer 3) fails OPEN
+         (a real obstacle strike reported PASS). -->
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+
     <!-- ═══ Scene ═════════════════════════════════════════════ -->
     <scene>
       <grid>false</grid>
@@ -95,6 +102,13 @@
             <contact/>
           </surface>
         </collision>
+        <!-- Issue #791 — contact sensor so the drone's ground contact at
+             takeoff/landing populates /world/test_world/contacts. ground_plane
+             is allowlisted in the runner gate, but its presence in the log is
+             what proves the topic is live (empty log → broken → FAIL). -->
+        <sensor name="contact" type="contact">
+          <contact><collision>collision</collision></contact>
+        </sensor>
         <visual name="visual">
           <geometry>
             <plane>
@@ -155,6 +169,12 @@
         <collision name="collision">
           <geometry><cylinder><radius>1.0</radius><length>1.7</length></cylinder></geometry>
         </collision>
+        <!-- Issue #791 — contact sensor: any drone-vs-this-obstacle physical
+             contact is published to /world/test_world/contacts and FAILs the
+             scenario via the runner's collision gate. -->
+        <sensor name="contact" type="contact">
+          <contact><collision>collision</collision></contact>
+        </sensor>
         <visual name="visual">
           <geometry><cylinder><radius>1.0</radius><length>1.7</length></cylinder></geometry>
           <material>
@@ -174,6 +194,12 @@
         <collision name="collision">
           <geometry><cylinder><radius>1.0</radius><length>6.0</length></cylinder></geometry>
         </collision>
+        <!-- Issue #791 — contact sensor: any drone-vs-this-obstacle physical
+             contact is published to /world/test_world/contacts and FAILs the
+             scenario via the runner's collision gate. -->
+        <sensor name="contact" type="contact">
+          <contact><collision>collision</collision></contact>
+        </sensor>
         <visual name="visual">
           <geometry><cylinder><radius>1.0</radius><length>6.0</length></cylinder></geometry>
           <material>
@@ -193,6 +219,12 @@
         <collision name="collision">
           <geometry><cylinder><radius>0.8</radius><length>2.0</length></cylinder></geometry>
         </collision>
+        <!-- Issue #791 — contact sensor: any drone-vs-this-obstacle physical
+             contact is published to /world/test_world/contacts and FAILs the
+             scenario via the runner's collision gate. -->
+        <sensor name="contact" type="contact">
+          <contact><collision>collision</collision></contact>
+        </sensor>
         <visual name="visual">
           <geometry><cylinder><radius>0.8</radius><length>2.0</length></cylinder></geometry>
           <material>
@@ -212,6 +244,12 @@
         <collision name="collision">
           <geometry><box><size>1.5 1.5 10</size></box></geometry>
         </collision>
+        <!-- Issue #791 — contact sensor: any drone-vs-this-obstacle physical
+             contact is published to /world/test_world/contacts and FAILs the
+             scenario via the runner's collision gate. -->
+        <sensor name="contact" type="contact">
+          <contact><collision>collision</collision></contact>
+        </sensor>
         <visual name="visual">
           <geometry><box><size>1.5 1.5 10</size></box></geometry>
           <material>
