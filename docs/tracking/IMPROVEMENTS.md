@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-29 (PR #793 agent-review deferral — OccupancyGrid3D ctor finiteness guard)
+
+#### Guard `OccupancyGrid3D` ctor `extent` / `resolution` for finiteness + positivity
+
+- **P3** (`process4_mission_planner/include/planner/occupancy_grid_3d.h` ctor) — `half_extent_cells_ = (int)(extent / resolution)` has no finiteness/positivity guard. A misconfigured `extent`/`resolution` (0, negative, NaN, Inf) could make `half_extent_cells_` 0 or garbage, degrading the clamp bounds added in #792 (and the `int` cast of a non-finite ratio is UB). Pre-existing latent issue, separate from the #792 hang fix. **Fix:** validate `std::isfinite(extent) && extent > 0 && std::isfinite(resolution) && resolution > 0` in the ctor (clamp to sane defaults + WARN), so all cell-count derivations have a trustworthy basis. **When to do it:** next time the grid ctor / config plumbing is touched, or alongside a config-validation pass. **Cross-ref:** PR #793 review agent, P3.
+
 ### 2026-06-15 (ADR-016 Tier-0 tooling — advisory backlogs to burn down)
 
 #### Promote advisory static-analysis gates (cppcheck, clang-tidy) to blocking

@@ -247,3 +247,19 @@ TEST(OccupancyGridRadarInflation, NonFiniteRadarRadiusFallsBackToConfigInflation
     EXPECT_LE(grid.occupied_count(), static_cast<size_t>(41u * 41u))
         << "non-finite radar radius must fall back to the config inflation, not cast to UB";
 }
+
+// add_static_obstacle (HD-map path) is the unguarded twin of the radar bug —
+// radius_m/height_m come from config JSON, so a typo must not hang the planner.
+TEST(OccupancyGridRadarInflation, StaticObstacleHugeRadiusIsClampedNotUnbounded) {
+    OccupancyGrid3D grid = make_grid(/*min_alt=*/0.0f, /*confirm_hits=*/1);
+    grid.add_static_obstacle(0.0f, 0.0f, /*radius_m=*/1.0e9f, /*height_m=*/1.0e9f);  // config typo
+    EXPECT_GT(grid.static_count(), 0u);
+    EXPECT_LE(grid.static_count(), static_cast<size_t>(41u * 41u * 41u))
+        << "huge HD-map radius must be clamped to the grid, not run unbounded";
+}
+
+TEST(OccupancyGridRadarInflation, StaticObstacleNonFiniteGeometryIgnored) {
+    OccupancyGrid3D grid = make_grid(/*min_alt=*/0.0f, /*confirm_hits=*/1);
+    grid.add_static_obstacle(0.0f, 0.0f, std::numeric_limits<float>::infinity(), 2.0f);
+    EXPECT_EQ(grid.static_count(), 0u) << "non-finite HD-map geometry must be ignored, not cast UB";
+}

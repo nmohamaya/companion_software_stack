@@ -167,9 +167,26 @@ public:
     /// @param radius_m  Obstacle footprint radius in metres.
     /// @param height_m  Obstacle height above ground in metres.
     void add_static_obstacle(float wx, float wy, float radius_m, float height_m) {
-        GridCell base    = world_to_grid(wx, wy, 0.0f);
-        int      r_cells = static_cast<int>(std::ceil(radius_m / resolution_)) + inflation_cells_;
-        int      h_cells = static_cast<int>(std::ceil(height_m / resolution_)) + inflation_cells_;
+        // Issue #792 sibling (agent review, PR #793) — HD-map geometry comes from
+        // config JSON; a typo (Infinity/NaN/1e9) would otherwise produce an
+        // unbounded r_cells/h_cells and hang the planner in the triple loop below
+        // at startup — the same unclamped-radius→cell-count hang class as the radar
+        // path. Reject non-finite geometry; clamp the cell counts to the grid
+        // extent IN FLOAT before the int cast (the cast of a huge float is UB).
+        if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(radius_m) ||
+            !std::isfinite(height_m)) {
+            DRONE_LOG_WARN("[Grid] add_static_obstacle ignored — non-finite geometry "
+                           "(wx={}, wy={}, r={}, h={})",
+                           wx, wy, radius_m, height_m);
+            return;
+        }
+        GridCell   base = world_to_grid(wx, wy, 0.0f);
+        const auto cap  = static_cast<float>(std::max(1, half_extent_cells_));
+        int r_cells = static_cast<int>(std::clamp(std::ceil(radius_m / resolution_), 0.0f, cap)) +
+                      inflation_cells_;
+        int h_cells =
+            static_cast<int>(std::clamp(std::ceil(height_m / resolution_), 0.0f, 2.0f * cap)) +
+            inflation_cells_;
         const size_t before = static_occupied_.size();
         for (int dz = -inflation_cells_; dz <= h_cells; ++dz)
             for (int dy = -r_cells; dy <= r_cells; ++dy)
@@ -722,11 +739,15 @@ public:
             const bool has_radar_size = obj.radar_update_count > 0 &&
                                         std::isfinite(obj.estimated_radius_m) &&
                                         obj.estimated_radius_m > 0.0f;
+            // Clamp in float BEFORE the int cast: a finite-but-absurd radius
+            // (e.g. 1e30) would make ceil()/res exceed INT_MAX and the int cast
+            // itself is UB. Clamping the float to the grid half-extent first means
+            // the cast always sees a small in-range value.
             const int obj_inflation =
                 has_radar_size
-                    ? std::clamp(static_cast<int>(std::ceil(
-                                     (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)),
-                                 1, std::max(1, half_extent_cells_))
+                    ? static_cast<int>(std::clamp(
+                          std::ceil((obj.estimated_radius_m + resolution_ * 0.5f) / resolution_),
+                          1.0f, static_cast<float>(std::max(1, half_extent_cells_))))
                     : inflation_cells_;
 
             // Per-object promotion eligibility (invariant across inflated cells).

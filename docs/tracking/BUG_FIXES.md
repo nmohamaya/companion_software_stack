@@ -1268,11 +1268,13 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 **How (Fix):** Finiteness-guard + clamp the radar-derived inflation:
 - `has_radar_size` now also requires `std::isfinite(obj.estimated_radius_m)` (a non-finite radius falls back to the config inflation, never the `int`-cast UB path).
-- `obj_inflation` is `std::clamp(…, 1, std::max(1, half_extent_cells_))` — an inflation disk larger than the grid is meaningless (cells beyond it are out of bounds), so the grid half-extent is the natural, always-finite bound. Mirrors the existing `kMaxPredictionSteps` cap idiom.
+- `obj_inflation` clamps **in float before the `int` cast** (`(int)std::clamp(std::ceil(…), 1.0f, (float)max(1,half_extent_cells_))`) — an inflation disk larger than the grid is meaningless (cells beyond it are out of bounds), so the grid half-extent is the natural, always-finite bound, and clamping the float first means the cast never sees an out-of-`int`-range value. Mirrors the existing `kMaxPredictionSteps` cap idiom.
 
-**Found by:** Live scenario-18 run `2026-06-29_160721` on the merged-main binary; the #765 stall-detector + stack-trace capture surfaced the exact call site.
+**Codebase-wide sibling (agent review, PR #793):** `add_static_obstacle` (the HD-map path) had the identical unguarded pattern — `radius_m`/`height_m` flow from config JSON into `r_cells`/`h_cells` with no finiteness guard or clamp, then an `O(r²·h)` triple loop. A config typo (`Infinity`/`NaN`/`1e9`) would hang the planner at startup. Applied the same fix: reject non-finite geometry, clamp `r_cells`/`h_cells` to the grid extent (clamp-in-float-then-cast). Other radius→cell sites checked and confirmed bounded: `insert_voxels` (`kInflate=1` const), prediction inflation (`kMaxPredictionSteps=200`).
 
-**Test:** `tests/test_occupancy_grid_dynamic_gating.cpp` +2 (`OccupancyGridRadarInflation`): a 1000 km radar radius is clamped to the grid (returns promptly, bounded cell count) and a non-finite radius falls back to the config inflation. Verified fails-without (the huge-radius test **times out**/hangs) / passes-with (0.01 s).
+**Found by:** Live scenario-18 run `2026-06-29_160721` on the merged-main binary; the #765 stall-detector + stack-trace capture surfaced the exact call site. The HD-map sibling was found by the PR #793 review agent (codebase-wide sweep for the same pattern). Pre-existing ctor gap (no `extent`/`resolution` finiteness guard) logged to IMPROVEMENTS.md.
+
+**Test:** `tests/test_occupancy_grid_dynamic_gating.cpp` +4 (`OccupancyGridRadarInflation`): huge radar radius clamped (returns promptly, bounded); non-finite radar radius falls back to config inflation; huge HD-map `add_static_obstacle` radius clamped; non-finite HD-map geometry ignored. Verified fails-without (both the radar and HD-map huge-radius tests **time out**/hang at the unclamped code) / passes-with (≤0.03 s).
 
 ---
 
