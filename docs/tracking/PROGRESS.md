@@ -4148,4 +4148,19 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #107 (Issue #789 takeoff promotion gate). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #108 — Clamp radar-derived obstacle inflation (planner-thread-hang fix, Issue #792)
+
+**Date:** 2026-06-29  
+**Category:** Navigation / Safety  
+**Files Modified:**
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — finiteness-guard + clamp on the radar-derived `obj_inflation` in `update_from_objects()` (clamp to `[1, half_extent_cells_]`; non-finite `estimated_radius_m` falls back to the config inflation)
+
+**Files:** `tests/test_occupancy_grid_dynamic_gating.cpp` (+2 tests: `OccupancyGridRadarInflation`)
+
+**What:** The P4 `planning_loop` thread hung inside `inflate_disk_at_cell_`'s `O(N²)` disk loop when a `gpu_lidar`/UKF radar detection reported a pathological (huge or non-finite) `estimated_radius_m` — an unclamped, un-guarded `ceil()→int` produced an enormous `inflation_cells`. Surfaced live on scenario 18; the #765 stuck-thread stack-trace capture pinpointed the call site.
+
+**Why:** Safety-critical — a hung planner thread leaves the drone hovering uncontrolled. Pre-existing latent bug (the radar-size-trust path predates #764/#789), intermittently triggered. Fix is contained: guard finiteness + clamp to the grid half-extent (a disk larger than the grid is meaningless). Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #108 (Issue #792 radar-inflation clamp). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

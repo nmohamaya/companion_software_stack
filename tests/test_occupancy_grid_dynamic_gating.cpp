@@ -203,3 +203,47 @@ TEST(OccupancyGridTakeoffGate, DisabledGatePromotesEvenWhenLow) {
     EXPECT_GT(grid.promoted_count(), 0) << "min_promotion_altitude_m=0 must preserve prior "
                                            "behaviour: promote regardless of altitude";
 }
+
+// ── 7. Issue #792 (SAFETY) — radar estimated_radius_m must be finite + clamped ──
+// A pathological radar radius (huge or non-finite, e.g. a gpu_lidar/UKF degenerate
+// size estimate) must NOT make inflate_disk_at_cell_'s O(N^2) disk loop run
+// unbounded — that hangs the planning_loop thread (uncontrolled hover, Issue #792).
+// The grid here is 20m half-extent / 1m res → at most (2*20+1)^2 = 1681 cells per
+// z-layer; without the clamp a 1000 km radius would try ~10^12 iterations and hang.
+namespace {
+drone::ipc::DetectedObjectList make_radar_detection(float px, float py, float pz, float radius_m) {
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].track_id           = 1;
+    objects.objects[0].class_id           = drone::ipc::ObjectClass::UNKNOWN;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].position_x         = px;
+    objects.objects[0].position_y         = py;
+    objects.objects[0].position_z         = pz;
+    objects.objects[0].has_camera         = true;
+    objects.objects[0].has_radar          = true;
+    objects.objects[0].radar_update_count = 5;
+    objects.objects[0].estimated_radius_m = radius_m;
+    return objects;
+}
+}  // namespace
+
+TEST(OccupancyGridRadarInflation, HugeRadarRadiusIsClampedNotUnbounded) {
+    OccupancyGrid3D  grid = make_grid(/*min_alt=*/0.0f, /*confirm_hits=*/1);
+    auto             objs = make_radar_detection(5.0f, 5.0f, 5.0f, /*radius_m=*/1.0e6f);  // 1000 km
+    drone::ipc::Pose pose{};
+    grid.update_from_objects(objs, pose);  // must RETURN PROMPTLY (clamped), not hang
+    EXPECT_GT(grid.occupied_count(), 0u);
+    EXPECT_LE(grid.occupied_count(), static_cast<size_t>(41u * 41u))
+        << "huge radar radius must be clamped to the grid half-extent, not run unbounded";
+}
+
+TEST(OccupancyGridRadarInflation, NonFiniteRadarRadiusFallsBackToConfigInflation) {
+    OccupancyGrid3D grid = make_grid(/*min_alt=*/0.0f, /*confirm_hits=*/1);
+    auto objs = make_radar_detection(5.0f, 5.0f, 5.0f, std::numeric_limits<float>::infinity());
+    drone::ipc::Pose pose{};
+    grid.update_from_objects(objs, pose);  // isfinite guard → config inflation, no UB/hang
+    EXPECT_GT(grid.occupied_count(), 0u);
+    EXPECT_LE(grid.occupied_count(), static_cast<size_t>(41u * 41u))
+        << "non-finite radar radius must fall back to the config inflation, not cast to UB";
+}

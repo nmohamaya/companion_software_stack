@@ -710,12 +710,24 @@ public:
             // radii of 10-20m, inflating a single object to 300+ cells and
             // flooding the dynamic grid.  Radar-confirmed objects have
             // reliable range, so their back-projected radius is trusted.
-            const bool has_radar_size = obj.radar_update_count > 0 && obj.estimated_radius_m > 0.0f;
-            const int  obj_inflation =
+            // Issue #792 (SAFETY) — the radar-derived radius MUST be finite and
+            // clamped. A pathological estimated_radius_m (huge, or non-finite from
+            // a gpu_lidar/UKF degenerate size estimate) would otherwise make the
+            // ceil()→int cast produce an enormous inflation_cells, and
+            // inflate_disk_at_cell_'s O(N^2) disk loop would run effectively
+            // forever — hanging the planning_loop thread (uncontrolled hover). A
+            // disk larger than the grid is meaningless (cells beyond it are out of
+            // bounds), so cap at the grid half-extent; a non-finite radius falls
+            // back to the config inflation.
+            const bool has_radar_size = obj.radar_update_count > 0 &&
+                                        std::isfinite(obj.estimated_radius_m) &&
+                                        obj.estimated_radius_m > 0.0f;
+            const int obj_inflation =
                 has_radar_size
-                     ? std::max(1, static_cast<int>(std::ceil(
-                                      (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)))
-                     : inflation_cells_;
+                    ? std::clamp(static_cast<int>(std::ceil(
+                                     (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)),
+                                 1, std::max(1, half_extent_cells_))
+                    : inflation_cells_;
 
             // Per-object promotion eligibility (invariant across inflated cells).
             //

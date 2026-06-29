@@ -1248,6 +1248,34 @@ Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at
 
 ---
 
+### Fix #792 — P4 planning_loop hangs in inflate_disk_at_cell_ on unclamped radar estimated_radius_m (Issue #792)
+
+**Date:** 2026-06-29
+**Severity:** Critical (safety — planner thread death → uncontrolled hover)
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`
+
+**What:** During `scenario 18` (`perception_avoidance`, SURVEY) the P4 `planning_loop` thread **hung** — the drone sat hovering with a dead planner emitting no new trajectory commands. The #765 stuck-thread stack-trace capture dumped the same call site every 30 s (an unbounded loop, not slowness).
+
+**Error messages (searchable):**
+- `[Watchdog/STUCK-DIAG] thread='planning_loop' is_critical=true watched=true`
+- `[StackTrace] ── stuck thread 'planning_loop' (tid …) ──` with `#02 OccupancyGrid3D::inflate_disk_at_cell_` → `#03 OccupancyGrid3D::update_from_objects` → `#04 MissionStateTick::tick_survey`
+
+**Reproduce:**
+1. `git checkout <commit-before-fix>`
+2. Build + run `OccupancyGridRadarInflation.HugeRadarRadiusIsClampedNotUnbounded` (or a Gazebo run where `gpu_lidar`/UKF emits a degenerate radar size) — without the fix the unit test **times out** (hangs).
+
+**Why (Root Cause):** `inflate_disk_at_cell_`'s disk loop is `O(N²)` over `±inflation_cells`. `inflation_cells` = `obj_inflation`, which on the **radar path was unclamped and not finiteness-guarded**: `std::max(1, (int)ceil((estimated_radius_m + res/2)/res))`. A `gpu_lidar`/UKF radar detection with a huge or non-finite `estimated_radius_m` → enormous `inflation_cells` (the `int` cast of a huge/`inf` float is itself UB) → the disk loop runs effectively forever → the planning thread stops touching its heartbeat. The non-radar branch uses the config-bounded `inflation_cells_`, so the hang could only come from the radar branch. Pre-existing latent bug (the radar-size-trust path predates #764/#789); intermittent — fires only on a pathological radar radius.
+
+**How (Fix):** Finiteness-guard + clamp the radar-derived inflation:
+- `has_radar_size` now also requires `std::isfinite(obj.estimated_radius_m)` (a non-finite radius falls back to the config inflation, never the `int`-cast UB path).
+- `obj_inflation` is `std::clamp(…, 1, std::max(1, half_extent_cells_))` — an inflation disk larger than the grid is meaningless (cells beyond it are out of bounds), so the grid half-extent is the natural, always-finite bound. Mirrors the existing `kMaxPredictionSteps` cap idiom.
+
+**Found by:** Live scenario-18 run `2026-06-29_160721` on the merged-main binary; the #765 stall-detector + stack-trace capture surfaced the exact call site.
+
+**Test:** `tests/test_occupancy_grid_dynamic_gating.cpp` +2 (`OccupancyGridRadarInflation`): a 1000 km radar radius is clamped to the grid (returns promptly, bounded cell count) and a non-finite radius falls back to the config inflation. Verified fails-without (the huge-radius test **times out**/hangs) / passes-with (0.01 s).
+
+---
+
 ### Fix #718 — PREFLIGHT held forever on stuck `armable` or never-settling attitude; no operator alert (Issue #718, partial #765)
 
 **Date fixed:** 2026-05-15
