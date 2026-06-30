@@ -65,6 +65,9 @@ SCENARIO_NAME=""
 # Issue #740 Layer 3 — Gate 1 (contact sensor) state.
 CONTACT_CAPTURE_PID=""
 CONTACT_CAPTURE_LOG=""
+# Issue #796 — proximity collision gate (ground-truth odometry) state.
+POSE_CAPTURE_PID=""
+POSE_CAPTURE_LOG=""
 WORLD_NAME=""
 
 # ── Parse args ────────────────────────────────────────────────
@@ -585,6 +588,12 @@ cleanup_scenario() {
         sleep 1
         kill -SIGKILL "$CONTACT_CAPTURE_PID" 2>/dev/null || true
     fi
+    # Issue #796 — stop the odometry capture for the proximity gate.
+    if [[ -n "$POSE_CAPTURE_PID" ]] && kill -0 "$POSE_CAPTURE_PID" 2>/dev/null; then
+        kill -SIGTERM "$POSE_CAPTURE_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$POSE_CAPTURE_PID" 2>/dev/null || true
+    fi
     sleep 2
     # Force kill any stragglers that ignored SIGTERM
     pkill -9 -f "build/bin/video_capture" 2>/dev/null || true
@@ -705,6 +714,26 @@ if [[ "$STARTUP_OK" == "true" ]]; then
         fi
     else
         echo -e "  ${CYAN}Contact-sensor gate disabled by scenario config.${NC}"
+    fi
+
+    # ── Issue #796 — start ground-truth odometry capture for the proximity
+    #    collision gate.  Independent backstop to the contact gate: it compares
+    #    the drone's ground-truth pose against the world-SDF obstacle geometry,
+    #    so a real strike is caught even if static-obstacle contact sensors
+    #    don't fire in this gz version.  The drone model runs
+    #    gz-sim-odometry-publisher-system, so /model/<drone>/odometry is always
+    #    published (no WORLD_NAME extraction needed). ──
+    PROXIMITY_GATE_ENABLED=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.proximity_gate_enabled" "true")
+    if [[ "$PROXIMITY_GATE_ENABLED" == "true" ]] && command -v gz >/dev/null 2>&1; then
+        PROX_DRONE_MODEL=$(json_get "$SCENARIO_FILE" \
+            "flight_quality_gates.contact_drone_pattern" "x500_companion")
+        POSE_CAPTURE_LOG="${SCENARIO_LOG_DIR}/gz_odometry.log"
+        echo -e "  ${CYAN}Starting odometry capture on /model/${PROX_DRONE_MODEL}/odometry${NC}"
+        gz topic -e -t "/model/${PROX_DRONE_MODEL}/odometry" \
+            > "$POSE_CAPTURE_LOG" \
+            2> "${SCENARIO_LOG_DIR}/gz_odometry.stderr" &
+        POSE_CAPTURE_PID=$!
     fi
 else
     check "PX4 + Gazebo + Stack started" 1
@@ -922,6 +951,51 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
         fi
     fi
     fi  # end "CONTACT_CAPTURE_ALIVE && log non-empty" branch
+fi
+
+# ── Issue #796 — proximity collision gate (ground-truth pose vs obstacles) ──
+# Independent backstop to the contact gate (#791): compares the drone's
+# ground-truth odometry trace against the world-SDF obstacle geometry, so a real
+# strike FAILs even if static-obstacle contact sensors don't publish in this gz
+# version.  Odometry comes from the drone model's own publisher, so it's always
+# present — an empty capture is a real infra failure (fail-closed).
+if [[ -n "$POSE_CAPTURE_PID" ]]; then
+    echo ""
+    echo "Flight-quality gates (proximity):"
+    if kill -0 "$POSE_CAPTURE_PID" 2>/dev/null; then
+        kill -SIGTERM "$POSE_CAPTURE_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$POSE_CAPTURE_PID" 2>/dev/null || true
+    fi
+    wait "$POSE_CAPTURE_PID" 2>/dev/null || true
+    POSE_CAPTURE_PID=""
+
+    PROX_DRONE_RADIUS=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.proximity_drone_radius_m" "0.35")
+    PROX_NEAR_MISS=$(json_get "$SCENARIO_FILE" \
+        "flight_quality_gates.proximity_near_miss_margin_m" "0.0")
+    PROX_HELPER_OUT="${SCENARIO_LOG_DIR}/proximity_helper.out"
+    python3 "${SCRIPT_DIR}/lib_check_proximity.py" "$POSE_CAPTURE_LOG" \
+            --world-sdf "$GZ_WORLD" \
+            --drone-radius "$PROX_DRONE_RADIUS" \
+            --near-miss-margin "$PROX_NEAR_MISS" \
+            --expect-nonempty \
+            > "$PROX_HELPER_OUT" 2>&1
+    PROX_HELPER_RC=$?
+    tee -a "$COMBINED_LOG" < "$PROX_HELPER_OUT"
+    if [[ $PROX_HELPER_RC -eq 0 ]]; then
+        check "Proximity: no drone-vs-obstacle penetration" 0
+    elif [[ $PROX_HELPER_RC -eq 2 ]]; then
+        check "Proximity: pose log / world SDF missing (infrastructure failure)" 1
+        echo -e "    ${YELLOW}Pose log:${NC} $POSE_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC} ${SCENARIO_LOG_DIR}/gz_odometry.stderr"
+    elif [[ $PROX_HELPER_RC -eq 3 ]]; then
+        check "Proximity: odometry empty but expected — pose topic not publishing (fail-closed #796)" 1
+        echo -e "    ${YELLOW}Pose log:${NC} $POSE_CAPTURE_LOG"
+        echo -e "    ${YELLOW}gz stderr:${NC} ${SCENARIO_LOG_DIR}/gz_odometry.stderr"
+    else
+        check "Proximity: drone-vs-obstacle penetration detected" 1
+    fi
 fi
 
 # Check processes alive
