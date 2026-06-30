@@ -4182,7 +4182,7 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 **Date:** 2026-06-29  
 **Category:** Simulation / Test integrity  
-**Files Added:** `tests/lib_check_proximity.py`, `tests/test_lib_check_proximity.py` (10 tests)
+**Files Added:** `tests/lib_check_proximity.py`, `tests/test_lib_check_proximity.py` (12 tests)
 **Files Modified:** `tests/run_scenario_gazebo.sh` — capture `/model/<drone>/odometry` + run the proximity gate alongside the #791 contact gate
 
 **What:** An independent, always-on collision gate that does not depend on gz contact-sensor plumbing. It captures the drone's ground-truth odometry (from the model's `gz-sim-odometry-publisher-system`) and FAILs if any pose sample penetrates an obstacle's volume (cylinder/box geometry parsed from `test_world.sdf`, drone modelled as a 0.35 m sphere, with an optional near-miss WARN band).

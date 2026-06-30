@@ -71,6 +71,17 @@ def _run(pose_text: str, world_text: str | None = _WORLD_SDF, *extra: str) -> in
         return subprocess.run(cmd, capture_output=True, text=True).returncode
 
 
+def _run_cap(pose_text: str, world_text: str | None = _WORLD_SDF, *extra: str):
+    """Like _run but returns the full CompletedProcess (to assert WARN text)."""
+    with tempfile.TemporaryDirectory() as d:
+        pose = Path(d) / "odom.log"
+        pose.write_text(pose_text)
+        world = Path(d) / "w.sdf"
+        world.write_text(world_text if world_text is not None else _WORLD_SDF)
+        cmd = [sys.executable, str(HELPER), str(pose), "--world-sdf", str(world), *extra]
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def test_clear_trajectory_passes() -> None:
     # Flies the corridor well clear of both obstacles at cruise altitude.
     rc = _run(_odom([(0, 0, 4), (0, 18, 4), (20, 18, 4), (20, 8, 4)]))
@@ -130,6 +141,31 @@ def test_malformed_sdf_is_infra_failure() -> None:
     # runner-consumed contract branch — must not silently PASS.
     rc = _run(_odom([(0, 0, 4)]), "<<< not valid xml >>>")
     assert rc == 2, f"malformed world SDF must be infra failure (2), got {rc}"
+
+
+def test_rotated_obstacle_emits_warn_not_silent() -> None:
+    # A tilted obstacle (non-zero rpy) is measured with an axis-aligned
+    # approximation, so the helper MUST warn rather than silently mis-measure
+    # (the false-PASS class #791/#796 exist to kill).  A clear path still PASSes,
+    # but the WARN must appear on stderr.
+    rotated = _WORLD_SDF.replace(
+        "<pose>10 10 3.0 0 0 0</pose>", "<pose>10 10 3.0 0 0 0.5</pose>"
+    )
+    assert "0 0 0.5" in rotated, "fixture replace failed — cylinder pose string changed"
+    proc = _run_cap(_odom([(0, 0, 4)]), rotated)
+    assert proc.returncode == 0, f"clear path with a rotated obstacle still PASSes, got {proc.returncode}"
+    assert "non-zero rotation" in proc.stderr, (
+        f"rotated obstacle must emit a WARN, not silently approximate; stderr={proc.stderr!r}"
+    )
+
+
+def test_nonempty_but_unparseable_log_fails_closed() -> None:
+    # A non-empty pose log that yields ZERO parseable samples (truncated or
+    # wrong-format capture) must fail-closed under --expect-nonempty exactly like
+    # an empty log — never a silent PASS (lib_check_proximity.py parse_poses()==[]).
+    rc = _run("garbage line\nnot an odometry block\n42 not a pose\n",
+              _WORLD_SDF, "--expect-nonempty")
+    assert rc == 3, f"non-empty but unparseable log + --expect-nonempty must fail-closed (3), got {rc}"
 
 
 def _main() -> int:
