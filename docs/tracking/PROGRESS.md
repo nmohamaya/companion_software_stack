@@ -4178,4 +4178,17 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #109 (Issue #791 Gazebo collision detection). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #110 — Proximity collision backstop: ground-truth pose vs obstacles (Issue #796)
+
+**Date:** 2026-06-29  
+**Category:** Simulation / Test integrity  
+**Files Added:** `tests/lib_check_proximity.py`, `tests/test_lib_check_proximity.py` (12 tests)
+**Files Modified:** `tests/run_scenario_gazebo.sh` — capture `/model/<drone>/odometry` + run the proximity gate alongside the #791 contact gate
+
+**What:** An independent, always-on collision gate that does not depend on gz contact-sensor plumbing. It captures the drone's ground-truth odometry (from the model's `gz-sim-odometry-publisher-system`) and FAILs if any pose sample penetrates an obstacle's volume (cylinder/box geometry parsed from `test_world.sdf`, drone modelled as a 0.35 m sphere, with an optional near-miss WARN band).
+
+**Why:** Belt-and-suspenders for #791/#794. The contact gate relies on gz reporting static-vs-dynamic contacts, which is version-inconsistent (the #794 review's live-verification unknown). The proximity gate is sim-internal-independent and deterministically unit-tested, so a real strike is caught even if static-obstacle contact sensors don't fire. Both gates run; a collision caught by EITHER FAILs. Fail-closed: empty/missing odometry → FAIL (exit 3). Closes #796. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #110 (Issue #796 proximity collision backstop). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
