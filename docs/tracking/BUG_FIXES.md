@@ -1957,9 +1957,36 @@ EXPECT_TRUE(signaled);  // reliably true (exits early, typically ~200ms–1.3s)
 
 **Found by:** #791 (filed after the #789 scenario-18 strike passed 20/20); root-caused by inspecting the empty `gz_contacts.log` + `contact_helper.out`.
 
-**Limitations / verification:** the live-Gazebo unknown is whether contact sensors on `<static>` obstacles fire in this gz version — verified by step 1 of the PR's verification (clean run must produce non-empty ground contacts). If they don't, fail-closed surfaces it loudly (FAIL, not silent PASS) and the fallback is a ground-truth-pose proximity check — **now implemented as an always-on independent gate in #796** (`tests/lib_check_proximity.py`), so collision detection no longer depends on gz contact plumbing alone.
+**Limitations / verification:** the live-Gazebo unknown is whether contact sensors on `<static>` obstacles fire in this gz version — verified by step 1 of the PR's verification (clean run must produce non-empty ground contacts). If they don't, fail-closed surfaces it loudly (FAIL, not silent PASS) and the fallback is a ground-truth-pose proximity check — **now implemented as an always-on independent gate in #796** (`tests/lib_check_proximity.py`), so collision detection no longer depends on gz contact plumbing alone. **Note (2026-06-29):** the empty `gz_contacts.log` that triggered this investigation was *also* partly Fix #57 (Issue #762) — a transient gz-transport delivery failure — not only the missing sensors. See Fix #57 below; both fixes were necessary.
 
 **Test:** helper exit codes verified functionally (empty+`--expect-nonempty`→3; empty→0; drone-vs-obstacle→1; drone-vs-ground allowlisted→0). End-to-end via live Gazebo (see PR).
+
+---
+
+### Fix #57 — `gz topic -e` delivered zero data to external clients → empty scenario-gate captures (Issue #762)
+
+**Date:** 2026-06-29
+**Severity:** High (test integrity — silently-empty collision/observability gates; was wrongly believed a *permanent* environment block)
+**Files:** Diagnostic re-diagnosis — no code change in this entry. Durable hardening (canary liveness assertion) tracked in **Issue #762** (still open). Affected gates: `tests/run_scenario_gazebo.sh`, `tests/lib_check_contacts.py` (Fix #791), `tests/lib_check_proximity.py` (#796/#797).
+
+**What:** `gz topic -e` (Gazebo Transport subscription) returned **zero bytes** to externally-launched clients while discovery (`gz topic -l`) worked. Every gz-topic scenario gate run as a subprocess captured an empty log: the #740/#744 + #791/#794 contact gates and the #796/#797 proximity gate. The original #762 hypothesis (multi-version gz conflict, à la Fix #51) led to it being treated as a **permanent CRITICAL blocker** — "no gz-topic gate can go green on this machine." That framing was wrong.
+
+**Error messages (searchable):**
+- `gz_contacts.log` / `gz_contacts.stderr` are **0 bytes** despite a live, flying sim
+- `gz topic -l` lists the topic but `gz topic -e -t <topic>` prints nothing
+
+**Why (Root Cause):** NOT a version conflict — this machine has a **single** gz version (gz-sim8 8.14.0 + gz-transport13 13.5.0; `which -a gz` → one binary). The real cause is a **transient multi-interface / routing failure**: the box runs a **NordVPN `nordlynx` (WireGuard)** interface (`100.100.200.166/10`, CGNAT) alongside the LAN (`wlp5s0 192.168.2.229`). gz-transport discovery is multicast (interface-tolerant, keeps working) but the data connection is a **direct TCP connect to the publisher's advertised endpoint**; when that endpoint is advertised/routed via the unreachable VPN interface (or a stale binding), the subscriber connects to nothing → zero data. A machine **restart cleared it** — it is reproducible-then-cleared transient state, *not* a hard property of the host.
+
+**How (Fix):**
+- **Immediate (current state):** the transient state is gone post-restart. Self-test against a headless `gz sim -s -r` minimal world: `gz topic -e -t /clock` received **711 KB in 6 s**; publisher advertised `tcp://192.168.2.229` (LAN), reachable. The #794 contact gate and #797 proximity gate should now function here — they are **no longer "blocked until #762."** (Live PX4+gz re-validation still required — the self-test used a minimal server.)
+- **Do NOT pin `GZ_IP=127.0.0.1`** — verified trap: it makes the server advertise loopback correctly *but breaks multicast discovery over loopback-only*, so subscription goes unreliable. This is almost certainly why the earlier `GZ_IP=127` mitigation returned zero (it made things worse, not the bug persisting).
+- **Durable (pending, Issue #762):** a **canary liveness assertion** in the runner — subscribe to a known-always-publishing topic (`/clock`); if its capture is empty, emit a *distinct* `gz transport not delivering data (transport broken)` FAIL instead of the confusing fail-closed-empty. Root-cause-agnostic: makes any future transient recurrence loud and unambiguous (transport-broken ≠ real-collision ≠ silent-pass).
+
+**Found by:** re-diagnosis 2026-06-29 while resuming #762 to unblock the #794/#797 collision gates; surfaced originally during the #746 cold-start smoke sweep (0-byte `gz_contacts.log`).
+
+**Limitations / verification:** confirmed only against a minimal headless server, not the full PX4+gz launch — a live scenario run is the final confirmation. Recheck anytime with `timeout 5 gz topic -e -t /clock` against a live sim (non-empty = transport OK). If it goes empty again, suspect the VPN/routing (e.g. VPN became the default route), **not** the gz version.
+
+**Test:** transport self-test documented above (711 KB `/clock` received default + `GZ_IP=127` subscriber; publisher endpoint `tcp://192.168.2.229`; `GZ_IP=127` server advertised `tcp://127.0.0.1` but broke discovery).
 
 ---
 
