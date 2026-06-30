@@ -914,12 +914,22 @@ _report_planner_stats() {
         | sort -n | tail -1 || echo "0")
     max_search="${max_search:-0}"
 
-    local path_failures
-    path_failures=$(grep -a "Path FAILED\|path failed\|No path found" "$log" 2>/dev/null | wc -l)
+    # Issue #799: count the planner's ACTUAL failure strings. The old grep
+    # ("Path FAILED|path failed|No path found") matched NONE of them, so a run
+    # that hovered 15× with no obstacle-free path still reported "Path failures: 0"
+    # ("sufficient grid coverage"). The planner emits "Path extraction FAILED"
+    # (greedy+A* both failed), "no obstacle-free path" (→ hover in place), and
+    # "A* fallback recovered" (greedy stalled but A* found a path — degraded, not failed).
+    local path_failures hover_fallbacks fallback_recoveries
+    path_failures=$(grep -aF "Path extraction FAILED" "$log" 2>/dev/null | wc -l)
+    hover_fallbacks=$(grep -aF "no obstacle-free path" "$log" 2>/dev/null | wc -l)
+    fallback_recoveries=$(grep -aF "A* fallback recovered" "$log" 2>/dev/null | wc -l)
 
-    echo "  Total replans    : ${replan_count}"
-    echo "  Max search time  : ${max_search}ms"
-    echo "  Path failures    : ${path_failures}"
+    echo "  Total replans       : ${replan_count}"
+    echo "  Max search time     : ${max_search}ms"
+    echo "  Path failures       : ${path_failures}"
+    echo "  Hover-fallbacks     : ${hover_fallbacks}   (no obstacle-free path → hover in place)"
+    echo "  A* fallback recover : ${fallback_recoveries}"
     echo ""
     echo "  Observations:"
 
@@ -931,8 +941,11 @@ _report_planner_stats() {
         echo "  - Max search time ${max_search}ms — fast, no planning bottleneck"
     fi
 
-    if (( path_failures > 0 )); then
-        echo "  - WARNING: ${path_failures} path failure(s) — grid coverage may have gaps or obstacles block all routes"
+    if (( path_failures > 0 || hover_fallbacks > 0 )); then
+        echo "  - WARNING: ${path_failures} extraction failure(s) + ${hover_fallbacks} hover-fallback(s) —"
+        echo "    obstacles or occupancy over-promotion (grid bloat) block all routes (Issue #799)"
+    elif (( fallback_recoveries > 0 )); then
+        echo "  - ${fallback_recoveries} A* fallback recoveries — greedy stalled but A* found a path; grid getting dense"
     else
         echo "  - Zero path failures — sufficient grid coverage for all legs"
     fi
@@ -987,14 +1000,31 @@ _report_overall_assessment() {
     grep -qa "Mission complete" "$mp_log" 2>/dev/null && mission_complete=true
     grep -qa "COLLISION\|collision" "$mp_log" 2>/dev/null && collision=true
 
+    # Issue #799: only attribute a fault CAUSE when an actual Escalation event
+    # occurred. The old code grepped "pose"/"stale" ANYWHERE in the log (17
+    # benign "pose" lines here, ZERO escalations) and falsely reported "VIO pose
+    # staleness triggered fault escalation … recommend re-running" on a run that
+    # actually failed from occupancy over-promotion. Derive the cause from the
+    # Escalation line itself, matching _report_fault_events()'s detection.
     local fault_cause=""
-    if grep -qa "pose.*stale\|POSE_STALE" "$mp_log" 2>/dev/null; then
-        fault_cause="VIO pose staleness"
-    elif grep -qa "battery\|BATT" "$mp_log" 2>/dev/null; then
-        fault_cause="battery fault"
-    elif grep -qa "fc_lost\|FC_LOST" "$mp_log" 2>/dev/null; then
-        fault_cause="FC link loss"
+    local escalations
+    escalations=$(grep -a "Escalation" "$mp_log" 2>/dev/null || true)
+    if [[ -n "$escalations" ]]; then
+        if echo "$escalations" | grep -qa "pose.*stale\|POSE_STALE"; then
+            fault_cause="VIO pose staleness"
+        elif echo "$escalations" | grep -qa "battery\|BATT"; then
+            fault_cause="battery fault"
+        elif echo "$escalations" | grep -qa "fc_lost\|FC_LOST"; then
+            fault_cause="FC link loss"
+        else
+            fault_cause="fault escalation"
+        fi
     fi
+
+    # Issue #799: detect the over-promotion / no-obstacle-free-path signature
+    # directly — this is the grid-bloat failure mode, NOT a timing artifact.
+    local no_path=false
+    grep -qaF "no obstacle-free path" "$mp_log" 2>/dev/null && no_path=true
 
     local radar_only_count
     radar_only_count=$(grep -a "New obstacle (radar-only)" "$perc_log" 2>/dev/null | wc -l)
@@ -1005,6 +1035,13 @@ _report_overall_assessment() {
         echo "  Mission completed successfully with all checks passing."
     elif [[ "$mission_complete" == "true" && "$result" == "FAIL" ]]; then
         echo "  Mission completed but ${pass_count}/${total_count} checks passed — review failed checks above."
+    elif [[ "$result" == "FAIL" && "$no_path" == "true" ]]; then
+        # Issue #799: planner found no obstacle-free path → occupancy over-promotion (grid bloat).
+        # Takes precedence over fault_cause so this real defect is never masked as "flaky / re-run".
+        echo "  Mission did not complete — planner found NO obstacle-free path (\"hovering in place\")."
+        echo "  Root cause is occupancy-grid over-promotion (grid bloat) sealing navigable corridors —"
+        echo "  see Occupancy Grid Peaks above. This is a CODE/PERCEPTION defect (Issue #799),"
+        echo "  NOT a Gazebo timing artifact — do NOT dismiss as flaky / re-run."
     elif [[ "$result" == "FAIL" && -n "$fault_cause" ]]; then
         echo "  Mission did not complete — ${fault_cause} triggered fault escalation."
         if [[ "$fault_cause" == "VIO pose staleness" ]]; then

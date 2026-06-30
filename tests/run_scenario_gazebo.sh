@@ -909,8 +909,15 @@ if [[ -n "$CONTACT_CAPTURE_PID" ]]; then
     # legitimately expects zero contacts can opt out.
     CONTACT_EXPECT_NONEMPTY=$(json_get "$SCENARIO_FILE" \
         "flight_quality_gates.contact_expect_nonempty" "true")
-    CONTACT_EXPECT_FLAG=""
-    [[ "$CONTACT_EXPECT_NONEMPTY" == "true" ]] && CONTACT_EXPECT_FLAG="--expect-nonempty"
+    # Issue #799 — fail-SAFE default: the gate stays fail-closed UNLESS the
+    # scenario *explicitly* opts out with "false".  The old test
+    # (`== "true"` → set flag) was fail-OPEN: any other value — a json_get
+    # error returning "", a non-canonical "True", a typo — silently dropped the
+    # flag and let an empty contacts log report PASS (the exact silent no-op
+    # #791/#794 set out to kill, observed again on the scenario-18 run that
+    # triggered #799).  Bias toward keeping the gate armed.
+    CONTACT_EXPECT_FLAG="--expect-nonempty"
+    [[ "$CONTACT_EXPECT_NONEMPTY" == "false" ]] && CONTACT_EXPECT_FLAG=""
 
     # Capture Python helper exit code separately so we can distinguish
     # exit 1 (drone-vs-obstacle contact) from exit 2 (capture file missing
