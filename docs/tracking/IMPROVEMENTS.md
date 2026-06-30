@@ -22,6 +22,16 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 - **P3** (`tests/lib_scenario_logging.sh:793`) — `sort -t'—' -k2` passes a 3-byte UTF-8 em-dash to `sort -t`, which only accepts a single-byte delimiter → emits `sort: multi-character tab '—'` on every report run and the `-k2` field sort silently does nothing (the IPC-latency section is sorted by whole line, not by the intended field). Harmless today (the section usually shows "no latency data found") but it's noise + a latent mis-sort. **Fix:** examine an actual `[Latency]` line format and replace with an `awk`-based sort or a single-byte delimiter. Verify the field layout before changing. **When to do it:** next touch of the latency section, or alongside a report-generator pass. **Cross-ref:** Issue #799 Phase C.
 
+### 2026-06-29 (Issue #762 re-diagnosis — gz-transport delivery hardening)
+
+#### Canary liveness assertion before trusting any gz-topic scenario gate
+
+- **P2** (`tests/run_scenario_gazebo.sh`) — the contact (#794) and proximity (#797) gates capture via `gz topic -e` and currently treat an empty capture as fail-closed-empty, which is **indistinguishable** from a real "no collision" or a broken transport (Issue #762, BUG_FIXES Fix #57). **Fix:** before each gate, subscribe to a known-always-publishing topic (`/clock` or `/world/<name>/clock`) as a canary; if the canary log is empty, emit a *distinct* `gz transport not delivering data (transport broken)` failure rather than a confusing collision-FAIL or silent pass. Root-cause-agnostic — makes a future transient gz-transport recurrence loud and unambiguous. **When to do it:** this is the durable deliverable for **Issue #762** (still open); build alongside the next live-Gazebo validation of the collision gates. **Cross-ref:** Issue #762, BUG_FIXES Fix #57.
+
+#### Preflight warning when a VPN interface is the default route
+
+- **P3** (`tests/run_scenario_gazebo.sh` or `deploy/` preflight) — #762's transient failure mode is a VPN (`nordlynx`/`tun*`/`wg*`) interface hijacking the route so gz-transport advertises an endpoint external subprocesses can't reach. **Fix:** a preflight that warns (not fails) if a `tun*`/`wg*`/`nordlynx` interface is the default route before a scenario sweep — surfaces the #762 condition before 80 runs silently mis-capture. **When to do it:** opportunistically, or if #762 recurs. Do **not** "fix" it by pinning `GZ_IP=127.0.0.1` — verified trap (breaks loopback multicast discovery; see Fix #57). **Cross-ref:** Issue #762, BUG_FIXES Fix #57.
+
 ### 2026-06-29 (PR #793 agent-review — OccupancyGrid3D ctor defense-in-depth; production path already fixed)
 
 #### `OccupancyGrid3D` ctor itself should sanitize `extent` / `resolution` (defense-in-depth)
