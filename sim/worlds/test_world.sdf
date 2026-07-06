@@ -26,12 +26,23 @@
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type="adiabatic"/>
 
-    <!-- Issue #791 — Contact system: publishes /world/test_world/contacts for any
-         collision carrying a <sensor type="contact">. Without it the obstacle/
-         ground contact sensors below produce nothing and the scenario runner's
-         collision gate (tests/run_scenario_gazebo.sh #740 Layer 3) fails OPEN
-         (a real obstacle strike reported PASS). -->
-    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+    <!-- ⚠️ DO NOT add any <world>-level <plugin> here. ⚠️
+         In gz-sim (Harmonic/8.x), the presence of ANY <world> <plugin> in the
+         SDF makes gz IGNORE $GZ_SIM_SERVER_CONFIG_PATH entirely — PX4's
+         server.config (src/modules/simulation/gz_bridge/server.config) is what
+         provides SceneBroadcaster (→ /world/<name>/scene/info, the exact service
+         px4-rc.gzsim waits for), Physics, Sensors, Imu, NavSat, Magnetometer …
+         Declaring even one plugin here silently drops ALL of them → PX4 loops
+         "Waiting for Gazebo world…" forever and the sim never starts.
+         Issue #791/#794 originally added a `gz-sim-contact-system` plugin here;
+         it was both redundant (server.config already loads Contact,
+         entity_type="world" entity_name="*") and destructive. The Contact
+         system from server.config processes the <sensor type="contact"> elements
+         defined on the obstacle/ground models below, so /world/test_world/contacts
+         still publishes and the #740 Layer-3 collision gate still fails CLOSED —
+         WITHOUT overriding the rest of the server config. See BUG_FIXES.md.
+         If you ever need a bespoke server plugin, add it to PX4's server.config,
+         never to this world file. -->
 
     <!-- ═══ Scene ═════════════════════════════════════════════ -->
     <scene>

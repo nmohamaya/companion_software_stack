@@ -2250,6 +2250,26 @@ Also **1 Process config test** (`ProcessConfig::LoadFromDefaultJsonFile`) had th
 
 ---
 
+### Fix #63 — Gazebo sim never starts: `<world>` `<plugin>` suppressed PX4 server.config (SceneBroadcaster → `scene/info` missing) (Issue #802)
+
+**Date:** 2026-07-07
+**Severity:** Critical (blocked ALL Gazebo scenario testing)
+**Affects:** every `deploy/launch_gazebo.sh` / `tests/run_scenario_gazebo.sh` run
+
+**Bug:** Every Gazebo scenario hung at PX4 boot with `INFO [init] Waiting for Gazebo world...` repeated until timeout, then PX4 was killed — the sim never started. gz itself was alive and publishing `/world/test_world/clock`, but `gz service -i --service /world/test_world/scene/info` reported **"No service providers"**.
+
+**Root Cause:** `px4-rc.gzsim` gates startup on the **`scene/info`** service, advertised by the **SceneBroadcaster** system plugin. In this stack SceneBroadcaster — plus Physics, Sensors, Imu, NavSat, Magnetometer, Contact — is supplied by **PX4's `server.config`** (`$GZ_SIM_SERVER_CONFIG_PATH`), matching PX4's stock worlds which declare **zero** `<plugin>` tags. **In gz-sim (Harmonic/8.x), the presence of any `<world>`-level `<plugin>` in the SDF makes gz ignore `$GZ_SIM_SERVER_CONFIG_PATH` entirely.** PR #794 added a single `<plugin filename="gz-sim-contact-system">` to `sim/worlds/test_world.sdf` to wire up its new contact sensors — silently dropping the **whole** server.config plugin set. No SceneBroadcaster → no `scene/info` → PX4 waits forever. The added plugin was also redundant: server.config already loads `gz-sim-contact-system` (`entity_type="world" entity_name="*"`), which processes the world's `<sensor type="contact">` elements regardless.
+
+Why it surfaced now: a Jun-29 gz-sim upgrade + reboots changed the effective SDF-plugin-vs-server-config precedence on this box; the #794 world change had been latent until then.
+
+**Fix:** Removed the `<plugin filename="gz-sim-contact-system">` line from `sim/worlds/test_world.sdf` (kept every `<sensor type="contact">`), and added a prominent ⚠️ anti-regression comment forbidding any `<world>`-level `<plugin>` in this world (bespoke server plugins belong in PX4's `server.config`). The #740 Layer-3 contact gate still fails CLOSED — Contact from server.config processes the retained sensors.
+
+**Found by:** Live sim-env debugging (2026-07-07) while unblocking the #799 Phase B validation run. Bisected to e4750e0 (#794) via `git log -S`.
+
+**Test (live, gz-sim 8.14.0, this machine):** With the fix, under the PX4 launch env — `gz service -i --service /world/test_world/scene/info` returns a provider; `/world/test_world/contacts` still advertised (ground_plane + all obstacle sensors); `dynamic_pose/info` + `pose/info` present (Physics alive). Full `deploy/launch_gazebo.sh` reaches `INFO [init] Gazebo world is ready` + MAVLink up + all 7 companion processes start (previously hung → killed).
+
+---
+
 ### Fix #10 — Intermittent Zenoh Test Failures Under Parallel CTest
 
 **Date:** 2026-03-02
