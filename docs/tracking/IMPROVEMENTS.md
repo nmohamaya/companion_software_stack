@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-06-30 (Issue #799 Phase C/#800 CI — flaky test surfaced during the merge run)
+
+#### `PerceptionDrainTest.DrainTimeoutPreventsHanging` is wall-clock-timed → flaky under TSan
+
+- **P2** (`test-infra`; `tests/test_perception_drain.cpp` — `DrainTimeoutPreventsHanging`) — the test arms a **100 ms** drain timeout using real `std::chrono::steady_clock` + `std::this_thread::sleep_for`, then asserts the drain aborted. Under the TSan job the instrumentation slowdown stretches the sleep/measurement so the timing race resolves the wrong way → the test intermittently fails (observed as a `DrainTimeout` failure on the #800 merge run `28470684197`, which passed clean on a plain re-run — same binary, opposite result = timing noise, not a real defect). A wall-clock-vs-sleep race with a 100 ms budget is exactly the flake pattern the "mockable time mandatory" rule exists to kill. **Fix:** convert the timeout path to `drone::util::get_clock().now_ns()` + `ScopedMockClock` so the timeout is crossed deterministically (advance the mock past 100 ms), **or** if the code genuinely needs a real thread to hang, exclude this one test from the TSan label / widen the budget with a documented justification. Prefer the mock-clock route (same pattern used for the #799 Phase B decay tests). **When to do it:** next quiet window, or the next time this flake blocks a merge. **Cross-ref:** #800 CI (run `28470684197`), Issue #799 Phase C. Note: this is the *test* that flaked; the drain logic itself is not implicated.
+
 ### 2026-06-29 (Issue #799 Phase C — found while fixing the scenario report generator)
 
 #### `_report_ipc_latency()` uses a multi-byte em-dash as a `sort -t` delimiter
