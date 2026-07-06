@@ -247,7 +247,9 @@
                 "_comment": "PATH A voxel subscriber (Epic #520 / Issue #608). Disabled by default; scenario 33 enables it.",
                 "enabled": false,
                 "position_clamp_m": 1000.0,
-                "min_confidence": 0.3
+                "min_confidence": 0.3,
+                "_comment_static_cell_ttl_s": "Issue #799 Phase B: promoted static-layer cells decay after this many seconds without re-observation (0 = legacy permanent). 30 s stops perception ghosts accumulating over a flight and sealing the grid (scenario 18: 25->650 cells). HD-map cells exempt; re-observed cells refresh; reactive avoider backstops. DR-054.",
+                "static_cell_ttl_s": 30.0
             }
         },
         "obstacle_avoider": {

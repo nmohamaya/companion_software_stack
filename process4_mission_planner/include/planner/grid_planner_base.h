@@ -99,9 +99,11 @@ struct GridPlannerConfig {
     // out of `static_occupied_` if they aren't re-observed for this many
     // seconds.  HD-map cells loaded via `add_static_obstacle` are never
     // affected.  0 = disabled (legacy permanent-promotion behaviour).
-    // Recommended: 30-60 s for no-HD-map scenarios so the outbound voxel
-    // wake doesn't wall off return corridors.
-    float static_cell_ttl_s = 0.0f;
+    // Issue #799 Phase B: default now 30 s (was 0). Unbounded permanent
+    // promotion let perception ghosts accumulate over a flight and seal the
+    // grid (scenario 18: 25→650 static cells → D*Lite no-path). config/
+    // default.json also sets 30 s; this is the code fallback. DR-054.
+    float static_cell_ttl_s = 30.0f;
     // Issue #638 Phase 3 — instance-aware voxel promotion gate.  When > 0,
     // PATH A voxels are only written to the grid once their tracked
     // instance has accumulated this many distinct frames of observation.

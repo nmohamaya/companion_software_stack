@@ -1490,3 +1490,23 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** the fallback fires on the majority of replans (then D*Lite's incremental value is illusory at this grid scale → switch the backend to plain A*), or the g-consistency root cause is independently fixed.
 
 **Date:** 2026-06-15 (Issue #764 mode b)
+
+## DR-054: Promoted static-cell decay ON by default (30 s), not permanent (Issue #799 Phase B)
+
+**Question:** Should promoted (static-layer) occupancy cells stay permanent by default (`static_cell_ttl_s = 0`), or decay after N seconds without re-observation (default 30 s)?
+
+**Arguments for permanent (0 — the previous default):**
+- Perfect memory for a genuinely static world — an obstacle confirmed once is never forgotten, even if the drone loses sight of it.
+- No risk of a real obstacle decaying while briefly out of the sensor FOV.
+
+**Arguments for decaying (30 s — the new default):**
+- "Remember forever" + imperfect perception = unbounded accumulation. In scenario 18, radar ghosts + the drone's own wake grew the static layer **25→650 cells over one flight**, sealing every navigable corridor → D*Lite found no path → mission incomplete (#799). Permanent memory is only safe if perception is perfect; it isn't.
+- Decay clears the drone's *un-re-observed wake* — cells it flew past, no longer relevant to the path ahead — reopening return corridors.
+- Made fail-safe: **(a)** re-observed cells REFRESH their timestamp — both the voxel path and, new in Phase B, the object/radar path (`inflate_disk_at_cell_`), so a real obstacle *still in view* never decays; **(b)** HD-map cells (`add_static_obstacle`) are timestamp-free and exempt; **(c)** the reactive `ObstacleAvoider3D` backstops any cell that decays while the drone still approaches it.
+- 30 s ≫ a typical inter-waypoint leg (~19 s in scenario 18), so an obstacle ahead is re-observed (refreshed) long before it could decay.
+
+**Decision:** **Decaying, default 30 s.** Set in `config/default.json` (runtime SSOT) + the struct/ctor defaults (code fallback). An explicit `0.0` remains the documented "disabled → permanent" sentinel for any scenario that genuinely needs long-term static memory. The object-path re-observation refresh was added as part of this change — a fail-safe gap the decay unit tests surfaced (a continuously-radar-observed obstacle would otherwise have decayed after 30 s).
+
+**Revisit when:** a scenario needs long-term static memory (map-then-revisit), OR 30 s proves too short (a real obstacle decays during a legitimately long out-of-FOV window → raise it) or too long (ghosts persist long enough to matter → lower it). Already per-scenario tunable via config.
+
+**Date:** 2026-06-30 (Issue #799 Phase B)

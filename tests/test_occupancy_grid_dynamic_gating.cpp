@@ -13,6 +13,7 @@
 // mission-timeout). Safety lens: every gate biases toward KEEPING obstacles —
 // see DESIGN_RATIONALE DR for the asymmetric-cost analysis.
 #include "planner/occupancy_grid_3d.h"
+#include "util/mock_clock.h"  // Issue #799 Phase B — deterministic static-cell decay
 
 #include <cmath>
 #include <limits>
@@ -51,6 +52,20 @@ OccupancyGrid3D make_promoting_grid(float min_promotion_altitude_m) {
                            /*voxel_instance_promotion_observations=*/0,
                            /*min_obstacle_altitude_m=*/0.0f, /*dynamic_confirmation_hits=*/1,
                            min_promotion_altitude_m);
+}
+
+// Grid wired for the static-cell decay tests (#799 Phase B): static promotion
+// ENABLED (2 hits), no takeoff gate, generous cap. static_cell_ttl_s varies.
+OccupancyGrid3D make_decaying_grid(float static_cell_ttl_s) {
+    return OccupancyGrid3D(/*resolution=*/1.0f, /*extent=*/20.0f, /*inflation=*/1.0f,
+                           /*cell_ttl_s=*/3.0f, /*min_confidence=*/0.3f, /*promotion_hits=*/2,
+                           /*radar_promotion_hits=*/3, /*min_promotion_depth_confidence=*/0.0f,
+                           /*max_static_cells=*/100, /*prediction_enabled=*/false,
+                           /*prediction_dt_s=*/2.0f, /*require_radar_for_promotion=*/false,
+                           /*voxel_promotion_hits=*/3, static_cell_ttl_s,
+                           /*voxel_instance_promotion_observations=*/0,
+                           /*min_obstacle_altitude_m=*/0.0f, /*dynamic_confirmation_hits=*/1,
+                           /*min_promotion_altitude_m=*/0.0f);
 }
 
 // Single camera detection (no radar) at (px,py,pz), confidence 0.9. Placed away
@@ -262,4 +277,72 @@ TEST(OccupancyGridRadarInflation, StaticObstacleNonFiniteGeometryIgnored) {
     OccupancyGrid3D grid = make_grid(/*min_alt=*/0.0f, /*confirm_hits=*/1);
     grid.add_static_obstacle(0.0f, 0.0f, std::numeric_limits<float>::infinity(), 2.0f);
     EXPECT_EQ(grid.static_count(), 0u) << "non-finite HD-map geometry must be ignored, not cast UB";
+}
+
+// ── 6. Static-cell decay (Issue #799 Phase B) ────────────────────────────
+// Promoted (static-layer) cells now decay after `static_cell_ttl_s` (default
+// 30 s) without re-observation — bounds the perception-ghost accumulation that
+// sealed the grid in scenario 18 (25→650 static cells → D*Lite no-path).
+// Deterministic via ScopedMockClock: the grid now reads drone::util::get_clock()
+// (Phase B migration), so time is driven in microseconds — no wall-clock sleeps
+// (the flaky-under-tsan anti-pattern). Re-observed cells refresh; 0 = disabled.
+
+TEST(OccupancyGridStaticDecay, PromotedGhostDecaysAfterTtl) {
+    drone::util::ScopedMockClock clock{1'000'000'000ULL};
+    OccupancyGrid3D              grid  = make_decaying_grid(/*static_cell_ttl_s=*/30.0f);
+    auto                         ghost = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose             pose{};
+
+    // Promote the ghost into the static layer (>= promotion_hits observations).
+    for (int i = 0; i < 3; ++i) grid.update_from_objects(ghost, pose);
+    ASSERT_GT(grid.promoted_count(), 0) << "ghost must promote to static after the hit threshold";
+
+    // Advance past the TTL, then tick the grid with a detection FAR from the
+    // ghost — this runs the sweep without re-observing (refreshing) the ghost.
+    clock.mock().advance_s(31);
+    grid.update_from_objects(make_detection(-8.0f, -8.0f, 5.0f), pose);
+
+    EXPECT_EQ(grid.promoted_count(), 0)
+        << "a promoted cell not re-observed for its TTL must decay out of the static layer "
+           "(the #799 fix that bounds ghost accumulation)";
+}
+
+TEST(OccupancyGridStaticDecay, ReobservedPromotedCellSurvivesPastTtl) {
+    drone::util::ScopedMockClock clock{1'000'000'000ULL};
+    OccupancyGrid3D              grid     = make_decaying_grid(/*static_cell_ttl_s=*/30.0f);
+    auto                         obstacle = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose             pose{};
+
+    for (int i = 0; i < 3; ++i) grid.update_from_objects(obstacle, pose);
+    ASSERT_GT(grid.promoted_count(), 0);
+    const int promoted = grid.promoted_count();
+
+    // Re-observe at 20 s (refreshes the cell's timestamp), then reach 40 s total.
+    // 40 s > the 30 s TTL, but only 20 s since the last observation → must persist.
+    clock.mock().advance_s(20);
+    grid.update_from_objects(obstacle, pose);  // refresh
+    clock.mock().advance_s(20);
+    grid.update_from_objects(make_detection(-8.0f, -8.0f, 5.0f),
+                             pose);  // sweep, no re-obs of obstacle
+
+    EXPECT_EQ(grid.promoted_count(), promoted)
+        << "a continuously re-observed real obstacle refreshes its timestamp and must persist "
+           "past the raw TTL — decay only clears the drone's un-re-observed wake";
+}
+
+TEST(OccupancyGridStaticDecay, TtlZeroKeepsLegacyPermanentPromotion) {
+    drone::util::ScopedMockClock clock{1'000'000'000ULL};
+    OccupancyGrid3D              grid = make_decaying_grid(/*static_cell_ttl_s=*/0.0f);  // sentinel
+    auto                         ghost = make_detection(5.0f, 5.0f, 5.0f);
+    drone::ipc::Pose             pose{};
+
+    for (int i = 0; i < 3; ++i) grid.update_from_objects(ghost, pose);
+    ASSERT_GT(grid.promoted_count(), 0);
+    const int promoted = grid.promoted_count();
+
+    clock.mock().advance_s(600);  // far past any TTL
+    grid.update_from_objects(make_detection(-8.0f, -8.0f, 5.0f), pose);
+
+    EXPECT_EQ(grid.promoted_count(), promoted)
+        << "static_cell_ttl_s == 0 is the documented 'disabled' sentinel — permanent promotion";
 }
