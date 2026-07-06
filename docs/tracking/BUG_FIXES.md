@@ -2221,6 +2221,35 @@ Also **1 Process config test** (`ProcessConfig::LoadFromDefaultJsonFile`) had th
 
 ---
 
+### Fix #58 — Scenario report misdiagnosed over-promotion as "VIO staleness / re-run" + fail-open contact gate (Issue #799 Phase C)
+
+**Date:** 2026-06-29
+**Severity:** High (test integrity — a real navigation defect was reported as "flaky, re-run"; a collision gate could silently PASS)
+**Files:** `tests/lib_scenario_logging.sh`, `tests/run_scenario_gazebo.sh`
+
+**What:** The scenario-18 over-promotion FAIL (#799) was masked three ways by the test tooling: (1) `run_report.txt`'s "Overall Assessment" printed *"Mission did not complete — VIO pose staleness triggered fault escalation … typically a Gazebo SITL timing artifact … recommend re-running"* on a run with **zero** fault escalations; (2) the "D* Lite Planner" section reported `Path failures: 0` ("sufficient grid coverage") despite the planner hovering 15× with no obstacle-free path; (3) the contact gate reported `PASS` on a 0-byte `gz_contacts.log`.
+
+**Error messages (searchable):**
+- `Mission did not complete — VIO pose staleness triggered fault escalation` (with no `Escalation:` event in the log)
+- `Path failures    : 0` alongside `no obstacle-free path — hovering in place` in `mission_planner.log`
+- `[contact-sensor] PASS: no contact events captured during the run (… is empty)`
+
+**Why (Root Cause):**
+1. `_report_overall_assessment()` (`lib_scenario_logging.sh`) grepped `pose.*stale|POSE_STALE` *anywhere* in the planner log (17 benign `pose` lines here) and attributed a fault cause with **no check that an actual `Escalation:` event occurred** — then appended the canned "Gazebo timing artifact / recommend re-running".
+2. `_report_planner_stats()` path-failure grep was `Path FAILED|path failed|No path found` — but the planner emits `Path extraction FAILED`, `no obstacle-free path — hovering in place`, and `A* fallback recovered`. None of the real strings were counted.
+3. `run_scenario_gazebo.sh` set the `--expect-nonempty` flag only when `contact_expect_nonempty == "true"` (fail-OPEN): any other value (a `json_get` error returning `""`, a non-canonical `"True"`, a typo) silently dropped the flag → empty log → PASS.
+
+**How (Fix):**
+- `_report_overall_assessment()`: derive the fault cause **only** from actual `Escalation` lines (matching `_report_fault_events()`); add a dedicated over-promotion branch — `no obstacle-free path` present → report "occupancy-grid over-promotion (grid bloat) … CODE/PERCEPTION defect (Issue #799), NOT a Gazebo timing artifact".
+- `_report_planner_stats()`: count the planner's real strings — `Path failures` (`Path extraction FAILED`), `Hover-fallbacks` (`no obstacle-free path`), `A* fallback recover`.
+- `run_scenario_gazebo.sh`: invert the contact-gate flag to **fail-closed by default** — armed unless the scenario explicitly sets `contact_expect_nonempty: false`.
+
+**Found by:** Issue #799 root-cause analysis (scenario-18 over-promotion FAIL, 2026-06-29). Phase C of the 3-PR fix.
+
+**Test:** Regenerated `run_report.txt` from the #799 failed-run logs via `generate_run_report` — Overall Assessment now reports the over-promotion root cause; planner section shows `Path failures: 3 / Hover-fallbacks: 15 / A* fallback recover: 16`. Contact-helper exit codes already covered (empty + `--expect-nonempty` → 3; empty → 0).
+
+---
+
 ### Fix #10 — Intermittent Zenoh Test Failures Under Parallel CTest
 
 **Date:** 2026-03-02
