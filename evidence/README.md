@@ -34,6 +34,28 @@ Candidate future categories (see Issue #804): `scenarios/` (Gazebo
 `run_report.txt` copies), `sanitizers/` (failure excerpts), `benchmarks/`
 (baseline-comparator output), release SBOM snapshots.
 
+## Where do the reports come from? (local vs CI)
+
+Evidence is generated **when the corresponding job runs** — this folder
+only contains what has actually executed on this machine:
+
+- `bash deploy/safety_audit.sh` → `safety-audit/`
+- `bash deploy/run_ci_local.sh` (BUILD/ASAN/TSAN/UBSAN/COV jobs) →
+  `tests/` + `coverage/`; `--job CPPCHECK` → `static-analysis/`
+- GitHub CI runs generate the same evidence on the runner and upload it
+  as `evidence-*` workflow artifacts (runners are ephemeral).
+
+**To pull a CI run's evidence down into this folder:**
+
+```bash
+bash deploy/fetch_ci_evidence.sh              # newest CI run on this branch
+bash deploy/fetch_ci_evidence.sh <run-id>     # specific run
+bash deploy/fetch_ci_evidence.sh --pr <N>     # newest CI run of a PR
+```
+
+which lands under `evidence/ci/<run-id>/evidence-<category>/…`, with each
+run's CI-written `manifest.txt` intact.
+
 ## Adding a new category
 
 ```bash

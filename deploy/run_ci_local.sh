@@ -281,7 +281,12 @@ job_doc() {
 # shellcheck disable=SC2317  # called indirectly via run_job
 job_cppcheck() {
     cd "$PROJECT_DIR"
-    bash deploy/run_cppcheck.sh || echo "  (cppcheck advisory — findings above do not fail local CI)"
+    # Issue #804 — capture the full cppcheck output as evidence (mirrors CI).
+    local ev_dir
+    ev_dir="$(evidence_run_dir static-analysis run_ci_local.sh)"
+    bash deploy/run_cppcheck.sh 2>&1 | tee "${ev_dir}/cppcheck.log" \
+        || echo "  (cppcheck advisory — findings above do not fail local CI)"
+    echo "  evidence: ${ev_dir}"
     return 0
 }
 
