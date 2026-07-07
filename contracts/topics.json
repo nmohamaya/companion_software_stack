@@ -1,0 +1,29 @@
+{
+  "_comment": "Machine-readable wire-contract manifest. Enforced against the compiled structs by tests/test_contracts_manifest.cpp — see contracts/VERSIONING.md for the change rules and ADR-017 for the design.",
+  "kWireVersion": 4,
+  "topics": [
+    { "topic": "/drone_mission_cam", "struct": "VideoFrame", "sizeof_bytes": 6220832 },
+    { "topic": "/drone_stereo_cam", "struct": "StereoFrame", "sizeof_bytes": 614424 },
+    { "topic": "/detected_objects", "struct": "DetectedObjectList", "sizeof_bytes": 4880 },
+    { "topic": "/semantic_voxels", "struct": "SemanticVoxelBatch", "sizeof_bytes": 41024 },
+    { "topic": "/slam_pose", "struct": "Pose", "sizeof_bytes": 384 },
+    { "topic": "/mission_status", "struct": "MissionStatus", "sizeof_bytes": 64 },
+    { "topic": "/trajectory_cmd", "struct": "TrajectoryCmd", "sizeof_bytes": 56 },
+    { "topic": "/payload_commands", "struct": "PayloadCommand", "sizeof_bytes": 48 },
+    { "topic": "/fc_commands", "struct": "FCCommand", "sizeof_bytes": 40 },
+    { "topic": "/fc_state", "struct": "FCState", "sizeof_bytes": 64 },
+    { "topic": "/gcs_commands", "struct": "GCSCommand", "sizeof_bytes": 48 },
+    { "topic": "/mission_upload", "struct": "MissionUpload", "sizeof_bytes": 920 },
+    { "topic": "/payload_status", "struct": "PayloadStatus", "sizeof_bytes": 24 },
+    { "topic": "/system_health", "struct": "SystemHealth", "sizeof_bytes": 448 },
+    { "topic": "/fault_overrides", "struct": "FaultOverrides", "sizeof_bytes": 64 },
+    { "topic": "/radar_detections", "struct": "RadarDetectionList", "sizeof_bytes": 40976 },
+    { "topic": "/drone_thread_health_video_capture", "struct": "ThreadHealth", "sizeof_bytes": 816 },
+    { "topic": "/drone_thread_health_perception", "struct": "ThreadHealth", "sizeof_bytes": 816 },
+    { "topic": "/drone_thread_health_slam_vio_nav", "struct": "ThreadHealth", "sizeof_bytes": 816 },
+    { "topic": "/drone_thread_health_mission_planner", "struct": "ThreadHealth", "sizeof_bytes": 816 },
+    { "topic": "/drone_thread_health_comms", "struct": "ThreadHealth", "sizeof_bytes": 816 },
+    { "topic": "/drone_thread_health_payload_manager", "struct": "ThreadHealth", "sizeof_bytes": 816 },
+    { "topic": "/drone_thread_health_system_monitor", "struct": "ThreadHealth", "sizeof_bytes": 816 }
+  ]
+}

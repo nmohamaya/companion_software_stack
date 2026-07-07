@@ -518,9 +518,11 @@ struct FCState {
 // Issue #716 review — wire-format ABI guards, collocated with the struct
 // definition (matches the pattern used by SemanticVoxel / SemanticVoxelBatch /
 // IpcWaypoint / FaultOverrides etc).  A future field addition that changes
-// `sizeof(FCState)` MUST update the expected size here and bump kWireVersion
-// (see `topics::FC_STATE`).  Until #718 lands cross-version FCState
-// deserialisation, treat `sizeof(FCState)` as part of the public IPC ABI.
+// `sizeof(FCState)` MUST bump kWireVersion (ipc/wire_format.h) and update
+// contracts/topics.json — tests/test_contracts_manifest.cpp turns any drift
+// into a CI failure (Issue #806 / ADR-017).  Until cross-version FCState
+// deserialisation lands (#806 Phase 3), treat `sizeof(FCState)` as part of
+// the public IPC ABI.
 static_assert(std::is_trivially_copyable_v<FCState>,
               "FCState must be trivially copyable for Zenoh raw wire format");
 static_assert(std::is_standard_layout_v<FCState>,

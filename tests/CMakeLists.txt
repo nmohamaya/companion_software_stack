@@ -553,3 +553,12 @@ target_include_directories(compare_to_baseline PRIVATE
 target_link_libraries(compare_to_baseline PRIVATE
     nlohmann_json::nlohmann_json
 )
+
+# ── Wire-contract manifest drift gate (Issue #806 / ADR-017) ─
+add_drone_test(test_contracts_manifest test_contracts_manifest.cpp)
+target_compile_definitions(test_contracts_manifest PRIVATE
+    PROJECT_CONTRACTS_DIR="${PROJECT_SOURCE_DIR}/contracts"
+)
+target_link_libraries(test_contracts_manifest PRIVATE
+    nlohmann_json::nlohmann_json
+)

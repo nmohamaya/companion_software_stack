@@ -4256,4 +4256,25 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #114 (Safety-Engineering Plan v1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #115 — Contracts-lite: staged wire-contract governance (ADR-017)
+
+**Date:** 2026-07-07
+**Category:** IPC — Wire-format governance / CI gate
+**Issue:** [#806](https://github.com/nmohamaya/companion_software_stack/issues/806) (Phases 0+1; Phases 2/3 deferred behind recorded triggers)
+
+**What:** The wire contract's governance was implicit (comments + partial `sizeof` asserts) and had demonstrably rotted: the `FCState` ABI comment promised a size guard that never existed and cited #718 for cross-version deserialisation when #718 was the closed preflight-timeout issue. This lands the staged fix per **ADR-017**: a `contracts/` governance layer (README message set, `VERSIONING.md` compatibility policy, machine-readable `topics.json` manifest: topic ↔ struct ↔ expected `sizeof` ↔ `kWireVersion`) plus a CI drift gate — `tests/test_contracts_manifest.cpp` holds manifest, compiled structs, and the in-test witness table mutually consistent, so a wire change that forgets `contracts/` fails the build. Schema-first codegen (Phase 2) and cross-version deserialisation (Phase 3) are deliberately deferred until their consumers exist (first non-C++ consumer / first forced incompatible bump) — no artifact without a consumer.
+
+**Files Modified:**
+- `contracts/README.md`, `contracts/VERSIONING.md`, `contracts/topics.json` — new governance layer.
+- `docs/adr/ADR-017-staged-wire-contract-governance.md` + `docs/adr/README.md` index row — the decision record.
+- `tests/test_contracts_manifest.cpp` + `tests/CMakeLists.txt` — the drift gate (6 tests, no Zenoh session needed).
+- `common/ipc/include/ipc/ipc_types.h` — fixed the stale FCState ABI comment (#718 → #806/ADR-017, size guard now real via the manifest test).
+- `tests/TESTS.md` — new suite row + per-file section + totals.
+
+**Test count:** +6 (`ContractsManifest`). This PR (#809) stacks on the Safety-Engineering Plan (Improvement #114, PR #808); merge #808 first.
+
+**Why:** A silent `sizeof` drift between peers is wire corruption on a flight-critical bus — G5 of the safety argument (`docs/SAFETY_ENGINEERING.md` §6) now has a mechanical enforcer instead of a promise in a comment. The staging discipline (spend on governance now, codegen only when a polyglot consumer exists) is recorded in ADR-017 so it doesn't get re-litigated.
+
+---
+
+*Last updated after Improvement #115 (contracts-lite wire-contract governance). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
