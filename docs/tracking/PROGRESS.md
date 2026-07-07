@@ -4220,4 +4220,22 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #112 (Issue #799 Phase B — static-cell decay default). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #113 — evidence/ store for generated assurance reports (Issue #804)
+
+**Date:** 2026-07-07  
+**Category:** CI / Test infrastructure / Traceability  
+**Files Modified:**
+- `deploy/lib_evidence.sh` (new) — `evidence_run_dir <category>` helper: creates `evidence/<category>/<UTC-ts>_<git-sha>/`, writes a provenance `manifest.txt` (timestamp, SHA, branch, dirty-flag, host, generator, CI run/job), refreshes a local-only `latest` symlink
+- `evidence/README.md` (new, tracked) + `.gitignore` — layout spec; everything else under `evidence/` is generated, never versioned
+- `deploy/safety_audit.sh` — default report destination → `evidence/safety-audit/<run>/` (positional override preserved)
+- `deploy/run_ci_local.sh` — ctest logs teed to `evidence/tests/<run>/ctest_<variant>.log`; coverage data + summary + HTML copied to `evidence/coverage/<run>/`
+- `.github/workflows/ci.yml` — build matrix uploads `evidence-tests-<variant>`; coverage job assembles + uploads `evidence-coverage` (renamed from `coverage-report`); cppcheck log captured as `evidence-static-analysis`; **new advisory `safety-audit` job** uploading `evidence-safety-audit`
+- `docs/how-to/CI_SETUP.md` — evidence-artifact table + coverage-artifact rename
+
+**What:** One canonical, provenance-stamped store for every generated assurance report (safety audit, ctest logs, coverage, static analysis) — locally and as CI artifacts — replacing reports scattered across the repo root, `build/`, and ephemeral CI stdout.
+
+**Why:** Assurance evidence for a safety-critical stack must be traceable to the exact tree that produced it; ctest logs previously died with the CI runner and the safety audit dropped its report untracked in the repo root. The `safety-audit` CI job ships **advisory** (main currently fails 3 audit rules — triage + promotion to blocking tracked in [IMPROVEMENTS.md](IMPROVEMENTS.md), ADR-016 pattern).
+
+---
+
+*Last updated after Improvement #113 (Issue #804 — evidence store). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
