@@ -127,6 +127,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
 | [IPC — TopicResolver](#ipc--topicresolver) | 1 | 17 | Vehicle_id namespace resolution, validation, Zenoh pub/sub round-trip |
 | [IPC — Serializer](#ipc--serializer) | 1 | 21 | ISerializer<T> interface, RawSerializer round-trip, wire-format compat, null safety |
+| [IPC — Contracts Manifest](#ipc--contracts-manifest) | 1 | 6 | `contracts/topics.json` ↔ compiled-struct drift gate: kWireVersion match, per-topic struct names + `sizeof`, bidirectional topic coverage (Issue #806 / ADR-017) |
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
@@ -142,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **104 C++ + 5 shell + 1 Python** | **2158 (no SDK, 8 Cosys-SDK tests skipped) / 2166 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #799 Phase B static-cell decay default +3 tests in `test_occupancy_grid_dynamic_gating.cpp` (`OccupancyGridStaticDecay`: promoted ghost decays after TTL; re-observed promoted cell survives past TTL; `ttl_s=0` keeps legacy permanent promotion) → that file now 16 tests. `ctest -N --test-dir build` reports **2158** (no SDK) / **2166** (+SDK). For earlier deltas see PROGRESS.md. |
+| **Total** | **105 C++ + 5 shell + 1 Python** | **2164 (no SDK, 8 Cosys-SDK tests skipped) / 2172 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #806 contracts-lite +6 tests in new `test_contracts_manifest.cpp` (`ContractsManifest`: manifest parses; kWireVersion matches code; bidirectional topic coverage; struct names + `sizeof` match compiled structs — the wire-contract drift gate, ADR-017). `ctest -N --test-dir build` reports **2164** (no SDK) / **2172** (+SDK). Previous PR (#799 Phase B): +3 decay tests → `test_occupancy_grid_dynamic_gating.cpp` at 16. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -1665,6 +1666,25 @@ pytest test suite, separate from the C++ GTest suite tracked by ctest.
 | `TopicResolverBusTest` | 4 | Default resolver, set_topic_resolver persistence, namespaced Zenoh pub/sub round-trip, multi-namespace isolation |
 
 **RESOURCE_LOCK:** `zenoh_session` (bus tests open Zenoh sessions)
+
+---
+
+## IPC — Contracts Manifest
+
+### test_contracts_manifest.cpp — 6 tests
+
+**What it tests:** the wire-contract drift gate ([Issue #806](https://github.com/nmohamaya/companion_software_stack/issues/806) / [ADR-017](../docs/adr/ADR-017-staged-wire-contract-governance.md)) — holds [`contracts/topics.json`](../contracts/topics.json), the compiled wire structs (`ipc_types.h`), and the in-test topic↔struct witness table mutually consistent. A struct size change, topic rename, or `kWireVersion` bump that doesn't consciously update `contracts/` fails CI. Change rules: [`contracts/VERSIONING.md`](../contracts/VERSIONING.md).
+
+| Test | What is validated |
+|------|-------------------|
+| `ManifestFileParses` | `contracts/topics.json` exists (via `PROJECT_CONTRACTS_DIR`), parses, has `kWireVersion` + non-empty `topics` |
+| `WireVersionMatchesCode` | Manifest `kWireVersion` == `drone::ipc::kWireVersion` — a code bump without a manifest update is red |
+| `EveryCodeTopicPresentInManifest` | All 23 `topics::` constants (16 data + 7 thread-health) have a manifest row |
+| `NoUnknownTopicsInManifest` | Every manifest row maps to a known topic — catches renames/removals leaving orphan rows |
+| `StructNamesMatchBinding` | Per topic, the manifest's `struct` matches the witness table |
+| `StructSizesMatchCompiledStructs` | Per topic, `sizeof_bytes` == compiled `sizeof(struct)` — the ABI drift gate (sizeof is public IPC ABI until #806 Phase 3) |
+
+No Zenoh session (pure file + `sizeof` checks) — no `RESOURCE_LOCK` needed.
 
 ---
 
