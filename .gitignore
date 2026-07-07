@@ -118,7 +118,6 @@ AGENT_REPORT.md
 docs/design/modularity_guide.md
 
 # Generated assurance evidence (safety audit, ctest logs, coverage,
-# static analysis) — see evidence/README.md.  Only the README is tracked;
-# CI uploads evidence as workflow artifacts instead.
-evidence/*
-!evidence/README.md
+# static analysis) — fully gitignored, never versioned.  Layout spec in
+# docs/how-to/EVIDENCE.md; CI uploads evidence as workflow artifacts.
+evidence/

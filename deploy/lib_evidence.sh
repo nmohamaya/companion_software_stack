@@ -12,8 +12,8 @@
 #     <report files...>     ← written by the caller
 #   evidence/<category>/latest  → newest run dir (convenience symlink)
 #
-# evidence/* is gitignored (only evidence/README.md is tracked); CI
-# uploads each category as a workflow artifact.  See evidence/README.md.
+# evidence/ is fully gitignored; CI uploads each category as a
+# workflow artifact.  Layout spec: docs/how-to/EVIDENCE.md.
 #
 # Usage (from any deploy/tests script):
 #   source "$(dirname "${BASH_SOURCE[0]}")/lib_evidence.sh"   # adjust path

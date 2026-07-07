@@ -170,7 +170,7 @@ Without this, GitHub cancels all matrix legs as soon as one fails. We want all 4
 4. `lcov --capture` collects raw `.gcda` data.
 5. `lcov --remove` strips system headers (`/usr/*`), googletest, and test source files.
 6. `genhtml` produces an HTML report.
-7. The lcov data + summary + HTML are assembled under `evidence/coverage/<ts>_<sha>/` and `actions/upload-artifact@v4` uploads them as `evidence-coverage` (14-day retention). See `evidence/README.md` (Issue #804).
+7. The lcov data + summary + HTML are assembled under `evidence/coverage/<ts>_<sha>/` and `actions/upload-artifact@v4` uploads them as `evidence-coverage` (14-day retention). See [EVIDENCE.md](EVIDENCE.md) (Issue #804).
 
 **Downloading the report:** Go to the workflow run → Artifacts → click `evidence-coverage` → unzip → open `<run>/html/index.html`.
 
@@ -180,7 +180,7 @@ Without this, GitHub cancels all matrix legs as soon as one fails. We want all 4
 
 ## Evidence artifacts (Issue #804)
 
-Every assurance report CI generates is stored under the canonical `evidence/` layout (`evidence/<category>/<UTC-ts>_<git-sha>/` + `manifest.txt` provenance stamp — spec in `evidence/README.md`) and uploaded as a workflow artifact:
+Every assurance report CI generates is stored under the canonical `evidence/` layout (`evidence/<category>/<UTC-ts>_<git-sha>/` + `manifest.txt` provenance stamp — spec in [EVIDENCE.md](EVIDENCE.md)) and uploaded as a workflow artifact:
 
 | Artifact | Source job | Contents |
 | --- | --- | --- |

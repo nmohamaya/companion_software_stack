@@ -1,10 +1,13 @@
 # evidence/ — generated assurance reports
 
-Canonical store for every generated assurance report, locally and in CI
-(Issue #804). Everything in this folder **except this README is
-gitignored** — evidence is generated, never versioned; in CI each
-category is uploaded as a workflow artifact (`evidence-*`, 14-day
-retention) because runners are ephemeral.
+The repo-root `evidence/` folder is the canonical store for every
+generated assurance report, locally and in CI (Issue #804). The folder
+is **fully gitignored** — evidence is generated, never versioned (this
+spec lives here in `docs/how-to/` for that reason); in CI each category
+is uploaded as a workflow artifact (`evidence-*`, 14-day retention)
+because runners are ephemeral. The folder is created on demand by
+`deploy/lib_evidence.sh` — a fresh clone has no `evidence/` until the
+first report is generated.
 
 ## Layout
 

@@ -4226,7 +4226,7 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 **Category:** CI / Test infrastructure / Traceability  
 **Files Modified:**
 - `deploy/lib_evidence.sh` (new) — `evidence_run_dir <category>` helper: creates `evidence/<category>/<UTC-ts>_<git-sha>/`, writes a provenance `manifest.txt` (timestamp, SHA, branch, dirty-flag, host, generator, CI run/job), refreshes a local-only `latest` symlink
-- `evidence/README.md` (new, tracked) + `.gitignore` — layout spec; everything else under `evidence/` is generated, never versioned
+- `docs/how-to/EVIDENCE.md` (new) + `.gitignore` — layout spec; the whole `evidence/` folder is gitignored (generated, never versioned)
 - `deploy/safety_audit.sh` — default report destination → `evidence/safety-audit/<run>/` (positional override preserved)
 - `deploy/run_ci_local.sh` — ctest logs teed to `evidence/tests/<run>/ctest_<variant>.log`; coverage data + summary + HTML copied to `evidence/coverage/<run>/`
 - `.github/workflows/ci.yml` — build matrix uploads `evidence-tests-<variant>`; coverage job assembles + uploads `evidence-coverage` (renamed from `coverage-report`); cppcheck log captured as `evidence-static-analysis`; **new advisory `safety-audit` job** uploading `evidence-safety-audit`
