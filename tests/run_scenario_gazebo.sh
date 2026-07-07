@@ -729,8 +729,26 @@ if [[ "$STARTUP_OK" == "true" ]]; then
         PROX_DRONE_MODEL=$(json_get "$SCENARIO_FILE" \
             "flight_quality_gates.contact_drone_pattern" "x500_companion")
         POSE_CAPTURE_LOG="${SCENARIO_LOG_DIR}/gz_odometry.log"
-        echo -e "  ${CYAN}Starting odometry capture on /model/${PROX_DRONE_MODEL}/odometry${NC}"
-        gz topic -e -t "/model/${PROX_DRONE_MODEL}/odometry" \
+        # Issue #802 — PX4's gz-bridge spawns the model as
+        # "${PX4_SIM_MODEL}_${instance}" (e.g. x500_companion_0), so the
+        # odometry topic carries the instance suffix. Discover the advertised
+        # topic instead of assuming the bare model name — a bare-name
+        # subscribe binds to a never-advertised topic, captures 0 bytes, and
+        # trips the fail-closed proximity gate on every run.
+        # `contact_drone_pattern` is a SUBSTRING matcher (same semantics as
+        # lib_check_contacts.py), so match it anywhere within the model-name
+        # segment. Single-vehicle assumption: first match wins.
+        PROX_ODOM_TOPIC=$(gz topic -l 2>/dev/null \
+            | grep -m1 -E "^/model/[^/]*${PROX_DRONE_MODEL}[^/]*/odometry$" || true)
+        if [[ -z "$PROX_ODOM_TOPIC" ]]; then
+            # Fall back to the constructed name; the downstream fail-closed
+            # empty-log check flags it loudly if this is also silent.
+            PROX_ODOM_TOPIC="/model/${PROX_DRONE_MODEL}/odometry"
+            echo -e "  ${YELLOW}WARN: no advertised /model/${PROX_DRONE_MODEL}*/odometry topic;${NC}"
+            echo -e "  ${YELLOW}      falling back to ${PROX_ODOM_TOPIC} (gate fails closed if silent)${NC}"
+        fi
+        echo -e "  ${CYAN}Starting odometry capture on ${PROX_ODOM_TOPIC}${NC}"
+        gz topic -e -t "${PROX_ODOM_TOPIC}" \
             > "$POSE_CAPTURE_LOG" \
             2> "${SCENARIO_LOG_DIR}/gz_odometry.stderr" &
         POSE_CAPTURE_PID=$!
