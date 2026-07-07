@@ -59,8 +59,41 @@ jobs:
         sudo apt-get install -y --no-install-recommends cppcheck
     - name: Run cppcheck (advisory — non-blocking)
       run: |
-        bash deploy/run_cppcheck.sh \
+        # Issue #804 — capture the full cppcheck output as evidence.
+        set -o pipefail
+        EV_DIR="$(source deploy/lib_evidence.sh && evidence_run_dir static-analysis ci-cppcheck)"
+        bash deploy/run_cppcheck.sh 2>&1 | tee "${EV_DIR}/cppcheck.log" \
           || echo "::warning::cppcheck reported issues (advisory, non-blocking — triage tracked in docs/tracking/IMPROVEMENTS.md)"
+    - name: Upload static-analysis evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: evidence-static-analysis
+        path: evidence/static-analysis/
+        retention-days: 14
+
+  # ── Safety-critical C++ audit (advisory, non-blocking) ───────────
+  # Issue #804 — runs deploy/safety_audit.sh (28 CLAUDE.md safety rules)
+  # and stores the markdown report as evidence. ADVISORY for now: main
+  # carries a known backlog (3 failing rules — see IMPROVEMENTS.md);
+  # promote to blocking once the backlog is triaged (ADR-016 pattern).
+  safety-audit:
+    runs-on: ubuntu-24.04
+    name: safety-audit (advisory)
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Run safety audit (advisory — non-blocking)
+      run: |
+        bash deploy/safety_audit.sh \
+          || echo "::warning::safety audit reported violations (advisory, non-blocking — triage tracked in docs/tracking/IMPROVEMENTS.md)"
+    - name: Upload safety-audit evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: evidence-safety-audit
+        path: evidence/safety-audit/
+        retention-days: 14
 
   # ── Build + test matrix ──────────────────────────────────────────
   # Intentionally NOT `needs: format-check` — see docs/how-to/CI_SETUP.md
@@ -135,6 +168,11 @@ jobs:
     - name: Run tests
       working-directory: build
       run: |
+        # Issue #804 — full ctest output is teed into the evidence store
+        # and uploaded as a workflow artifact (evidence-tests-<variant>).
+        # pipefail keeps ctest's exit code authoritative through the tee.
+        set -o pipefail
+        EV_DIR="$(cd .. && source deploy/lib_evidence.sh && evidence_run_dir tests "ci-build-${{ matrix.sanitizer }}")"
         CTEST_EXCLUDE=""
         if [ "${{ matrix.sanitizer }}" = "tsan" ]; then
           # Exclude tests that create Zenoh sessions — libzenohc internal threading
@@ -145,11 +183,20 @@ jobs:
           # Also excludes MAVSDK/YOLO (external library threading).
           CTEST_EXCLUDE="Zenoh|Mavlink|Yolo|Liveliness|MessageBus|TopicResolver|ProcessContext|IpcRoundTrip|FaultCascade"
         fi
+        VARIANT="${{ matrix.sanitizer == 'none' && 'default' || matrix.sanitizer }}"
         if [ -n "${CTEST_EXCLUDE}" ]; then
-          ctest --output-on-failure -j"$(nproc)" -E "${CTEST_EXCLUDE}"
+          ctest --output-on-failure -j"$(nproc)" -E "${CTEST_EXCLUDE}" 2>&1 | tee "${EV_DIR}/ctest_${VARIANT}.log"
         else
-          ctest --output-on-failure -j"$(nproc)"
+          ctest --output-on-failure -j"$(nproc)" 2>&1 | tee "${EV_DIR}/ctest_${VARIANT}.log"
         fi
+
+    - name: Upload test evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: evidence-tests-${{ matrix.sanitizer == 'none' && 'default' || matrix.sanitizer }}
+        path: evidence/tests/
+        retention-days: 14
 
   # ── Code coverage report ─────────────────────────────────────────
   coverage:
@@ -254,11 +301,21 @@ jobs:
     - name: Generate HTML report
       run: genhtml coverage.info --output-directory coverage-report --title "Companion Stack Coverage" --rc genhtml_branch_coverage=1
 
-    - name: Upload coverage report
+    - name: Assemble coverage evidence
+      if: always()
+      run: |
+        # Issue #804 — lcov data + summary + HTML under evidence/coverage/.
+        EV_DIR="$(source deploy/lib_evidence.sh && evidence_run_dir coverage ci-coverage)"
+        [ -f coverage.info ] && cp coverage.info "${EV_DIR}/coverage.info"
+        lcov --summary coverage.info > "${EV_DIR}/summary.txt" 2>&1 || true
+        [ -d coverage-report ] && cp -r coverage-report "${EV_DIR}/html" || true
+
+    - name: Upload coverage evidence
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-report
-        path: coverage-report/
+        name: evidence-coverage
+        path: evidence/coverage/
         retention-days: 14
 
   # ── Orchestrator Python tests ─────────────────────────────────────

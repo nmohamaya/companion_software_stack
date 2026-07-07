@@ -16,11 +16,22 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-07-07 (Issue #804 — evidence store rollout)
+
+#### Safety audit fails 3 rules + 7 warnings on main — triage, then promote the CI `safety-audit` job to blocking
+
+- **P2** (`ci`; `deploy/safety_audit.sh`, `.github/workflows/ci.yml` `safety-audit` job) — the 28-rule CLAUDE.md safety audit currently reports **3 FAIL + 7 WARN** on main (run it: `bash deploy/safety_audit.sh`; report lands in `evidence/safety-audit/latest/`). The new CI job therefore ships **advisory** (`::warning`, non-blocking) — same ADR-016 pattern as cppcheck/clang-tidy. **Fix:** triage the 3 failing rules (fix, or add justified per-rule suppressions with DR entries where the usage is intentional), then drop the `|| echo ::warning` so the job blocks merge. **When to do it:** next quiet window — a safety audit that can't block is documentation, not a gate. **Cross-ref:** Issue #804.
+
+#### CI_SETUP.md pipeline overview is stale (says 3 jobs; the workflow has 8+, and the gate graph contradicts Issue #758)
+
+- **P3** (`docs`; `docs/how-to/CI_SETUP.md` §Pipeline Overview, §Job Dependency Graph) — the overview table says "**3 jobs**" while `ci.yml` has format-check, doc-lint, cppcheck, safety-audit, build×4, coverage, orchestrator-tests (plus pr-size/agent-boundaries in sibling workflows), and the dependency graph still shows `build needs: format-check` — removed in Issue #758 (the ci.yml comment explicitly documents that the gates now run in parallel). This doc is the canonical CI description, so its own staleness matters. **Fix:** rewrite the overview + graph from `ci.yml`. **When to do it:** next docs sweep or next CI-matrix change. **Cross-ref:** noticed during #804 (only the coverage/evidence sections were updated there — a full overhaul was out of scope).
+
 ### 2026-07-07 (Issue #802 — noticed while fixing the contact-gate capture topics)
 
 #### Contact capture writes ~8 MB/run of resting-ground spam — add `<update_rate>` to the ground_plane contact sensor
 
 - **P3** (`test-infra`; `sim/worlds/test_world.sdf` ground_plane `<sensor name="contact">`) — with the aggregate `/world/test_world/contacts` topic actually delivering data (Fix #64), the ground_plane sensor streams contact messages at full physics rate (250 Hz) the entire time the drone rests on the ground: measured **18.3 MB per 20 s** resting, **7.8 MB** per scenario-18 run in `gz_contacts.log`. The gate only needs ground contacts as a liveness proof + takeoff/landing markers — not 250 Hz. **Fix:** add `<update_rate>10</update_rate>` (or similar) to the **ground_plane** sensor only; leave the 4 obstacle sensors at full rate (a real strike is short — don't risk undersampling it). Semantic check before landing it: confirm `lib_check_contacts.py` liveness + allowlist logic is rate-independent. **When to do it:** next touch of the world file or if capture size ever bothers a long scenario. **Cross-ref:** Issue #802 / PR #803 (Fix #64).
+
 ### 2026-06-30 (Issue #799 Phase C/#800 CI — flaky test surfaced during the merge run)
 
 #### `PerceptionDrainTest.DrainTimeoutPreventsHanging` is wall-clock-timed → flaky under TSan

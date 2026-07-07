@@ -125,7 +125,16 @@ WARN=0
 TOTAL=0
 
 # ── Output helpers ───────────────────────────────────────────────
-REPORT_FILE="${1:-safety_audit_report.md}"
+# Issue #804 — default report destination is the canonical evidence
+# store (evidence/safety-audit/<ts>_<sha>/); an explicit positional
+# argument still overrides it (back-compat with `safety_audit.sh /path`).
+if [[ -n "${1:-}" ]]; then
+    REPORT_FILE="$1"
+else
+    # shellcheck source=deploy/lib_evidence.sh
+    source "${REPO_ROOT}/deploy/lib_evidence.sh"
+    REPORT_FILE="$(evidence_run_dir safety-audit safety_audit.sh)/safety_audit_report.md"
+fi
 REPORT=""
 
 log_pass() {

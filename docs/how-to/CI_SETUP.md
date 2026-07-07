@@ -170,11 +170,26 @@ Without this, GitHub cancels all matrix legs as soon as one fails. We want all 4
 4. `lcov --capture` collects raw `.gcda` data.
 5. `lcov --remove` strips system headers (`/usr/*`), googletest, and test source files.
 6. `genhtml` produces an HTML report.
-7. `actions/upload-artifact@v4` uploads the report (14-day retention).
+7. The lcov data + summary + HTML are assembled under `evidence/coverage/<ts>_<sha>/` and `actions/upload-artifact@v4` uploads them as `evidence-coverage` (14-day retention). See [EVIDENCE.md](EVIDENCE.md) (Issue #804).
 
-**Downloading the report:** Go to the workflow run → Artifacts → click `coverage-report` → unzip → open `index.html`.
+**Downloading the report:** Go to the workflow run → Artifacts → click `evidence-coverage` → unzip → open `<run>/html/index.html`.
 
 **Current baseline:** ~75% line coverage, ~85% function coverage.
+
+---
+
+## Evidence artifacts (Issue #804)
+
+Every assurance report CI generates is stored under the canonical `evidence/` layout (`evidence/<category>/<UTC-ts>_<git-sha>/` + `manifest.txt` provenance stamp — spec in [EVIDENCE.md](EVIDENCE.md)) and uploaded as a workflow artifact:
+
+| Artifact | Source job | Contents |
+| --- | --- | --- |
+| `evidence-tests-<variant>` | `build-and-test` matrix (default/asan/tsan/ubsan) | full `ctest_<variant>.log` |
+| `evidence-coverage` | `coverage` | `coverage.info`, `summary.txt`, `html/` |
+| `evidence-static-analysis` | `cppcheck (advisory)` | `cppcheck.log` |
+| `evidence-safety-audit` | `safety-audit (advisory)` | `safety_audit_report.md` (28-rule CLAUDE.md audit) |
+
+The `safety-audit` job is **advisory** (non-blocking) while the known rule backlog is triaged — promotion path per ADR-016, tracked in `docs/tracking/IMPROVEMENTS.md`. Locally, `deploy/run_ci_local.sh` and `deploy/safety_audit.sh` write into the same `evidence/` layout.
 
 ---
 
