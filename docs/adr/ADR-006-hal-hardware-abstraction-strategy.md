@@ -9,6 +9,8 @@
 | **Supersedes** | — |
 | **Related** | ADR-001 (IPC Framework), ADR-002 (Modular IPC Backend), Issue #149 |
 
+> **Update note (2026-07):** The core HAL / Strategy / Factory decision stands — this ADR remains **Accepted**.  Since it was written a fourth backend family, **Cosys-AirSim**, was added (§3.3); the 2D `PotentialFieldPlanner`/`AStarPlanner`/`PotentialFieldAvoider` strategies were removed in favour of `DStarLitePlanner` + `ObstacleAvoider3D` (§6, Issues #203/#207); and the design docs referenced below moved into `docs/architecture/` and `docs/design/`.  The affected claims are corrected inline.
+
 ---
 
 ## 1. Context
@@ -80,16 +82,19 @@ Optional backends are compile-guarded (`#ifdef HAVE_MAVSDK`,
 If a requested backend is unavailable, the factory throws
 `std::runtime_error` at startup — never at runtime.
 
-### 3.3 Three-Tier Backend Hierarchy
+### 3.3 Backend Tier Hierarchy
+
+*(Originally a three-tier hierarchy; a fourth backend family, Cosys-AirSim, was added later — "Tier 3" in [ADR-011](ADR-011-cosys-airsim-photorealistic-simulation.md).)*
 
 | Tier | Name | Activation | Purpose |
 |------|------|-----------|---------|
 | 0 | **Simulated** | `"backend": "simulated"` | Unit tests, developer CI, default |
 | 1 | **Gazebo** | `"backend": "gazebo"` | SITL integration tests (HAVE_GAZEBO) |
 | 2 | **Real** | `"backend": "mavlink"` / `"v4l2"` / etc. | Physical hardware |
+| 3 | **Cosys-AirSim** | `"backend": "cosys_airsim"` / `"cosys_rpc"` / `"cosys_airsim_groundtruth"` / `"cosys_echo"` | Unreal-engine SITL: RPC sensors + ground-truth passthrough (HAVE_COSYS_AIRSIM); "Tier 3" in ADR-011 |
 
 The goal is that the full application stack runs identically at every
-tier — only the HAL backend changes.  See [SIMULATION_ARCHITECTURE.md](../SIMULATION_ARCHITECTURE.md)
+tier — only the HAL backend changes.  See [SIMULATION_ARCHITECTURE.md](../architecture/SIMULATION_ARCHITECTURE.md)
 for the tier decision rationale.
 
 ---
@@ -121,10 +126,12 @@ the same encapsulation with a single binary covering all tiers.
 
 ### Positive
 
-- Process code is hardware-agnostic: all 7 process `main.cpp` files contain
-  no `#ifdef HAVE_HARDWARE` guards
-- The same binary runs in simulation and on real hardware; config is the
-  only difference
+- Process code is largely hardware-agnostic: no `main.cpp` selects a backend
+  by `#ifdef`.  The one exception is `process3_slam_vio_nav/src/main.cpp`,
+  whose sim-only Cosys-AirSim ground-truth passthrough pose thread is wrapped
+  in `#ifdef HAVE_COSYS_AIRSIM` (Issue #696)
+- For a given build the same binary runs in simulation and on real hardware;
+  config — not a rebuild — selects the backend at startup
 - Adding a new backend (e.g., `FlirBosonCamera`) requires one new class
   and one `if (backend == "flir_boson")` branch in the factory — no process
   code changes
@@ -162,15 +169,17 @@ live in their respective process namespaces:
 
 | File | Role |
 |------|------|
-| `process4_mission_planner/include/planner/ipath_planner.h` | `IPathPlanner` + `PotentialFieldPlanner` + `AStarPlanner` |
-| `process4_mission_planner/include/planner/iobstacle_avoider.h` | `IObstacleAvoider` + `PotentialFieldAvoider` + `ObstacleAvoider3D` |
+| `process4_mission_planner/include/planner/ipath_planner.h` | `IPathPlanner` interface only (concrete `DStarLitePlanner` in `dstar_lite_planner.h`; `planner_factory.h` backend `"dstar_lite"`) |
+| `process4_mission_planner/include/planner/iobstacle_avoider.h` | `IObstacleAvoider` interface only (concrete `ObstacleAvoider3D` in `obstacle_avoider_3d.h`) |
 | `process7_system_monitor/include/monitor/iprocess_monitor.h` | `IProcessMonitor` + `LinuxProcessMonitor` |
 
-See [hal_design.md](../hal_design.md) for the full interface reference.
+See [hal_design.md](../design/hal_design.md) for the full interface reference.
 
 ---
 
 ## 7. Review Status
 
-Accepted — all interfaces implemented, 66 HAL unit tests passing.  No
-known issues.
+Accepted — all interfaces implemented and covered by the HAL unit-test
+suites (`test_hal.cpp`, `test_radar_hal.cpp`, `test_cosys_hal_backends.cpp`,
+`test_hal_camera_lifetime.cpp`; live count in `tests/TESTS.md`).  No known
+issues.

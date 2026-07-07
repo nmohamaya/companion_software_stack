@@ -1,5 +1,7 @@
 # ADR-011: Cosys-AirSim Photorealistic Simulation Layer
 
+> **Update note (2026-07):** The "native radar" story in Sections 2 and 8 is superseded — Cosys-AirSim's base SDK ships no radar sensor. `CosysRadarBackend` emulates radar from a LiDAR point cloud via `getLidarData()` (Issue #702, no Doppler) and never calls `getRadarData()`. The proper FMCW radar-physics role is now filled by `CosysEchoBackend` (Cosys-Lab EchoSimple sensor, type 7, via `getEchoData()`, Issue #705), with `CosysGroundTruthRadarBackend` as a zero-clutter validation oracle (Issue #698). The radar claims below are corrected inline; the core Tier 3 decision is unchanged. `config/cosys_airsim.json` now exists (created 2026-04-18), alongside `config/cosys_airsim_dev.json` and `config/cosys_settings.json`.
+
 | Field | Value |
 |-------|-------|
 | **Status** | Accepted |
@@ -55,7 +57,7 @@ Extend the existing two-tier simulation model (ADR-009) with a third tier:
 | **CI cadence** | Every PR | Nightly / manual | On-demand (perception PRs) |
 | **Validates** | IPC, FSM, config, faults | Nav, planning, physics | ML perception, depth, radar fusion |
 | **Rendering** | None | Ogre2 (functional) | UE5 (photorealistic) |
-| **Radar** | Simulated | gpu_lidar hack | Native radar model |
+| **Radar** | Simulated | gpu_lidar hack | Echo FMCW radar (Cosys EchoSimple) |
 | **PX4** | SimulatedFCLink | MAVSDK (real PX4 SITL) | MAVSDK (real PX4 SITL) |
 | **ML models** | Not exercised | Not meaningful (domain gap) | Full pipeline (YOLO + DA V2) |
 
@@ -69,7 +71,7 @@ We evaluated 5 simulators against our requirements:
 |-----------|--------------|-------------------|------------|-------------|-----------|
 | Rendering | Ogre2 (functional) | **UE5 photorealistic** | Unity (moderate) | UE5 photorealistic | RTX ray-traced |
 | PX4 SITL | Native | **Native** | No | No | ROS2 bridge |
-| Radar | gpu_lidar hack | **Native radar model** | None | None | None |
+| Radar | gpu_lidar hack | **Echo FMCW radar sensor** | None | None | None |
 | Docker/Headless | gz-server headless | **Documented UE5 headless + Docker** | No Docker | Early stage | Omniverse stack |
 | C++ API | gz-transport | **RPC client (msgpack)** | Python only | Python only | Python/C++ |
 | Maintenance | OSRF, very active | **Univ. Antwerp, active** | ~Abandoned (2021) | Very new, unstable | NVIDIA, heavy |
@@ -80,7 +82,7 @@ We evaluated 5 simulators against our requirements:
 
 1. **Native PX4 SITL** — Only option besides Gazebo. Our `MavlinkFCLink` works unchanged (TCP URI instead of UDP). Flightmare and FlightForge lack PX4 support entirely, requiring a custom flight controller bridge.
 
-2. **Native radar sensor** — Eliminates our `gpu_lidar` approximation. Critical for validating the UKF fusion engine's radar-camera trust weighting. No other candidate offers radar.
+2. **Native radar sensor** — Cosys-Lab's EchoSimple FMCW sensor (`getEchoData()`, Issue #705) eliminates our `gpu_lidar` approximation with physical radar behaviour. Critical for validating the UKF fusion engine's radar-camera trust weighting. No other candidate offers radar. *(The base AirSim SDK ships no radar — the original `getRadarData()` plan was dropped; `CosysRadarBackend` is a LiDAR-as-radar proxy via `getLidarData()`, Issue #702, no Doppler.)*
 
 3. **Active C++ API with Docker support** — Maps cleanly to our HAL interfaces. Flightmare is Python-only and abandoned since 2021. FlightForge is too early-stage for production use. Isaac Sim is proprietary and requires the full Omniverse stack.
 
@@ -114,7 +116,8 @@ New HAL backends follow the existing pattern (ADR-006):
 | Backend | Interface | Notes |
 |---------|-----------|-------|
 | `CosysCameraBackend` | `ICamera` | AirSim RPC `simGetImage()` → BGR frame |
-| `CosysRadarBackend` | `IRadar` | AirSim RPC `getRadarData()` → radar returns |
+| `CosysEchoBackend` | `IRadar` | Cosys EchoSimple FMCW sensor via `getEchoData()` (Issue #705) — the radar-physics role |
+| `CosysRadarBackend` | `IRadar` | LiDAR-as-radar proxy via `getLidarData()` (Issue #702, no Doppler) |
 | `CosysIMUBackend` | `IIMUSource` | AirSim RPC `getImuData()` → accel + gyro |
 | `CosysDepthBackend` | `IDepthEstimator` | AirSim ground-truth depth (for validation baselines) |
 
@@ -183,7 +186,7 @@ Estimated monthly cost: ~80 hrs x $0.35 = ~$28/month on spot instances.
 ### Positive
 
 - **ML perception validation path.** For the first time, YOLO and depth estimation can be tested against photorealistic scenes with correct object classes, realistic textures, and physically-based lighting.
-- **Native radar validation.** UKF fusion engine's radar-camera trust weighting can be tested against a real radar model instead of the `gpu_lidar` approximation.
+- **Native radar validation.** UKF fusion engine's radar-camera trust weighting can be tested against the Cosys Echo FMCW radar sensor (`getEchoData()`, Issue #705) instead of the `gpu_lidar` approximation.
 - **Production topology validation.** Two-container cloud architecture mirrors the production hardware layout (companion compute + external sensors).
 - **Hardware transferability.** Same codebase, same config system, same HAL — only the `MODEL_PRESET` flag and HAL backend config change between cloud and hardware.
 - **Future-proofing.** Cloud-tier models (YOLOv8m + ViT-B) exercise the perception pipeline at a fidelity that next-gen edge hardware (Jetson Thor, 32GB+) will natively support.
@@ -238,7 +241,9 @@ Phases 1 + 2 can run in parallel. Phase 3 requires both. Phase 4 is future/optio
 - [VisDrone Dataset](https://github.com/VisDrone/VisDrone-Dataset) — 265K aerial images
 - `config/default.json` — Tier 1 base config
 - `config/gazebo_sitl.json` — Tier 2 base config
-- `config/cosys_airsim.json` — Tier 3 base config (to be created)
+- `config/cosys_airsim.json` — Tier 3 base config (cloud, `MODEL_PRESET=cloud`)
+- `config/cosys_airsim_dev.json` — Tier 3 dev overlay (native desktop, GTX 1080 Ti)
+- `config/cosys_settings.json` — Cosys-AirSim `settings.json` (sim-side vehicle + sensor definitions; copy to `~/Documents/AirSim/settings.json`)
 - `common/hal/include/hal/hal_factory.h` — HAL backend factory
 
 ---
@@ -375,7 +380,7 @@ Coverage matrix analysis shows Gazebo and Cosys-AirSim are genuinely complementa
 | Depth Anything V2 depth estimation | ✗ | ✓ |
 | Synthetic data generation for ML training | ✗ | ✓ |
 | Weather/lighting variation | Limited | ✓ |
-| Native radar sensor | LiDAR proxy | LiDAR proxy (base SDK has no radar) |
+| Native radar sensor | LiDAR proxy (gpu_lidar) | Echo FMCW sensor (`getEchoData`, #705); LiDAR-proxy + ground-truth oracle also available |
 
 **No overlap is wasted.** Each tier validates what the other cannot. Consolidation into a single sim would require Isaac Sim + Pegasus (Dimension 4 below).
 

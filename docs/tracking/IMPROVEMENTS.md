@@ -16,6 +16,16 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-07-07 (ADR staleness audit — noticed while auditing docs/adr/)
+
+#### Process-4 mission-planner `main.cpp` has re-bloated from 366 → 1236 lines, eroding the ADR-008 extraction
+
+- **P2** (`architecture`; `process4_mission_planner/src/main.cpp`) — ADR-008 extracted P4 sub-components into header-only classes and cut `main.cpp` from 809 → **366 lines** ("understandable in a single sitting"). It has since regrown to **1236 lines** (~3.4×), so the extraction's benefit has eroded and logic has re-accumulated in `main.cpp`. **Fix:** identify the newly-accumulated responsibilities and extract them into classes following the ADR-008 pattern (mirrors the Issue #154 refactor intent). **When to do it:** next time P4 is touched substantively, or a dedicated re-extraction pass. **Cross-ref:** ADR staleness audit (2026-07); ADR-008; Issue #811.
+
+#### Tier-2 scenario integration tests are not wired into CI (no workflow invokes `run_scenario`)
+
+- **P2** (`ci`, `test-infra`; `.github/workflows/`, `tests/run_scenario.sh`, `tests/run_scenario_gazebo.sh`) — ADR-009 states Tier-2 scenario tests run "nightly / manual", but **no CI workflow invokes `run_scenario.sh` or `run_scenario_gazebo.sh`**, and there is **no `schedule:` / cron trigger** anywhere in `.github/workflows/`. So the scenario suite (flight-critical, stack-coverage integration tests) is not running in CI at all — only locally. **Fix:** add at minimum a `workflow_dispatch` (manual) workflow that runs the scenario suite, and ideally a nightly `schedule:` run of the Gazebo SITL scenarios; make its status visible. **When to do it:** soon — this is a coverage blind spot on the most integration-heavy tests. **Cross-ref:** ADR staleness audit (2026-07); ADR-009; Issue #810.
+
 ### 2026-07-07 (PR #808 Copilot review — valid-but-deferred, SSOT sweep)
 
 #### Pre-existing hardcoded "7-process" counts in three docs — defer to the process map instead

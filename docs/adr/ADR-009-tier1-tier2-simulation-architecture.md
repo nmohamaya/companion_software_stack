@@ -12,6 +12,16 @@
 
 ---
 
+> **Update note (2026-07):** The core two-tier decision stands unchanged. Three
+> decision-context details have since drifted and are corrected inline below: the
+> MAVLink/PX4-SITL FC-link class was renamed `MAVSDKFCLink` → `MavlinkFCLink`; the
+> full simulation design document moved to `docs/architecture/SIMULATION_ARCHITECTURE.md`;
+> and the scenario runners are currently invoked **manually** — no workflow calls
+> `run_scenario.sh`/`run_scenario_gazebo.sh` and no `schedule:`/`cron:` trigger
+> exists, so the "Every PR / Nightly" CI intent below is not yet wired up (unit
+> tests run per-PR via `ctest`; `ci-perception.yml` runs the Tier 3 perception
+> scenarios on PR — see ADR-011).
+
 ## 1. Context
 
 The drone companion software stack requires simulation testing at two levels
@@ -51,10 +61,10 @@ bugs arose from misunderstanding which tier validated what:
 | **Runner** | `tests/run_scenario.sh` | `tests/run_scenario_gazebo.sh` |
 | **Base config** | `config/default.json` | `config/gazebo_sitl.json` |
 | **Requires** | Linux, no extra deps | Gazebo Harmonic, PX4, GPU |
-| **CI** | Every PR | Nightly / manual |
+| **CI** | Manual — no scenario job in CI yet | Manual — no nightly/cron trigger yet |
 | **HAL backends** | Simulated (all 7 processes) | Gazebo cameras, PX4 (MAVSDK), simulated gimbal |
 | **VIO source** | `SimulatedVIOBackend` (target-following) | `GazeboVIOBackend` (ground-truth odometry) |
-| **FC link** | `SimulatedFCLink` | `MAVSDKFCLink` (real PX4 SITL) |
+| **FC link** | `SimulatedFCLink` | `MavlinkFCLink` (real PX4 SITL via MAVSDK) |
 | **Physics** | First-order dynamics (no inertia/drag) | Full Gazebo physics engine |
 | **Purpose** | IPC, FSM, fault handling, config, process lifecycle | Waypoint accuracy, obstacle avoidance, sensor realism |
 
@@ -145,8 +155,8 @@ The scenario runner uses a dynamic collection window for Phase 4 (post-fault-
 injection monitoring):
 
 ```
-remaining = scenario_timeout - elapsed - 5s (cleanup buffer)
-collection_time = max(remaining, 5s)
+remaining = scenario_timeout - elapsed - 5s (verification buffer)
+collection_time = max(remaining, 3s)   # 3s floor; the 5s default applies only when no timeout is set
 ```
 
 This ensures missions have the full timeout budget to complete, rather than
@@ -225,5 +235,5 @@ However, it can't distinguish between a stable 80°C and a rapidly rising
 - `config/default.json` — Tier 1 base config
 - `config/gazebo_sitl.json` — Tier 2 base config
 - `config/hardware.json` — Real hardware deployment config
-- `docs/SIMULATION_ARCHITECTURE.md` — Full simulation design document
+- `docs/architecture/SIMULATION_ARCHITECTURE.md` — Full simulation design document
 - Bug #32 (thermal override nesting), Bug #33 (collection window)

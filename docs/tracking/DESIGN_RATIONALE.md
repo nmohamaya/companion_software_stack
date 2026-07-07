@@ -1510,3 +1510,25 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** a scenario needs long-term static memory (map-then-revisit), OR 30 s proves too short (a real obstacle decays during a legitimately long out-of-FOV window → raise it) or too long (ghosts persist long enough to matter → lower it). Already per-scenario tunable via config.
 
 **Date:** 2026-06-30 (Issue #799 Phase B)
+
+---
+
+## DR-055: ADRs are exempt from the SSOT "never hardcode counts" rule — they are immutable point-in-time records (Copilot PR #812)
+
+**Question:** Copilot review on PR #812 flagged `ADR-004:469` ("15 threads total — 11 critical, 4 non-critical") as violating the SSOT rule (CLAUDE.md §Single Sources of Truth: "never bake in a number — link to it instead"), since the thread inventory is SSOT in CLAUDE.md §Process Map. Should ADRs replace hardcoded counts with links to the canonical SSOT source?
+
+**Arguments for linking to SSOT (Copilot's suggestion):**
+- The SSOT rule exists precisely to stop quantitative facts drifting. The ADR's "15 threads" is already stale against the current §Process Map value (21 threads).
+- Consistency: living docs (`PRODUCTION_READINESS.md`, `COSYS_SETUP.md`) are being swept to link the process/thread map rather than restate it (see IMPROVEMENTS.md 2026-07-07).
+
+**Arguments for keeping the hardcoded count (our decision):**
+- **ADRs are immutable once accepted** (docs/adr/README.md: "ADRs are immutable once accepted — superseding decisions get a new ADR"). An ADR records the state *at the moment the decision was made*, not the current state. "15 threads" was correct on 2026-03-04; freezing it is the *point* of the record.
+- Linking to a live SSOT would make the ADR silently re-render "21 threads" today, contradicting its own point-in-time narrative and analysis (which reasoned about 15 threads / 11 critical). That corrupts the historical record rather than preserving it.
+- **Established precedent:** the same class was already considered and excluded — IMPROVEMENTS.md (2026-07-07 SSOT sweep) explicitly notes "`ADR-006:131` also says '7-process' but ADRs are immutable-once-accepted — excluded deliberately." This DR generalises that one-off exclusion into a standing rule.
+- The staleness that *does* matter (a reader mistaking the historical count for current state) is handled the ADR way: a top-of-doc `Update note` banner points to current reality, without rewriting the frozen body.
+
+**Decision:** **Keep hardcoded counts in ADRs; ADRs are exempt from the SSOT-count-linking rule.** On PR #812 the specific line was additionally *reverted* to its original historical value (an edit agent had changed it to an unverified "19 threads" that matched neither the original nor the current SSOT — restoring "15 threads" preserves the immutable record). Current-state counts belong in the SSOT-linked living docs, not in point-in-time ADRs.
+
+**Revisit when:** the team decides ADRs should carry a standing "current-state" addendum that *is* SSOT-linked (distinct from the frozen decision body), or the immutability norm itself is revised.
+
+**Date:** 2026-07-07 (Copilot review, PR #812)

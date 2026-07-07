@@ -1,5 +1,12 @@
 # ADR-003: C++17 Language Standard
 
+> **Update note (2026-07):** The legacy POSIX SHM IPC backend (`ShmWriter` /
+> `ShmReader`, `shm_*.h`) was removed in Issue #126, making Zenoh the sole
+> transport — `std::variant` now wraps a single `ZenohMessageBus` arm.  The
+> C++17 decision below is **unchanged**; only the illustrative feature examples
+> in §3.3 were refreshed to current symbols (`MessageBus` / `BusVariant`,
+> `wire_serialize`).
+
 | Field | Value |
 |-------|-------|
 | **Status** | Accepted |
@@ -92,10 +99,10 @@ for detailed examples):
 
 | Feature | Where Used |
 |---------|-----------|
-| `std::variant` + `std::visit` | `MessageBusVariant` (IPC backend dispatch) |
+| `std::variant` + `std::visit` | `MessageBus` / `BusVariant` (IPC backend dispatch) |
 | `std::optional` | `SPSCRing::try_pop()`, `ZenohSession` lazy init, service responses |
 | `if constexpr` | `ZenohPublisher` SHM/bytes routing, service channel type dispatch |
-| `static_assert` with message | `ShmWriter`, `ShmReader`, `wire_serialize` (trivially-copyable checks) |
+| `static_assert` with message | `wire_serialize` (trivially-copyable checks) |
 | `std::string_view` | `LivelinessToken` key parsing, Zenoh key expressions |
 | `[[maybe_unused]]`, `[[nodiscard]]` | Signal handler, factory functions |
 | Inline variables | `SignalHandler::s_running_` static inline member |

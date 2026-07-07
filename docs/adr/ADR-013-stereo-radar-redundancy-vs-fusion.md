@@ -1,5 +1,7 @@
 # ADR-013: Stereo + Radar — Defence-in-Depth Redundancy vs. Unified UKF Fusion
 
+> **Update note (2026-07):** The cross-veto machinery this ADR planned has since shipped — `decide_promotion()` (`process4_mission_planner/include/planner/cross_veto_decision.h`) + `RadarFovGate` (`process4_mission_planner/include/planner/radar_fov_gate.h`), the `require_radar_for_promotion` grid gate, and their unit tests — and PR #699 is merged. §6 statuses and one interface name (`IRadar`, not `IRadarBackend`) are corrected inline; the **decision itself is unchanged and remains Accepted**.
+
 | Field           | Value                                                                                                   |
 |-----------------|---------------------------------------------------------------------------------------------------------|
 | **Status**      | Accepted                                                                                                |
@@ -38,13 +40,13 @@ Either way, the decision is upstream of the stereo HAL backend, the perception t
 
 ## 2. Decision
 
-**We keep stereo and radar as two independent paths into the occupancy grid.** Each path can promote cells to static under its own gating logic. The track-level UKF continues to fuse camera bearing + radar range + Doppler **for moving objects only**, where Doppler genuinely adds state. Static obstacles do not pass through the UKF — they go directly to the grid via the channel that observed them, and a *late-stage cross-veto* at the grid boundary handles long-range disagreements (radar's strength) and short-range disagreements (stereo's strength).
+**We keep stereo and radar as two independent paths into the occupancy grid.** Each path can promote cells to static under its own gating logic. The track-level UKF continues to fuse camera bearing + radar range + Doppler **for moving objects only**, where Doppler genuinely adds state. Static obstacles are not camera-plus-radar fused in the UKF — they reach the grid via the channel that observed them (radar-alone static tracks, Issue #231, being the one path that still transits the fusion engine without a camera bearing), and a *late-stage cross-veto* at the grid boundary handles long-range disagreements (radar's strength) and short-range disagreements (stereo's strength).
 
 Operationally:
 
 1. **Stereo path** owns dense local geometry under ~10 m. Replaces the current PATH A camera+SAM+DA V2 chain. Promotes via the existing instance gate (cluster + tracker + N-frame observation count). Saturation-band filter (PR #699) stays in place as a universal "depth source said max → reject" guard.
 2. **Radar path** owns range >10 m and Doppler. Promotes its own grid cells when range is confident *and* the detection has Doppler-consistent re-observation across N frames.
-3. **UKF as track-level cross-checker for moving objects only.** Doppler-positive tracks get camera bearing + radar range fused. Stationary detections do not enter the UKF — the camera is more accurate at bearing than the radar we can fly, so fusing on stationary objects strictly degrades the estimate.
+3. **UKF as track-level cross-checker for moving objects only.** Doppler-positive tracks get camera bearing + radar range fused. Stationary detections are never *bearing-fused* — the camera is more accurate at bearing than the radar we can fly, so fusing camera + radar on stationary objects strictly degrades the estimate. (Radar-only track initiation — Issue #231, `radar_only_enabled` defaults on — does admit stationary *radar-alone* detections through the fusion engine and promotes them to static after `radar_only_promotion_hits`; because there is no camera bearing to drag toward the wide radar cone, this is consistent with the rule above rather than an exception to it.)
 4. **Promotion-to-static rule (binding):**
 
     | Cell distance from drone | In radar FOV? | Promotion authority                                        |
@@ -142,7 +144,7 @@ Failure-mode independence is the textbook precondition for **defence-in-depth re
 ### Neutral / out of scope
 
 1. **Stereo backend choice (ZED 2i, RealSense D455, OAK-D Pro, custom)** is decided separately. ADR-013 only locks in the architectural shape, not the specific sensor.
-2. **Whether to also support a 4D imaging radar in the future** is left open. The HAL `IRadarBackend` interface stays generic enough to accept a higher-resolution radar if and when payload allows.
+2. **Whether to also support a 4D imaging radar in the future** is left open. The HAL `IRadar` interface stays generic enough to accept a higher-resolution radar if and when payload allows.
 3. **The PATH A clusterer + tracker themselves** stay as today. We are not refactoring them into the UKF.
 
 ---
@@ -176,13 +178,13 @@ This ADR is the architectural contract. The follow-up issues that implement it:
 | Issue   | Title                                                              | Status               |
 |---------|--------------------------------------------------------------------|----------------------|
 | #698    | PATH A voxels cement walls without radar agreement                 | Open                 |
-| PR #699 | Reject DA V2 max-clamp saturation samples in PATH A projector      | Merged candidate     |
-| #698 Fix #1 (TBD issue) | Long-range radar veto on PATH A grid promotion (>10 m only) | To file              |
+| PR #699 | Reject DA V2 max-clamp saturation samples in PATH A projector      | Merged (`4ce15e8`)   |
+| #698 Fix #1 | Long-range radar veto on PATH A grid promotion (>10 m only) — `require_radar_for_promotion` grid gate | Done |
 | #696    | P3 VIO pose freezes mid-scenario                                   | Open (workaround #697) |
 | TBD     | Stereo HAL backend + replace DA V2 in PATH A                       | Planned              |
-| TBD     | Cross-veto logic at grid-write boundary (logged disagreements)     | Planned              |
+| #698 Fix #1 | Cross-veto logic at grid-write boundary (logged disagreements) — `decide_promotion()` + `RadarFovGate` | Done |
 
-The cross-veto logic is the only genuinely new code this ADR mandates. Everything else is either already in place (PATH A, radar paths, UKF) or has its own dedicated issue.
+The cross-veto logic was the only genuinely new code this ADR mandated; it has since shipped — `decide_promotion()` in `cross_veto_decision.h`, `RadarFovGate` in `radar_fov_gate.h`, and the `require_radar_for_promotion` hit-count gate — with dedicated unit tests. Everything else was either already in place (PATH A, radar paths, UKF) or has its own dedicated issue.
 
 ---
 
