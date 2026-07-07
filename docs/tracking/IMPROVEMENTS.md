@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-07-07 (PR #808 Copilot review — valid-but-deferred, SSOT sweep)
+
+#### Pre-existing hardcoded "7-process" counts in three docs — defer to the process map instead
+
+- **P3** (`docs`; `docs/tracking/PRODUCTION_READINESS.md:129`, `docs/how-to/COSYS_SETUP.md:218`, `docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md:80`) — Copilot flagged hardcoded process counts in the new `SAFETY_ENGINEERING.md` (PR #808, fixed in-PR by linking the root-README process map); the same pattern pre-exists in these three docs. Per the SSOT rule, quantitative facts with a canonical source (process/thread map) should be linked, not restated. `ADR-006:131` also says "7-process" but ADRs are immutable-once-accepted — excluded deliberately. **Fix:** replace the counts with process-map links in the three living docs. **When to do it:** next docs sweep. **Cross-ref:** PR #808 Copilot review (SSOT), severity P3.
+
 ### 2026-07-07 (Issue #804 — evidence store rollout)
 
 #### Safety audit fails 3 rules + 7 warnings on main — triage, then promote the CI `safety-audit` job to blocking

@@ -27,7 +27,7 @@ Safety **properties**, built in now because retrofitting any of them is a re-arc
 
 | # | Item | What it is | Existing anchor |
 |---|---|---|---|
-| 3.1 | **Control-structure hazard analysis (STPA-lite)** | Unsafe-control-action thinking over the 7-process control structure, focused on the FC-command path: *provided-when-unsafe* (premature ARM), *not-provided* (missed failsafe), *wrong-timing* (stale state), *wrong-duration* (stuck mode). The cold-start epic is this analysis paying out; a formal pass is an open item (§7). | Process map + IPC graph (README), hazard log §5 |
+| 3.1 | **Control-structure hazard analysis (STPA-lite)** | Unsafe-control-action thinking over the full process control structure ([process map](../README.md)), focused on the FC-command path: *provided-when-unsafe* (premature ARM), *not-provided* (missed failsafe), *wrong-timing* (stale state), *wrong-duration* (stuck mode). The cold-start epic is this analysis paying out; a formal pass is an open item (§7). | Process map + IPC graph (README), hazard log §5 |
 | 3.2 | **Interference containment** | Spatial: typed IPC only, no shared mutable state across processes. Temporal: watchdog layers plus the observability rule — no mutex-protected loggers/profilers on flight-critical threads; buffer lock-free, drain on an IO thread (priority-inversion hazard documented per primitive). | [ADR-001](adr/ADR-001-ipc-framework-selection.md)/[ADR-002](adr/ADR-002-modular-ipc-backend-architecture.md), [DESIGN_RATIONALE.md](tracking/DESIGN_RATIONALE.md) concurrency/observability entries |
 | 3.3 | **Degraded-mode ladder** | Reversibility-graded responses; asymmetric preconditions for asymmetric-cost actions — irreversible commands carry strictly stronger gates than recoverable ones. | Command debounce + fault escalation in P4 ([mission_state_tick.h](../process4_mission_planner/include/planner/mission_state_tick.h), [fault_manager.h](../process4_mission_planner/include/planner/fault_manager.h)) |
 | 3.4 | **Requirements-based scenario evidence** | Each simulation scenario declares machine-checked pass criteria — acceptance criteria in executable form, run against the full stack (same code paths as the vehicle; simulation never swaps in a simpler planner than the product flies). | [config/scenarios/](../config/scenarios/), [tests/run_scenario.sh](../tests/run_scenario.sh), inventory in [tests/TESTS.md](../tests/TESTS.md) |
@@ -70,7 +70,7 @@ Each goal holds CI-generated evidence *now*; a certification campaign would popu
 
 - [ ] #806 — contracts-lite: versioning policy, per-topic manifest, CI drift gate (Phase 1), cross-version deserialisation (Phase 3, deferred).
 - [ ] SBOM + dependency-policy gate in CI (identify and anomaly-review every runtime dependency on control paths).
-- [ ] Formal STPA pass over the 7-process control structure (current hazard log is incident-seeded; a systematic pass finds the interaction accidents not yet met).
+- [ ] Formal STPA pass over the full process control structure ([process map](../README.md)) — the current hazard log is incident-seeded; a systematic pass finds the interaction accidents not yet met.
 - [ ] Written interference-containment argument (spatial/temporal, using the ISO 26262-6 Annex D categories as the temporal checklist).
 - [ ] Expand §6 into a maintained GSN artifact once the open items above generate their evidence.
 
