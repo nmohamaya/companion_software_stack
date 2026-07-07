@@ -4205,4 +4205,19 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #111 (Issue #799 Phase C — trustworthy scenario reporting). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #112 — Bounded static accumulation: static-cell decay ON by default (Issue #799 Phase B)
+
+**Date:** 2026-06-30  
+**Category:** Navigation / Safety (perception→planner)  
+**Files Modified:**
+- `config/default.json`, `process4_mission_planner/include/planner/grid_planner_base.h`, `process4_mission_planner/include/planner/occupancy_grid_3d.h` — default `static_cell_ttl_s` 0.0 → **30 s** (was permanent). Promoted static cells now decay after 30 s without re-observation.
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — **fail-safe refresh** on the object/radar path: an already-promoted cell re-observed by radar/camera now refreshes its decay timestamp (previously only the voxel path did), so a real obstacle still in view never decays. Also migrated the grid's 3 `steady_clock::now()` sites to `drone::util::get_clock().now_ns()` (mockable, perf-neutral — already hoisted per-batch; advances clock epic #766).
+- `tests/test_occupancy_grid_dynamic_gating.cpp` — 3 `ScopedMockClock` decay tests (ghost decays after TTL; re-observed cell survives; `0` sentinel disables). The re-observed test surfaced the object-path refresh gap.
+
+**What:** Scenario 18 failed because the static occupancy layer grew **25→650 cells over one flight** (radar ghosts + the drone's own wake, never decaying) and sealed every corridor → D*Lite no-path → mission incomplete. The decay mechanism already existed (`sweep_static_cells`) but was OFF by default (`static_cell_ttl_s = 0` = permanent). Phase B turns it on (30 s) and makes it fail-safe.
+
+**Why:** Phase B of #799 (the bounded-accumulation safety net). Enabling decay exposed a fail-safe gap — the object/radar path never refreshed re-observed static cells — which would have decayed live obstacles; fixed as part of this change. Deterministically unit-tested via `ScopedMockClock` (no wall-clock sleeps — the flaky-under-tsan anti-pattern). Live-Gazebo validation pending the GPU/EGL env fix (sim currently can't launch). DR-054; DESIGN_RATIONALE. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #112 (Issue #799 Phase B — static-cell decay default). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
