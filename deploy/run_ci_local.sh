@@ -26,6 +26,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="${PROJECT_DIR}/build"
 
+# Issue #804 — evidence store for generated reports (ctest logs, coverage).
+# One tests run-dir per invocation, created lazily on first use.
+source "${SCRIPT_DIR}/lib_evidence.sh"
+EVIDENCE_TESTS_DIR=""
+tests_evidence_dir() {
+    if [[ -z "$EVIDENCE_TESTS_DIR" ]]; then
+        EVIDENCE_TESTS_DIR="$(evidence_run_dir tests run_ci_local.sh)"
+        echo "  evidence: ${EVIDENCE_TESTS_DIR}" >&2
+    fi
+    echo "$EVIDENCE_TESTS_DIR"
+}
+
 # ── Colors ───────────────────────────────────────────────────
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
@@ -109,12 +121,17 @@ build_and_test() {
     # Remaining args are extra cmake flags
     local cmake_flags=("$@")
 
-    # Determine ctest exclusions (mirrors CI)
+    # Determine ctest exclusions (mirrors CI) + evidence log variant name
     local ctest_exclude=""
+    local variant="default"
     for flag in "${cmake_flags[@]}"; do
-        if [[ "$flag" == "-DENABLE_TSAN=ON" ]]; then
-            ctest_exclude="Zenoh|Mavlink|Yolo|Liveliness|MessageBus"
-        fi
+        case "$flag" in
+            -DENABLE_TSAN=ON)
+                ctest_exclude="Zenoh|Mavlink|Yolo|Liveliness|MessageBus"
+                variant="tsan" ;;
+            -DENABLE_ASAN=ON)  variant="asan" ;;
+            -DENABLE_UBSAN=ON) variant="ubsan" ;;
+        esac
     done
 
     echo "  cmake -B build -DCMAKE_BUILD_TYPE=${build_type} -DALLOW_INSECURE_ZENOH=ON ${cmake_flags[*]}"
@@ -129,12 +146,18 @@ build_and_test() {
     cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1
 
     echo ""
+    # Issue #804 — full ctest output is teed into the evidence store.
+    # `set -o pipefail` (script header) keeps ctest's exit code authoritative.
+    local ctest_log
+    ctest_log="$(tests_evidence_dir)/ctest_${variant}.log"
     if [[ -n "$ctest_exclude" ]]; then
         echo "  ctest (excluding: ${ctest_exclude})"
-        ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" -E "${ctest_exclude}"
+        ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" -E "${ctest_exclude}" \
+            2>&1 | tee "${ctest_log}"
     else
         echo "  ctest --output-on-failure"
-        ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)"
+        ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" \
+            2>&1 | tee "${ctest_log}"
     fi
 }
 
@@ -206,6 +229,16 @@ generate_coverage_report() {
     else
         echo "  genhtml not found — raw coverage in ${BUILD_DIR}/coverage.info"
     fi
+
+    # Issue #804 — persist coverage evidence (lcov data + summary + HTML).
+    local ev_dir
+    ev_dir="$(evidence_run_dir coverage run_ci_local.sh)"
+    cp "${BUILD_DIR}/coverage.info" "${ev_dir}/coverage.info"
+    echo "$lcov_summary" > "${ev_dir}/summary.txt"
+    if [[ -d "${BUILD_DIR}/coverage-report" ]]; then
+        cp -r "${BUILD_DIR}/coverage-report" "${ev_dir}/html"
+    fi
+    echo "  evidence: ${ev_dir}"
 }
 
 # ── Job: Coverage ────────────────────────────────────────────
@@ -229,9 +262,10 @@ job_cov() {
     echo "  Zeroing counters..."
     lcov --zerocounters --directory "${BUILD_DIR}" 2>/dev/null
 
-    # Run tests once for clean coverage
+    # Run tests once for clean coverage (log teed to evidence — #804)
     echo "  ctest --output-on-failure"
-    ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)"
+    ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" \
+        2>&1 | tee "$(tests_evidence_dir)/ctest_coverage.log"
 
     generate_coverage_report
 }

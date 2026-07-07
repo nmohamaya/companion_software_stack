@@ -116,3 +116,9 @@ AGENT_REPORT.md
 
 # Local-only deep documentation (not committed — personal reference)
 docs/design/modularity_guide.md
+
+# Generated assurance evidence (safety audit, ctest logs, coverage,
+# static analysis) — see evidence/README.md.  Only the README is tracked;
+# CI uploads evidence as workflow artifacts instead.
+evidence/*
+!evidence/README.md
