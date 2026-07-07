@@ -12,7 +12,7 @@ Routing by goal — pick the row that matches what you're trying to do. `docs/` 
 | **Understand the HAL** | [`design/hal_design.md`](design/hal_design.md) · [ADR-006](adr/ADR-006-hal-hardware-abstraction-strategy.md) · `common/hal/include/hal/` (authoritative source) |
 | **Understand SLAM/VIO** | [`design/slam_vio_nav_design.md`](design/slam_vio_nav_design.md) · [ADR-014](adr/ADR-014-stereo-inertial-vio-algorithm-selection.md) — the SWVIO living implementation guide `design/swvio_implementation.md` is currently a local-only draft on the other dev machine and lands with the first SwvioBackend PR |
 | **Understand perception (PATH A)** | [`design/perception_design.md`](design/perception_design.md) · [ADR-013](adr/ADR-013-stereo-radar-redundancy-vs-fusion.md) — the in-flight `design/perception_architecture.md` and `design/perception_v2_detailed_design.md` are local-only drafts pending commit from the other dev machine |
-| **Understand safety / watchdog / fault recovery** | [`design/hardening-design.md`](design/hardening-design.md) · [`architecture/process-health-monitoring.md`](architecture/process-health-monitoring.md) · [ADR-004](adr/ADR-004-process-thread-watchdog-architecture.md) |
+| **Understand safety / watchdog / fault recovery** | [`SAFETY_ENGINEERING.md`](SAFETY_ENGINEERING.md) (the named safety argument — start here) · [`design/hardening-design.md`](design/hardening-design.md) · [`architecture/process-health-monitoring.md`](architecture/process-health-monitoring.md) · [ADR-004](adr/ADR-004-process-thread-watchdog-architecture.md) |
 | **Look up a config key** | `config/default.json` (defaults) · `common/util/include/util/config_keys.h` (declarations) · [`reference/config_reference.md`](reference/config_reference.md) (reference) · [`how-to/CONFIG_GUIDE.md`](how-to/CONFIG_GUIDE.md) (how-to) |
 | **Develop a feature / fix a bug** | [`how-to/DEVELOPMENT_WORKFLOW.md`](how-to/DEVELOPMENT_WORKFLOW.md) — per-PR loop |
 | **Land a large epic (10+ PRs)** | [`how-to/INTEGRATION_ROLLUP_WORKFLOW.md`](how-to/INTEGRATION_ROLLUP_WORKFLOW.md) · [ADR-015](adr/ADR-015-integration-branch-rollup-strategy.md) |
@@ -36,6 +36,7 @@ Routing by goal — pick the row that matches what you're trying to do. `docs/` 
 ```
 docs/
 ├── README.md                      # This file — goal-routing index
+├── SAFETY_ENGINEERING.md          # Named safety argument: hazards, never-defers floor, assurance sketch
 ├── tutorials/                     # Diátaxis: learning-oriented (start-from-zero walkthroughs)
 │   ├── GETTING_STARTED.md
 │   └── DEV_MACHINE_SETUP.md
