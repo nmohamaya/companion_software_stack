@@ -4238,4 +4238,22 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #113 (Issue #804 — evidence store). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #114 — Safety-Engineering Plan v1 (`docs/SAFETY_ENGINEERING.md`)
+
+**Date:** 2026-07-07
+**Category:** Documentation — Safety
+**Issue:** [#807](https://github.com/nmohamaya/companion_software_stack/issues/807)
+
+**What:** Added `docs/SAFETY_ENGINEERING.md` — the single named safety argument for the stack. The controls it describes all pre-exist (FC-command debounce + cold-start hygiene from the #740/#727 epic, three-layer watchdog per ADR-004, `Result<T,E>` per ADR-007, sanitizer-gated CI, injectable-clock safety timing, wire-format ABI guards); the doc lifts them into governing rules, a never-defers floor, a hazard log **seeded from incident classes actually found and fixed in this repo** (each row with found-by/guarded-by references into BUG_FIXES.md, PRs, and tests), a GSN-style assurance-case sketch (root claim + G1–G5 with evidence pointers), and an honest deferred/out-of-scope section. Open items reference #806 (wire-contract governance) and future SBOM/STPA work.
+
+**Files Modified:**
+- `docs/SAFETY_ENGINEERING.md` — new.
+- `docs/README.md` — safety row now leads with the plan; directory map updated.
+
+**Test count:** unchanged (docs-only).
+
+**Why:** The safety controls were real but scattered across ADRs, tracking docs, and code comments — invisible as an *argument*. A named, evidence-linked safety plan is the artifact an assessor or integrator reads first. Follows the SSOT rule throughout: quantitative facts link to their canonical sources rather than restating them.
+
+---
+
+*Last updated after Improvement #114 (Safety-Engineering Plan v1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
