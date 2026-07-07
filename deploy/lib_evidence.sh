@@ -33,14 +33,25 @@ EVIDENCE_ROOT="${EVIDENCE_ROOT:-$(dirname "${_EVIDENCE_LIB_DIR}")/evidence}"
 # Creates evidence/<category>/<ts>_<sha>/ with a manifest.txt, refreshes
 # the category's `latest` symlink, and echoes the absolute run-dir path.
 evidence_run_dir() {
-    local category="$1"
+    # `${1:-}` — callable with no args under `set -u` without crashing the
+    # caller (PR #805 review); an empty category degrades to a warning.
+    local category="${1:-}"
     local generator="${2:-${0##*/}}"
+    if [[ -z "${category}" ]]; then
+        category="uncategorized"
+        echo "WARN [lib_evidence] evidence_run_dir called without a category" >&2
+    fi
 
     local ts sha dirty branch run_dir
     ts="$(date -u +%Y-%m-%d_%H%M%SZ)"
     sha="$(git -C "${_EVIDENCE_LIB_DIR}" rev-parse --short HEAD 2>/dev/null || echo nogit)"
-    branch="$(git -C "${_EVIDENCE_LIB_DIR}" branch --show-current 2>/dev/null || echo unknown)"
-    if git -C "${_EVIDENCE_LIB_DIR}" diff --quiet HEAD 2>/dev/null; then
+    # `--show-current` is empty (not an error) on a detached HEAD — the
+    # default state of GitHub Actions checkouts (PR #805 review).
+    branch="$(git -C "${_EVIDENCE_LIB_DIR}" branch --show-current 2>/dev/null || true)"
+    [[ -z "${branch}" ]] && branch="detached@${sha}"
+    # `git status --porcelain` covers staged + unstaged + untracked;
+    # `git diff --quiet HEAD` missed untracked files (PR #805 review).
+    if [[ -z "$(git -C "${_EVIDENCE_LIB_DIR}" status --porcelain 2>/dev/null)" ]]; then
         dirty="clean"
     else
         dirty="dirty"
@@ -48,10 +59,18 @@ evidence_run_dir() {
 
     run_dir="${EVIDENCE_ROOT}/${category}/${ts}_${sha}"
     if ! mkdir -p "${run_dir}" 2>/dev/null; then
-        run_dir="$(mktemp -d "/tmp/evidence-${category}-XXXXXX")"
+        # mktemp itself may fail in a locked-down environment — degrade to a
+        # PID-suffixed /tmp dir rather than abort a `set -e` caller.
+        run_dir="$(mktemp -d "/tmp/evidence-${category}-XXXXXX" 2>/dev/null || true)"
+        if [[ -z "${run_dir}" ]]; then
+            run_dir="/tmp/evidence-${category}-$$"
+            mkdir -p "${run_dir}" 2>/dev/null || true
+        fi
         echo "WARN [lib_evidence] cannot write ${EVIDENCE_ROOT}; using ${run_dir}" >&2
     fi
 
+    # Manifest write is best-effort (`|| true`): a failed redirection must
+    # not abort a `set -e` caller — the report matters more than the stamp.
     {
         echo "generated_utc: ${ts}"
         echo "git_sha:       ${sha}"
@@ -69,7 +88,7 @@ evidence_run_dir() {
         if [[ -n "${GITHUB_JOB:-}" ]]; then
             echo "github_job:    ${GITHUB_JOB}"
         fi
-    } > "${run_dir}/manifest.txt"
+    } > "${run_dir}/manifest.txt" 2>/dev/null || true
 
     # Convenience symlink — local only. Skipped in CI: upload-artifact
     # follows symlinks, so `latest` would duplicate the run dir's content
