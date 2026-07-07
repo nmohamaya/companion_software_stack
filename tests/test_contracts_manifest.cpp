@@ -14,6 +14,7 @@
 
 #include <fstream>
 #include <map>
+#include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -89,23 +90,40 @@ std::string manifest_path() {
 #endif
 }
 
-// Loads the manifest once; parse failure surfaces in every test via has_value.
+// Loads + shape-validates the manifest once, cached by value (no heap handoff).
+// Returns nullptr on any I/O, parse, or shape violation so every test fails
+// with a clean assertion; the up-front key/type checks also mean the .at()
+// calls in the tests below can never throw on a malformed manifest.
 const nlohmann::json* load_manifest() {
-    static const nlohmann::json* manifest = []() -> const nlohmann::json* {
+    static const std::optional<nlohmann::json> manifest = []() -> std::optional<nlohmann::json> {
         std::ifstream in(manifest_path());
         if (!in.is_open()) {
-            return nullptr;
+            return std::nullopt;
         }
         auto parsed = nlohmann::json::parse(in, /*cb=*/nullptr, /*allow_exceptions=*/false);
-        if (parsed.is_discarded()) {
-            return nullptr;
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            return std::nullopt;
         }
-        return new nlohmann::json(std::move(parsed));
+        if (!parsed.contains("kWireVersion") || !parsed["kWireVersion"].is_number_unsigned()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("topics") || !parsed["topics"].is_array()) {
+            return std::nullopt;
+        }
+        for (const auto& entry : parsed["topics"]) {
+            if (!entry.is_object() || !entry.contains("topic") || !entry["topic"].is_string() ||
+                !entry.contains("struct") || !entry["struct"].is_string() ||
+                !entry.contains("sizeof_bytes") || !entry["sizeof_bytes"].is_number_unsigned()) {
+                return std::nullopt;
+            }
+        }
+        return parsed;
     }();
-    return manifest;
+    return manifest ? &*manifest : nullptr;
 }
 
-// topic → manifest entry, for O(1) lookups in the per-entry tests.
+// topic → manifest entry, keyed for the per-entry tests (23 entries — lookup
+// cost is irrelevant; the map is for readable membership checks).
 std::map<std::string, nlohmann::json> manifest_by_topic(const nlohmann::json& m) {
     std::map<std::string, nlohmann::json> out;
     for (const auto& entry : m.at("topics")) {
@@ -116,7 +134,8 @@ std::map<std::string, nlohmann::json> manifest_by_topic(const nlohmann::json& m)
 
 TEST(ContractsManifest, ManifestFileParses) {
     const auto* m = load_manifest();
-    ASSERT_NE(m, nullptr) << "contracts/topics.json missing or not valid JSON at "
+    ASSERT_NE(m, nullptr) << "contracts/topics.json missing, invalid JSON, or wrong shape "
+                             "(kWireVersion unsigned + topics[] of {topic,struct,sizeof_bytes}) at "
                           << manifest_path();
     ASSERT_TRUE(m->contains("kWireVersion"));
     ASSERT_TRUE(m->contains("topics"));
