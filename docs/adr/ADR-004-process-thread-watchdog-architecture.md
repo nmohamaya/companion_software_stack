@@ -35,6 +35,8 @@ process-level death detection:
 | PID polling fallback | `is_process_alive(pid_t)` via `/proc` | 1 s (poll interval) | SHM only |
 | Health reporting | `SystemHealth` struct | 1 Hz | Both |
 
+> *The **Backend** column reflects the historical dual-backend era. Since the SHM backend was removed (#126), Zenoh is the only backend, so the "SHM only" / "Both" labels are historical — health reporting and PID-polling both operate under the Zenoh-only stack today.*
+
 ### What Does Not Work
 
 1. **No restart/recovery** — when any process dies, `launch_all.sh` calls
@@ -466,7 +468,7 @@ DEGRADED while the process continues operating.
 | **P6 Payload Manager** | `payload_loop` | No | Payload actuation — non-essential for flight safety |
 | **P7 System Monitor** | `health_loop` | No | Health reporting — loss disables monitoring but does not affect flight control |
 
-**Summary:** 19 threads total — 15 critical, 4 non-critical.
+**Summary:** 15 threads total — 11 critical, 4 non-critical.
 
 **Design principles applied:**
 

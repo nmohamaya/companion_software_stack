@@ -18,7 +18,7 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ### 2026-07-07 (ADR staleness audit — noticed while auditing docs/adr/)
 
-#### P4 `main.cpp` has re-bloated from 366 → 1236 lines, eroding the ADR-008 extraction
+#### Process-4 mission-planner `main.cpp` has re-bloated from 366 → 1236 lines, eroding the ADR-008 extraction
 
 - **P2** (`architecture`; `process4_mission_planner/src/main.cpp`) — ADR-008 extracted P4 sub-components into header-only classes and cut `main.cpp` from 809 → **366 lines** ("understandable in a single sitting"). It has since regrown to **1236 lines** (~3.4×), so the extraction's benefit has eroded and logic has re-accumulated in `main.cpp`. **Fix:** identify the newly-accumulated responsibilities and extract them into classes following the ADR-008 pattern (mirrors the Issue #154 refactor intent). **When to do it:** next time P4 is touched substantively, or a dedicated re-extraction pass. **Cross-ref:** ADR staleness audit (2026-07); ADR-008; Issue #811.
 

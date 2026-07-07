@@ -15,8 +15,9 @@
 
 ## 1. Context
 
-Following the Zenoh IPC migration (Epic #45, Phases A–D), the stack now has
-two IPC backends:
+Following the Zenoh IPC migration (Epic #45, Phases A–D), the stack **at that
+time** had two IPC backends *(historical — the POSIX-SHM backend was removed in
+Issue #126; only Zenoh remains today, see the Superseded banner above)*:
 
 | Backend | Pub/Sub | Service Channels | Network Transport |
 |---------|---------|-------------------|-------------------|

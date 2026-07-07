@@ -82,14 +82,16 @@ Optional backends are compile-guarded (`#ifdef HAVE_MAVSDK`,
 If a requested backend is unavailable, the factory throws
 `std::runtime_error` at startup — never at runtime.
 
-### 3.3 Three-Tier Backend Hierarchy
+### 3.3 Backend Tier Hierarchy
+
+*(Originally a three-tier hierarchy; a fourth backend family, Cosys-AirSim, was added later — "Tier 3" in [ADR-011](ADR-011-cosys-airsim-photorealistic-simulation.md).)*
 
 | Tier | Name | Activation | Purpose |
 |------|------|-----------|---------|
 | 0 | **Simulated** | `"backend": "simulated"` | Unit tests, developer CI, default |
 | 1 | **Gazebo** | `"backend": "gazebo"` | SITL integration tests (HAVE_GAZEBO) |
-| 1 | **Cosys-AirSim** | `"backend": "cosys_airsim"` / `"cosys_rpc"` / `"cosys_airsim_groundtruth"` / `"cosys_echo"` | Unreal-engine SITL: RPC sensors + ground-truth passthrough (HAVE_COSYS_AIRSIM) |
 | 2 | **Real** | `"backend": "mavlink"` / `"v4l2"` / etc. | Physical hardware |
+| 3 | **Cosys-AirSim** | `"backend": "cosys_airsim"` / `"cosys_rpc"` / `"cosys_airsim_groundtruth"` / `"cosys_echo"` | Unreal-engine SITL: RPC sensors + ground-truth passthrough (HAVE_COSYS_AIRSIM); "Tier 3" in ADR-011 |
 
 The goal is that the full application stack runs identically at every
 tier — only the HAL backend changes.  See [SIMULATION_ARCHITECTURE.md](../architecture/SIMULATION_ARCHITECTURE.md)
