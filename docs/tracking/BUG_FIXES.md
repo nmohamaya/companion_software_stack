@@ -1952,6 +1952,7 @@ EXPECT_TRUE(signaled);  // reliably true (exits early, typically ~200ms–1.3s)
 
 **How (Fix):**
 - `test_world.sdf` — add the `gz-sim-contact-system` plugin to `<world>` and a `<sensor type="contact">` to each obstacle's collision (red/green/blue cylinders + orange box) **and** `ground_plane` (so a real flight always logs allowlisted ground contacts at takeoff/landing — the proof the topic is live). `landing_pad` is visual-only (no collision), so the drone actually touches `ground_plane`.
+  ⚠️ **Superseded (2026-07-07, Fix #63/#64):** the world-level `<plugin>` half of this fix turned out to suppress PX4's entire `server.config` plugin set (no SceneBroadcaster → sim never boots) and was **removed**. The `<sensor type="contact">` elements stay and are what matters — server.config's own Contact system processes them, publishing on an explicit shared `<contact><topic>` (`/world/test_world/contacts`). Do **not** re-add a world-level system plugin; see the anti-regression comment in `test_world.sdf`.
 - `lib_check_contacts.py` — add `--expect-nonempty` (exit code **3**): an empty log is no longer PASS but "topic not publishing → cannot certify no-collision" (fail-closed).
 - `run_scenario_gazebo.sh` — pass `--expect-nonempty` (default true via `flight_quality_gates.contact_expect_nonempty`) and FAIL on exit 3. After the fix the gate fails **closed**: real strike → FAIL; missing sensors / dead topic / broken capture → FAIL.
 

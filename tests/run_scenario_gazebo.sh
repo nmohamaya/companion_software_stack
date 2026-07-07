@@ -732,11 +732,14 @@ if [[ "$STARTUP_OK" == "true" ]]; then
         # Issue #802 — PX4's gz-bridge spawns the model as
         # "${PX4_SIM_MODEL}_${instance}" (e.g. x500_companion_0), so the
         # odometry topic carries the instance suffix. Discover the advertised
-        # topic by prefix instead of assuming the bare model name — a
-        # bare-name subscribe binds to a never-advertised topic, captures
-        # 0 bytes, and trips the fail-closed proximity gate on every run.
+        # topic instead of assuming the bare model name — a bare-name
+        # subscribe binds to a never-advertised topic, captures 0 bytes, and
+        # trips the fail-closed proximity gate on every run.
+        # `contact_drone_pattern` is a SUBSTRING matcher (same semantics as
+        # lib_check_contacts.py), so match it anywhere within the model-name
+        # segment. Single-vehicle assumption: first match wins.
         PROX_ODOM_TOPIC=$(gz topic -l 2>/dev/null \
-            | grep -m1 -E "^/model/${PROX_DRONE_MODEL}(_[0-9]+)?/odometry$" || true)
+            | grep -m1 -E "^/model/[^/]*${PROX_DRONE_MODEL}[^/]*/odometry$" || true)
         if [[ -z "$PROX_ODOM_TOPIC" ]]; then
             # Fall back to the constructed name; the downstream fail-closed
             # empty-log check flags it loudly if this is also silent.
