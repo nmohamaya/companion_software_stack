@@ -11,6 +11,16 @@
 
 ---
 
+> **Update note (2026-07):** Zenoh is now the only IPC backend — the SHM
+> backend was removed (see `config/default.json` `ipc_backend` and
+> CLAUDE.md §IPC Channels), so the dual-backend framing and the "SHM-mode
+> blind spot" retained below are historical design context, not current
+> behaviour. The health structs were also renamed: `ShmThreadHealth` →
+> `drone::ipc::ThreadHealth` and `ShmSystemHealth` → `drone::ipc::SystemHealth`,
+> now defined in `common/ipc/include/ipc/ipc_types.h` and published via a
+> generic `IPublisher` (no SHM-specific type). The core three-layer decision
+> is unchanged and fully implemented (Phases 1–4 + systemd Layer 3).
+
 ## 1. Context
 
 ### What Works Today
@@ -23,7 +33,7 @@ process-level death detection:
 | Process crash detection | `LivelinessToken` / `LivelinessMonitor` | ~100 ms | Zenoh only |
 | Process liveness query | `LivelinessMonitor::is_alive()` | Instant | Zenoh only |
 | PID polling fallback | `is_process_alive(pid_t)` via `/proc` | 1 s (poll interval) | SHM only |
-| Health reporting | `ShmSystemHealth` struct | 1 Hz | Both |
+| Health reporting | `SystemHealth` struct | 1 Hz | Both |
 
 ### What Does Not Work
 
@@ -34,12 +44,13 @@ process-level death detection:
 2. **No thread-level monitoring** — a thread that deadlocks or enters an
    infinite loop is invisible. The process stays alive (PID exists, Zenoh
    token active), but it stops making progress. This is particularly
-   dangerous in safety-critical threads like `fc_tx_thread` (comms) or
+   dangerous in safety-critical threads like `fc_tx` (comms) or
    the VIO processing loop (SLAM).
 
-3. **SHM-mode blind spot** — the liveliness system compiles to no-op stubs
-   when Zenoh is unavailable. Process 7 reports 0 tracked processes and
-   `critical_failure` is never set.
+3. **SHM-mode blind spot** *(historical — the SHM backend has since been
+   removed; Zenoh is now the only backend, so this no longer applies)* — the
+   liveliness system compiles to no-op stubs when Zenoh is unavailable.
+   Process 7 reports 0 tracked processes and `critical_failure` is never set.
 
 4. **No degraded-mode operation** — the stack has no concept of "running
    with reduced capability." It is either fully up or fully down.
@@ -50,8 +61,9 @@ process-level death detection:
   flight controller link (comms) or navigation (SLAM).
 - **Autonomy** — the drone may be in flight when a process dies; it must
   recover without ground-station intervention.
-- **Backend independence** — the solution must work with both SHM and Zenoh
-  IPC backends, per ADR-002.
+- **Backend independence** *(historical driver — at design time the solution
+  had to work with both the SHM and Zenoh IPC backends per ADR-002; the SHM
+  backend has since been removed and Zenoh is now the only backend)*.
 - **Debuggability** — stuck threads and restart events must produce
   structured logs with correlation IDs for post-flight analysis.
 - **Incremental adoption** — adding thread heartbeats to existing processes
@@ -80,7 +92,7 @@ systemd integration.
 │  ┌────────────────────────────────────────────────────────────┐   │
 │  │ Detection                                                 │   │
 │  │  • Zenoh: LivelinessMonitor (existing, sub-second)        │   │
-│  │  • SHM:   PID polling + ShmThreadHealth reads             │   │
+│  │  • SHM:   PID polling + ThreadHealth reads                │   │
 │  │  • Both:  Thread health timeout (configurable, e.g. 5 s)  │   │
 │  └────────────────────────────────────────────────────────────┘   │
 │  ┌────────────────────────────────────────────────────────────┐   │
@@ -93,7 +105,7 @@ systemd integration.
 │  └────────────────────────────────────────────────────────────┘   │
 │  ┌────────────────────────────────────────────────────────────┐   │
 │  │ Reporting                                                 │   │
-│  │  • ShmSystemHealth: critical_failure, process states      │   │
+│  │  • SystemHealth: critical_failure, process states         │   │
 │  │  • Per-process restart count + last restart timestamp     │   │
 │  │  • Stack-level status: NOMINAL / DEGRADED / CRITICAL      │   │
 │  │  • JSON-structured log events for post-flight analysis    │   │
@@ -117,7 +129,7 @@ systemd integration.
 │  │ • stuck_threshold: configurable (default 5 s) │               │
 │  │ • On stuck thread detected:                   │               │
 │  │   1. Log with thread name + correlation ID    │               │
-│  │   2. Publish ShmThreadHealth (visible to P7)  │               │
+│  │   2. Publish ThreadHealth (visible to P7)     │               │
 │  │   3. Critical thread → self-terminate         │               │
 │  │   4. Non-critical thread → flag degraded      │               │
 │  └───────────────────────────────────────────────┘               │
@@ -250,31 +262,34 @@ struct RestartPolicy {
 ```
 
 The `thermal_gate` field prevents restart attempts when the system is
-overheating. When `ShmSystemHealth::thermal_zone >= thermal_gate`, the
+overheating. When `SystemHealth::thermal_zone >= thermal_gate`, the
 supervisor defers the restart timer and logs the suppression. Restarts
 resume automatically once the temperature drops below the threshold.
 This prevents restart storms from worsening thermal situations (e.g.,
 CUDA warmup on a throttled Jetson).
 
-#### Process Descriptor
+#### Process Config Descriptor
+
+The config-driven descriptor is loaded from JSON via
+`ProcessConfig::from_json()` (`common/util/include/util/restart_policy.h`).
+Per-child *runtime* state (PID, `ProcessState`, restart count, backoff
+timers) lives separately in `struct ManagedProcess`
+(`process7_system_monitor/include/monitor/process_manager.h`).
 
 ```cpp
-struct ProcessDescriptor {
-    char            name[32];           // e.g. "video_capture"
-    char            binary_path[256];   // e.g. "build/bin/video_capture"
-    char            args[256];          // CLI arguments
-    RestartPolicy   policy;
+struct ProcessConfig {
+    std::string              name;             // e.g. "video_capture"
+    std::string              binary;           // e.g. "build/bin/video_capture"
+    RestartPolicy            policy;
 
     // Launch dependencies: which processes must be alive before this one starts.
     // Used for topological launch ordering.
-    char            launch_after[4][32];   // e.g. {"comms", ""}
-    uint8_t         num_launch_deps;
+    std::vector<std::string> launch_after;     // e.g. {"comms"}
 
     // Restart cascade: which processes should be stopped and restarted
     // when THIS process dies.  These are downstream consumers that may
     // hold stale state from the dead process.
-    char            restart_cascade[4][32]; // e.g. {"mission_planner", ""}
-    uint8_t         num_cascade;
+    std::vector<std::string> restart_cascade;  // e.g. {"mission_planner"}
 };
 ```
 
@@ -360,24 +375,25 @@ auto-restarting Process 7 with `Restart=always`.
 |--------|---------|---------|
 | **NOMINAL** | All processes alive, all critical threads healthy | Normal operation |
 | **DEGRADED** | A non-critical process died or a non-critical thread is stuck | Payload manager crashed; perception thread stuck but restarting |
-| **CRITICAL** | A critical process exhausted restart attempts, or a critical thread in comms/SLAM is stuck | Comms died 5 times in 60 s; fc_tx_thread deadlocked |
+| **CRITICAL** | A critical process exhausted restart attempts, or a critical thread in comms/SLAM is stuck | Comms died 5 times in 60 s; fc_tx deadlocked |
 
-### 2.4 SHM Thread Health Struct
+### 2.4 Thread Health Struct
 
 To make thread health visible to the supervisor (and to any subscriber),
-each process publishes a `ShmThreadHealth` periodically:
+each process publishes a `ThreadHealth` (`drone::ipc::ThreadHealth`, defined
+in `common/ipc/include/ipc/ipc_types.h`) periodically:
 
 ```cpp
 static constexpr uint8_t  kMaxTrackedThreads = 16;
 
 struct ThreadHealthEntry {
-    char     name[32]   = {};      // Thread name (e.g. "fc_tx_thread")
+    char     name[32]   = {};      // Thread name (e.g. "fc_tx")
     bool     healthy    = true;    // false if stuck
     bool     critical   = false;   // if stuck → process should self-terminate
     uint64_t last_ns    = 0;       // Last touch timestamp
 };
 
-struct ShmThreadHealth {
+struct ThreadHealth {
     char                process_name[32] = {};
     ThreadHealthEntry   threads[kMaxTrackedThreads] = {};
     uint8_t             num_threads = 0;
@@ -385,8 +401,9 @@ struct ShmThreadHealth {
 };
 ```
 
-Each process publishes this on a per-process SHM topic:
-`/drone_thread_health_{process_name}` (e.g. `/drone_thread_health_comms`).
+Each process publishes this via a generic `IPublisher<ThreadHealth>` on a
+per-process topic: `/drone_thread_health_{process_name}` (e.g.
+`/drone_thread_health_comms`).
 
 The supervisor subscribes to all seven and uses thread health as an
 additional signal alongside liveliness tokens and PID polling.
@@ -409,7 +426,7 @@ and a restarted P7 cannot re-attach to them — it would launch duplicates.
 - Process 7 (`drone-system-monitor.service`) uses `Type=notify` and
   `WatchdogSec=10` with `sd_notify(0, "WATCHDOG=1")` in the health loop.
 - P7 runs in **monitor-only** mode (no `--supervised`): health telemetry,
-  liveliness monitoring, `ShmSystemHealth` publishing. It does NOT
+  liveliness monitoring, `SystemHealth` publishing. It does NOT
   fork+exec child processes when deployed under systemd.
 - Cascade restarts are expressed via `PartOf=` directives.
 
@@ -432,9 +449,13 @@ DEGRADED while the process continues operating.
 | **P1 Video Capture** | `mission_cam` | Yes | Primary camera feed — loss means no visual data for perception or SLAM |
 | | `stereo_cam` | Yes | Stereo depth data — required for obstacle avoidance and VIO |
 | **P2 Perception** | `inference` | Yes | YOLO object detection — loss removes obstacle/target awareness |
+| | `sam` | Yes | Segmentation (SAM) — instance masks for detected objects |
+| | `mask_projection` | Yes | Projects masks into 3D — feeds obstacle geometry to the grid |
 | | `tracker` | Yes | Object tracking continuity — stale tracks cause incorrect planning |
 | | `fusion` | Yes | Sensor fusion output — downstream consumers depend on fused detections |
-| **P3 SLAM/VIO/Nav** | `visual_frontend` | Yes | Visual odometry — loss means no pose updates, navigation fails |
+| | `depth` | Yes | Depth/stereo estimation — required for obstacle ranging |
+| | `radar_read` | Yes | Radar ingestion — range measurements for sensor fusion |
+| **P3 SLAM/VIO/Nav** | `vio_pipeline` | Yes | Visual-inertial odometry — loss means no pose updates, navigation fails |
 | | `imu_reader` | Yes | IMU integration — loss means no attitude/velocity estimation |
 | | `pose_publisher` | Yes | Pose output — downstream (P4, P5) lose localisation |
 | **P4 Mission Planner** | `planning_loop` | Yes | Waypoint tracking and contingency logic — loss means uncontrolled flight |
@@ -445,7 +466,7 @@ DEGRADED while the process continues operating.
 | **P6 Payload Manager** | `payload_loop` | No | Payload actuation — non-essential for flight safety |
 | **P7 System Monitor** | `health_loop` | No | Health reporting — loss disables monitoring but does not affect flight control |
 
-**Summary:** 15 threads total — 11 critical, 4 non-critical.
+**Summary:** 19 threads total — 15 critical, 4 non-critical.
 
 **Design principles applied:**
 
@@ -485,7 +506,7 @@ A process with a deadlocked critical thread appears "alive" to the
 liveliness system. This is the current blind spot that motivates Layer 1.
 
 **Rejected because:** Thread-level monitoring is essential for flight
-safety. A stuck `fc_tx_thread` means no heartbeat to the flight
+safety. A stuck `fc_tx` means no heartbeat to the flight
 controller, which triggers PX4's link-loss failsafe — but the companion
 stack doesn't know why.
 
@@ -507,8 +528,9 @@ watchdog can recover from most failures without a full reboot.
   the flight. The stack continues in DEGRADED mode with reduced capability.
 - **Thread visibility** — deadlocks and stuck threads are detected and
   logged, replacing "it just stopped working" with actionable diagnostics.
-- **Backend-independent** — the thread heartbeat and PID-polling layers
-  work without Zenoh. Only the liveliness-token detection path requires it.
+- **Backend-independent** *(historical — Zenoh is now the only backend)* —
+  the thread heartbeat and PID-polling layers work without Zenoh. Only the
+  liveliness-token detection path requires it.
 - **Zero overhead in the hot path** — thread heartbeat is one atomic store
   per loop iteration (~1 ns). The watchdog scans are on a separate,
   low-priority thread.
@@ -525,7 +547,7 @@ watchdog can recover from most failures without a full reboot.
 - **fork+exec complexity** — managing child PIDs, signal forwarding,
   zombie reaping, and environment inheritance adds non-trivial code to
   Process 7.
-- **SHM topic proliferation** — 7 new `ShmThreadHealth` topics. Mitigated
+- **Topic proliferation** — 7 new `ThreadHealth` topics. Mitigated
   by keeping the struct small (trivially copyable, < 1 KB).
 - **False positives** — a thread doing a legitimate long-running operation
   (e.g., loading a model on startup) could be flagged as stuck. Mitigated
@@ -541,8 +563,8 @@ watchdog can recover from most failures without a full reboot.
   cause all processes to crash-loop. The cooldown window and max-retry
   limit bound this, and the supervisor logs a CRITICAL event.
 - **Clock monotonicity** — `steady_clock` is used for all heartbeat
-  timestamps to avoid NTP jump issues. The `ShmThreadHealth::timestamp_ns`
-  uses the same clock as the existing `ShmSystemHealth::timestamp_ns`.
+  timestamps to avoid NTP jump issues. The `ThreadHealth::timestamp_ns`
+  uses the same clock as the existing `SystemHealth::timestamp_ns`.
 
 ---
 
@@ -551,9 +573,9 @@ watchdog can recover from most failures without a full reboot.
 | Phase | Scope | Files | Depends On | Status |
 |-------|-------|-------|-----------|--------|
 | **Phase 1** | Thread heartbeat + watchdog library | `thread_heartbeat.h`, `thread_watchdog.h`, `safe_name_copy.h`, tests (25) | — | ✅ PR #94 |
-| **Phase 2** | SHM thread health struct + per-process publishing | `shm_types.h`, `thread_health_publisher.h`, P1–P7 integration, tests (15) | Phase 1 | ✅ PR #96 |
-| **Phase 3** | Process supervisor in System Monitor | `process7_system_monitor/`, launch script changes | Phase 2 | 🔲 Issue #91 |
-| **Phase 4** | Restart policies + dependency graph + degraded mode | Config-driven policies, stack status model | Phase 3 | 🔲 Issue #92 |
+| **Phase 2** | Thread health struct + per-process publishing | `ipc_types.h` (`ThreadHealth`), `thread_health_publisher.h`, P1–P7 integration, tests (15) | Phase 1 | ✅ PR #96 |
+| **Phase 3** | Process supervisor in System Monitor | `process7_system_monitor/` (`ProcessManager`), launch script changes | Phase 2 | ✅ Issue #91 |
+| **Phase 4** | Restart policies + dependency graph + degraded mode | Config-driven policies (`ProcessConfig`), `ProcessGraph`, `StackStatus` | Phase 3 | ✅ Issue #92 |
 
 Tier 4 items (systemd, hardware WDT) are tracked separately in Issues
 #83 and the deployment epic.
@@ -588,7 +610,7 @@ During Phase 1 and 2 implementation, several design adjustments were made:
 |-----------|-------|-----------|
 | `ThreadHeartbeatRegistry` | Register, touch, snapshot, overflow | Lock-free correctness, max-thread handling |
 | `ThreadWatchdog` | Stuck detection, callback firing, grace period | Threshold logic, false-positive suppression |
-| `ShmThreadHealth` | Trivially copyable, defaults, serialization | SHM compatibility |
+| `ThreadHealth` | Trivially copyable, defaults, serialization | IPC compatibility |
 | `RestartPolicy` | Backoff calculation, cooldown reset, max-retry, thermal gate | Policy arithmetic |
 | `ProcessGraph` | Launch ordering (topological), cascade targets, cycle detection | Dual-edge graph correctness |
 
@@ -605,8 +627,8 @@ During Phase 1 and 2 implementation, several design adjustments were made:
 
 ### CI
 
-All tests run in both SHM and Zenoh matrix legs. Thread heartbeat tests
-are backend-independent. Supervisor tests use fork+exec of a small test
+Thread heartbeat tests are backend-independent (they never depended on the
+IPC backend). Supervisor tests use fork+exec of a small test
 binary (`test_crasher`) rather than the full stack.
 
 ---
@@ -618,7 +640,7 @@ during the relevant implementation phase.
 
 ### OQ-1: Dependency Graph Direction (Phase 4, #92) — RESOLVED
 
-**Decision:** Use two separate edge types in `ProcessDescriptor`:
+**Decision:** Use two separate edge types in `ProcessConfig`:
 
 - `launch_after[]` — data dependency, controls launch ordering.
 - `restart_cascade[]` — stale-state dependency, controls which processes
@@ -630,7 +652,7 @@ graph, and worked examples (comms crash, perception crash).
 ### OQ-2: Thermal-Aware Restart Suppression (Phase 4, #92) — RESOLVED
 
 **Decision:** Added `thermal_gate` field to `RestartPolicy` (default: 3 =
-CRITICAL). When `ShmSystemHealth::thermal_zone >= thermal_gate`, the
+CRITICAL). When `SystemHealth::thermal_zone >= thermal_gate`, the
 supervisor defers restarts and logs the suppression. Restarts resume
 automatically when temperature drops.
 
@@ -654,7 +676,7 @@ Mitigations (still apply):
 1. **Layer 3 (systemd)** — Each process has its own `Restart=on-failure`
    service unit. `drone-stack.target` groups all 7.
 2. **Minimal P7 complexity** — the health loop remains simple: read
-   sensors, publish `ShmSystemHealth`, call `sd_notify(WATCHDOG=1)`.
+   sensors, publish `SystemHealth`, call `sd_notify(WATCHDOG=1)`.
 3. **Self-monitoring** — P7 registers its own `health_loop` thread in
    the heartbeat registry and runs its own watchdog. If the health loop
    stalls, the watchdog thread logs and stops calling `sd_notify()`,
@@ -666,9 +688,9 @@ Several threads perform one-time operations that exceed the stuck threshold:
 
 | Process | Thread | Operation | Duration |
 |---------|--------|-----------|----------|
-| P2 Perception | `inference_loop` | YOLO model loading | 5–30 s |
-| P3 SLAM | `vio_loop` | ORB vocabulary loading | 10–60 s |
-| P5 Comms | `fc_tx_thread` | MAVLink handshake | 3–10 s |
+| P2 Perception | `inference` | YOLO model loading | 5–30 s |
+| P3 SLAM | `vio_pipeline` | ORB vocabulary loading | 10–60 s |
+| P5 Comms | `fc_tx` | MAVLink handshake | 3–10 s |
 
 Without `touch_with_grace()`, these would trigger false stuck-thread alerts.
 
@@ -695,7 +717,7 @@ Without `touch_with_grace()`, these would trigger false stuck-thread alerts.
 - Issue #88 — Epic: Process & Thread Watchdog
 - Issue #89 / PR #94 — Phase 1: Thread heartbeat + watchdog library
 - Issue #90 / PR #96 — Phase 2: SHM thread health + per-process publishing
-- Issue #91 — Phase 3: Process supervisor (planned)
-- Issue #92 — Phase 4: Restart policies + dependency graph (planned)
+- Issue #91 — Phase 3: Process supervisor (implemented)
+- Issue #92 — Phase 4: Restart policies + dependency graph (implemented)
 - Issue #97 — Tech debt: snapshot() vector → array optimisation
 - [CI_ISSUES.md](../tracking/CI_ISSUES.md) — CI-008: strncpy truncation warning

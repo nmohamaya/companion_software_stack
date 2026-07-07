@@ -1,8 +1,10 @@
 # ADR-010: Multi-Agent Pipeline Architecture
 
 **Status:** Accepted
-**Date:** 2026-04-06 (updated 2026-04-09)
+**Date:** 2026-04-06 (updated 2026-04-09, 2026-07-07)
 **Issue:** #357, #360, #381, #392
+
+> **Update note (2026-07):** The core decision — a diff-routed, two-pass agent pipeline with human checkpoints — stands. Two decision-context shifts have been reconciled inline below. (1) **Orchestration was reimplemented from shell scripts into a Python package** at `scripts/orchestrator/`, invoked as `python3 -m orchestrator <command>`; the old `*.sh` entrypoints referenced throughout this ADR now map to modules under `scripts/orchestrator/commands/` (`deploy-issue.sh` → `deploy_issue.py`, `start-agent.sh` → `start_agent.py`, `validate-session.sh` → `validate_session.py`, `deploy-review.sh` → `deploy_review.py`), and cross-agent context injection moved from `gather_cross_agent_context()` to `gather_context()` in `scripts/orchestrator/context.py`. (2) **The roster grew to 18 role definitions** with `review-data-plumbing` (Pass 1, read-only) — see the wiring-status note in the Pass 1 roster for what is and isn't yet automated.
 
 ## Context
 
@@ -12,7 +14,7 @@ The project uses 15+ git worktrees for concurrent AI agent work (ADR-005), but h
 
 ## Decision
 
-Implement a **17-agent pipeline** with formal role definitions, orchestration scripts, CI integration, shared state coordination, a guided pipeline mode with human checkpoints, and a **two-pass review architecture** where quality/contract agents receive safety agent findings as context.
+Implement an **18-agent pipeline** with formal role definitions, orchestration scripts, CI integration, shared state coordination, a guided pipeline mode with human checkpoints, and a **two-pass review architecture** where quality/contract agents receive safety agent findings as context.
 
 ### Agent Roster
 
@@ -37,6 +39,9 @@ Implement a **17-agent pipeline** with formal role definitions, orchestration sc
 | 10 | `review-security` | Sonnet | Always | Input validation, auth, TLS |
 | 11 | `test-unit` | Sonnet | Always | Build, run tests, verify count vs baseline |
 | 12 | `test-scenario` | Sonnet | If IPC/HAL/Gazebo in diff | Gazebo SITL scenario integration |
+| 18 | `review-data-plumbing` | Opus | If IPC/HAL/config field wiring in diff | Fields read by consumers but never written by producers |
+
+> **`review-data-plumbing` wiring status (2026-07):** the role is defined in `.claude/agents/review-data-plumbing.md` (Opus, read-only — `Read`/`Glob`/`Grep`) and is intended to run in Pass 1 as a 5th safety reviewer alongside the four above, to catch the cross-boundary "field read by a consumer but never written by any producer" failure mode the other reviewers structurally miss (see Risks below). It is **not yet wired into the automated orchestrator** — `scripts/orchestrator/config.py`, `scripts/orchestrator/routing.py`, and `.github/workflows/auto-review.yml` do not yet register or trigger it, so until wired it must be launched manually. (It carries roster number 18 rather than a Pass 1-contiguous number because it was added after the original 17-agent roster was numbered; renumbering the Pass 2 and ops agents was avoided intentionally.)
 
 #### Pass 2 — Quality & Contracts Agents (parallel after Pass 1, read-only)
 
@@ -57,11 +62,17 @@ These agents run **after** Pass 1 completes and receive Pass 1 findings as conte
 
 ### Claude Code Skills Integration (Issue #381)
 
-In addition to the shell-based orchestrator, the pipeline is also available as **Claude Code skills** that run inline in the current session. This provides a more interactive experience where Claude acts as tech-lead directly in the conversation.
+In addition to the Python orchestrator (`python3 -m orchestrator`), the pipeline is also available as **Claude Code skills** that run inline in the current session. This provides a more interactive experience where Claude acts as tech-lead directly in the conversation. The skill surface has grown from the original two to eight (in `.claude/skills/`):
 
 | Skill | Purpose |
 |-------|---------|
 | `/deploy-issue <N>` | Full pipeline inline — routing, agent work, review, PR creation |
+| `/deploy-wave` | Deploy multiple related issues as a wave against an integration branch, then merge the combined diff |
+| `/review-pr` | Two-pass domain-aware review of a PR — spawns up to 10 review agents with severity-tagged findings |
+| `/run-scenario` | Run Gazebo SITL scenario integration tests with structured analysis and run comparison |
+| `/production-readiness` | Pre-deployment hardware audit — build, safety, coverage, security, config, debug-code gate, systemd |
+| `/create-issue` | File a structured GitHub issue with domain detection, auto-labeling, and code context |
+| `/update-docs` | Auto-generate the required tracking-doc updates after a PR (PROGRESS, ROADMAP, BUG_FIXES, TESTS, API, …) |
 | `/commit` | Smart commit with format check, test count verification |
 
 Skills use the `Agent` tool with `subagent_type` and `isolation: "worktree"` to spawn agents — replacing `claude` subprocess calls. The two-pass review architecture is the same; the difference is that results are presented interactively in the conversation rather than written to log files.
@@ -72,7 +83,7 @@ Skills use the `Agent` tool with `subagent_type` and `isolation: "worktree"` to 
 
 ### Launch Modes
 
-`deploy-issue.sh` supports four modes for deploying agents:
+`python3 -m orchestrator deploy-issue` supports four modes for deploying agents:
 
 | Mode | Flag | Behavior |
 |------|------|----------|
@@ -83,7 +94,7 @@ Skills use the `Agent` tool with `subagent_type` and `isolation: "worktree"` to 
 
 ### Pipeline Mode (12-State Machine)
 
-The `--pipeline` flag chains all scripts into a single guided flow:
+The `--pipeline` flag chains all stages into a single guided flow:
 
 ```
 AGENT_WORK → CP1 → VALIDATE → CP2 → PR_CREATE → CP3 → REVIEW → CP4
@@ -98,7 +109,7 @@ AGENT_WORK → CP1 → VALIDATE → CP2 → PR_CREATE → CP3 → REVIEW → CP4
 | # | Checkpoint | User sees | Options |
 |---|-----------|-----------|---------|
 | 1 | Changes review | AGENT_REPORT.md + diff | accept / changes / reject |
-| 2 | Hallucination report | validate-session.sh output | commit / back / abort |
+| 2 | Hallucination report | `orchestrator validate` output | commit / back / abort |
 | 3 | PR preview | Generated title + body | create / edit / back / abort |
 | 4 | Review & test findings | P1-P4 from review agents + test results | accept / fix / back / reject |
 | 5 | Final summary | Commit log + validation status | done / re-review / back / abort |
@@ -116,7 +127,7 @@ Feature agent works autonomously (writes AGENT_REPORT.md)
   ↓
 [CP1] Human reviews changes
   ↓
-validate-session.sh (build, tests, hallucination detection)
+orchestrator validate (build, tests, hallucination detection)
   ↓
 [CP2] Human reviews validation
   ↓
@@ -153,12 +164,12 @@ Agents start cold — each invocation has no memory of prior sessions. To mainta
 
 | Layer | File | What it answers | Updated by |
 |-------|------|----------------|------------|
-| Active work | `tasks/active-work.md` | "What are other agents doing right now?" | deploy-issue.sh (start + cleanup) |
+| Active work | `tasks/active-work.md` | "What are other agents doing right now?" | `deploy-issue` command (start + cleanup) |
 | Recent changelog | `tasks/agent-changelog.md` | "What was just completed?" | Pipeline CLEANUP |
 | Project status | `.claude/shared-context/project-status.md` | "Where does the project stand?" | Human (end of session) |
 | Domain knowledge | `.claude/shared-context/domain-knowledge.md` | "What pitfalls should I avoid?" | Any agent (tech-lead reviews) |
 
-Both `deploy-issue.sh` and `start-agent.sh` inject this context via `gather_cross_agent_context()`. Auto/pipeline modes inject directly (they call `claude` directly); headless/interactive modes defer to `start-agent.sh` to avoid double injection.
+Both the `deploy-issue` and `start` commands inject this context via `gather_context()` in `scripts/orchestrator/context.py` (which replaced the duplicated shell logic in the former `deploy-issue.sh` / `start-agent.sh`). Auto/pipeline modes inject directly; headless/interactive modes defer to the `start` command to avoid double injection.
 
 #### CLEANUP State Updates
 
@@ -188,6 +199,7 @@ Reviews use a two-pass architecture. Pass 1 agents are diff-routed; Pass 2 agent
 | `std::atomic`, `mutex`, `thread`, `lock_guard` | + concurrency |
 | P4/P5/P7, watchdog, fault handling | + fault-recovery |
 | IPC topics, HAL backends, Gazebo configs | + test-scenario |
+| IPC/HAL/config field wiring (new struct fields, `cfg.get<>` calls) | + data-plumbing *(role defined; not yet auto-routed — see Pass 1 roster note)* |
 
 **Pass 2 — Quality & Contracts** (parallel, always-on, after Pass 1):
 
@@ -200,7 +212,7 @@ Reviews use a two-pass architecture. Pass 1 agents are diff-routed; Pass 2 agent
 
 ### Ops-GitHub Integration
 
-The `ops-github` agent (Haiku) is invoked automatically when `deploy-issue.sh` encounters an issue with no recognized domain labels. It reads the issue title and body, applies appropriate `domain:*` and `type:*` labels via `gh issue edit`, then routing proceeds normally. It can also be launched manually for triage, stale cleanup, and milestone tracking.
+The `ops-github` agent (Haiku) is invoked automatically when the `deploy-issue` command encounters an issue with no recognized domain labels. It reads the issue title and body, applies appropriate `domain:*` and `type:*` labels via `gh issue edit`, then routing proceeds normally. It can also be launched manually for triage, stale cleanup, and milestone tracking.
 
 ### Anti-Hallucination Measures
 
@@ -208,13 +220,13 @@ All agents include rules to prevent hallucination:
 - Verify existence before citing functions, files, or APIs
 - Never claim tests pass without running them
 - Mark uncertain claims with `[UNVERIFIED]`
-- `validate-session.sh` performs post-session verification (build, test count, symbol existence, include existence, diff sanity)
+- `python3 -m orchestrator validate` performs post-session verification (build, test count, symbol existence, include existence, diff sanity)
 
 ### Boundary Enforcement
 
 Three layers:
 1. **Pre-commit hook** — Fast feedback on scope violations (warning)
-2. **CI job** — `agent-boundaries` workflow checks branch-name→scope mapping (warning)
+2. **CI job** — the `agent-boundaries` job in `.github/workflows/agent-checks.yml` (workflow *Agent Checks*) checks its branch-prefix→scope `SCOPE_MAP` (warning)
 3. **Agent tool restrictions** — Review agents are read-only, test agents write to tests/ only
 
 ### Infrastructure Split Rationale
@@ -237,8 +249,8 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 
 ### Negative
 
-- **17 agent definitions** to maintain — role files may drift from actual capabilities
-- **Orchestration complexity** — 12+ scripts add operational surface area
+- **18 agent definitions** to maintain — role files may drift from actual capabilities
+- **Orchestration complexity** — the multi-module `scripts/orchestrator/` Python package adds operational surface area
 - **Boundary enforcement is advisory** — agents can work outside their scope when necessary (by design)
 - **Shared context files can go stale** — `project-status.md` requires human updates each session
 - **Token costs** — full pipeline (1 feature + 3-6 Pass 1 + 4 Pass 2 agents) costs ~$5-15 per issue
@@ -248,8 +260,8 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 - **Stale project status** — `project-status.md` must be updated by the human each session; stale data misleads agents
 - **Review routing heuristics** may miss edge cases (e.g., concurrency bug in a file that doesn't contain "mutex")
 - **Dashboard metrics** depend on consistent commit message formatting
-- **Double context injection** if new launch paths are added without understanding the deploy-issue.sh/start-agent.sh split
-- **Review agents miss cross-file consistency** — C++ implicit semantics (silently-deleted special members), member init ordering bugs, and cross-file enum/string mismatches fall outside all 9 review agents' focused scopes. Measured at ~10% miss rate vs Copilot (Wave 3 data: 3/30 comments were net-new). Mitigated by Copilot triage step in deploy skills.
+- **Double context injection** if new launch paths are added without understanding the `deploy-issue`/`start` command split
+- **Review agents miss cross-file consistency** — C++ implicit semantics (silently-deleted special members), member init ordering bugs, and cross-file enum/string mismatches fall outside the focused scopes of the existing safety and quality reviewers. Measured at ~10% miss rate vs Copilot (Wave 3 data: 3/30 comments were net-new). This risk motivated adding `review-data-plumbing` as a dedicated 5th Pass 1 reviewer for the "field read by a consumer but never written by any producer" class (roster #18 above) — though until it is wired into the automated routing the residual risk is still mitigated by the Copilot triage step in deploy skills.
 
 ## Alternatives Considered
 
@@ -259,15 +271,15 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 
 3. **No ops agent** — Handle GitHub housekeeping manually. Works at small scale but becomes a bottleneck as issue count grows.
 
-4. **No pipeline mode** — Run each script manually (deploy-issue, validate, deploy-review, etc.). Works but error-prone and slow. Pipeline mode chains them with checkpoints.
+4. **No pipeline mode** — Run each command manually (`deploy-issue`, `validate`, `deploy-review`, etc.). Works but error-prone and slow. Pipeline mode chains them with checkpoints.
 
 5. **Fully autonomous (no checkpoints)** — Remove human checkpoints entirely. Faster but unacceptable for safety-critical code. The 5-checkpoint design gives speed with control.
 
 ## References
 
 - ADR-005: Parallel Agent Git Worktree Strategy
-- `.claude/agents/` — All 17 role definitions
+- `.claude/agents/` — All 18 role definitions
 - `.claude/shared-context/` — Project status and domain knowledge
-- `scripts/` — Orchestration scripts
+- `scripts/orchestrator/` — Orchestration Python package (`python3 -m orchestrator`)
 - `docs/explanation/MULTI_AGENT_GUIDE.md` — Full usage guide with setup, walkthrough, and examples
 - `docs/explanation/AGENT_HANDOFF.md` — Cross-domain handoff protocol

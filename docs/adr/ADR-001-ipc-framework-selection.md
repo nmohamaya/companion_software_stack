@@ -8,6 +8,8 @@
 | **Deciders** | Project leads |
 | **Target Hardware** | NVIDIA Jetson Orin (aarch64, 8–64 GB RAM, CUDA 12.x, JetPack 6.x) |
 
+> **Update note (2026-07):** SHM was **fully removed in Issue #126** — the hand-rolled POSIX shared-memory backend described in §1, §4.4, and §6 Phases B–D no longer exists (`shm_types.h` and the `Shm*` implementations are gone). Zenoh is now the **sole and mandatory** IPC backend, superseding the transitional coexistence plan in §6 Phase A: `ipc_backend` defaults to `"zenoh"` and `"shm"` is rejected at config validation, and `zenohc` is a **required** build dependency. The modular backend architecture is captured in [ADR-002](ADR-002-modular-ipc-backend-architecture.md); config details in [`config_reference.md`](../reference/config_reference.md). The core decision below — select Zenoh — stands.
+
 ---
 
 ## 1. Context
@@ -263,12 +265,12 @@ Effort is comparable. Zenoh has a slight edge because:
 ## 6. Implementation Plan
 
 ### Phase A — Foundation (New Issue)
-- Add `zenohc` as optional CMake dependency (`find_package(zenohc QUIET)`)
-- Compile guard: `HAVE_ZENOH`
+- Add `zenohc` as a **required** CMake dependency (`find_package(zenohc REQUIRED)`)
+- No `HAVE_ZENOH` compile guard — the IPC target links `zenohc::lib` unconditionally
 - Create `ZenohMessageBus`, `ZenohPublisher<T>`, `ZenohSubscriber<T>` implementing existing `IPublisher` / `ISubscriber` interfaces
-- Config-driven backend selection: `"ipc_backend": "zenoh"` (default remains `"shm"` for backward compat)
+- Config-driven backend selection: `"ipc_backend": "zenoh"` — now the default and only valid value; `"shm"` is rejected at config validation
 - Unit tests for the new backend
-- CI: build with and without Zenoh
+- CI: build the Zenoh configuration across sanitizer variants (no non-Zenoh build leg)
 
 ### Phase B — Low-Bandwidth Channel Migration
 - Migrate `ShmPose`, `ShmMissionStatus`, `ShmFCState`, `ShmFCCommand`, `ShmGCSCommand` to Zenoh pub/sub
@@ -325,4 +327,4 @@ Effort is comparable. Zenoh has a slight edge because:
 - [rmw_zenoh — ROS 2 Zenoh middleware](https://github.com/ros2/rmw_zenoh)
 - [ZettaScale (company behind Zenoh, iceoryx, Cyclone DDS)](https://zettascale.tech/)
 - Companion stack IPC interfaces: `common/ipc/include/ipc/ipublisher.h`, `isubscriber.h`, `iservice_channel.h`
-- Companion stack SHM types: `common/ipc/include/ipc/shm_types.h`
+- Companion stack IPC wire types: `common/ipc/include/ipc/ipc_types.h` (the SHM `shm_types.h` was removed in Issue #126)

@@ -19,7 +19,7 @@ Do **not** write an ADR for:
 | ADR | Title | Status | Domain | Date |
 |-----|-------|--------|--------|------|
 | [ADR-001](ADR-001-ipc-framework-selection.md) | IPC Framework Selection — Zenoh | ✅ Accepted | IPC | 2026-02-28 |
-| [ADR-002](ADR-002-modular-ipc-backend-architecture.md) | Modular IPC Backend Architecture | ✅ Accepted | IPC | 2026-03-01 |
+| [ADR-002](ADR-002-modular-ipc-backend-architecture.md) | Modular IPC Backend Architecture | ⚠️ Superseded | IPC | 2026-03-01 |
 | [ADR-003](ADR-003-cpp17-language-standard.md) | C++17 Language Standard | ✅ Accepted | Build | 2026-03-02 |
 | [ADR-004](ADR-004-process-thread-watchdog-architecture.md) | Process + Thread Watchdog Architecture | ✅ Accepted | Safety | 2026-03-04 |
 | [ADR-005](ADR-005-parallel-agent-git-worktree.md) | Parallel Agent Git Worktree Model | ✅ Accepted | Workflow | 2026-03-12 |

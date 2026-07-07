@@ -1,5 +1,13 @@
 # ADR-007: Error Handling Strategy — `Result<T,E>` Over Exceptions
 
+> **Update note (2026-07):** The core decision — `Result<T,E>` over
+> exceptions — stands and is fully implemented; Status remains Accepted.
+> Some decision *context* has since shifted: the CI toolchain moved to
+> Ubuntu 24.04 (GCC 13 default, LLVM/clang tooling 18), which refreshes
+> the `std::expected` deferral rationale in §4.2; the design-doc reference
+> in §6 moved to `docs/design/`; and the §3.1 `value()`/`error()`
+> misuse-behaviour wording is corrected to match the header.
+
 | Field | Value |
 |-------|-------|
 | **Status** | Accepted — fully implemented |
@@ -70,8 +78,8 @@ public:
     bool is_ok()  const;
     bool is_err() const;
 
-    const T& value() const;   // UB if is_err() — only call after checking
-    const E& error() const;   // UB if is_ok()
+    const T& value() const;   // throws std::bad_variant_access if is_err() — check first
+    const E& error() const;   // throws std::bad_variant_access if is_ok()
 
     T value_or(T default_value) const;
 
@@ -144,9 +152,13 @@ stack-unwinding behaviour under real-time scheduling.
 ### 4.2 `std::expected<T, E>` (C++23) (deferred)
 
 `std::expected` is semantically equivalent and part of the standard.
-Adoption is deferred until compiler support is stable on the GCC 12 /
-Clang 15 toolchain used in CI.  Migration from `Result<T,E>` will be
-straightforward when ready (same call-site API).
+It is now available on the CI toolchain (Ubuntu 24.04 — GCC 13 default,
+LLVM/clang tooling 18), so the original "compiler support not yet stable"
+objection no longer applies.  Adoption remains deferred for a different
+reason: `std::expected` requires C++23, whereas this codebase targets
+C++17 (see ADR-003).  Until the language-standard baseline moves,
+`Result<T,E>` stands.  Migration will be straightforward when ready
+(same call-site API).
 
 ### 4.3 `std::optional<T>` (insufficient)
 
@@ -204,7 +216,7 @@ bool, and the out-parameter requires an lvalue at every call site.
    more error cases than `ErrorCode` covers, define a module-local
    enum and `using MyResult = drone::util::Result<T, MyError>`.
 
-See [error_handling_design.md](../error_handling_design.md) for the full
+See [error_handling_design.md](../design/error_handling_design.md) for the full
 API reference and code examples.
 
 ---

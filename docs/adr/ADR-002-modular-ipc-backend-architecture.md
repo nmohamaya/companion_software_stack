@@ -1,8 +1,10 @@
 # ADR-002: Modular IPC Backend Architecture
 
+> **⚠️ SUPERSEDED (2026-07).** The modular multi-backend IPC architecture described here was removed when the POSIX-SHM backend was deleted in **Issue #126** (Zenoh is now the sole, always-built backend). This document is retained as historical record; for current IPC see ADR-001, CLAUDE.md, and docs/reference/config_reference.md.
+
 | Field | Value |
 |-------|-------|
-| **Status** | Accepted |
+| **Status** | Superseded |
 | **Date** | 2026-03-01 |
 | **Author** | Team |
 | **Deciders** | Project leads |
@@ -18,12 +20,12 @@ two IPC backends:
 
 | Backend | Pub/Sub | Service Channels | Network Transport |
 |---------|---------|-------------------|-------------------|
-| **POSIX SHM** (`ShmMessageBus`) | ✅ SeqLock-based | ❌ Removed (Phase D) | ❌ Local only |
+| **POSIX SHM** (`ShmMessageBus`) *(entire backend removed in #126)* | ✅ SeqLock-based | ❌ Removed (Phase D) | ❌ Local only |
 | **Zenoh** (`ZenohMessageBus`) | ✅ Zero-copy SHM + bytes | ✅ Queryable pattern | ✅ UDP/TCP/QUIC/TLS |
 
 The architecture must remain **modular** so that:
 
-1. The stack builds and runs with **or without** Zenoh (fallback to SHM pub/sub).
+1. The stack builds and runs with **or without** Zenoh (fallback to SHM pub/sub). *(No longer true — removed in #126; the SHM fallback is gone and Zenoh is a hard build dependency.)*
 2. A new middleware (DDS, gRPC, iceoryx2, custom) can replace Zenoh without
    rewriting process code.
 3. Process code is **backend-agnostic** — it only depends on abstract interfaces.
@@ -72,23 +74,25 @@ The architecture must remain **modular** so that:
    `zenoh_publisher.h`, `shm_writer.h`).
 
 3. **Backend selection** is controlled by:
-   - **Build time**: CMake option `ENABLE_ZENOH` defines `HAVE_ZENOH`.
+   - **Build time**: CMake option `ENABLE_ZENOH` defines `HAVE_ZENOH`. *(Removed in #126 — there is no `ENABLE_ZENOH` option; Zenoh is a hard `REQUIRED` dependency and `HAVE_ZENOH` is never defined via `add_compile_definitions`, so the compile guard is dead.)*
    - **Run time**: `create_message_bus("zenoh")` or `create_message_bus("shm")`,
-     typically driven by `config/default.json`.
+     typically driven by `config/default.json`. *(Removed in #126 — `create_message_bus("shm")` now logs an error and returns a Zenoh bus; every config file hardcodes `ipc_backend: "zenoh"`.)*
 
 4. **SHM backend is always available** as the zero-dependency fallback.
-   Service channel helpers return `nullptr` on the SHM backend (with a warning).
+   Service channel helpers return `nullptr` on the SHM backend (with a warning). *(Removed in #126 — there is no SHM backend; service channels always resolve to Zenoh.)*
 
 5. **Only `shm_service_channel.h` is removed** (Phase D). The SHM pub/sub
    files (`shm_writer.h`, `shm_reader.h`, `shm_publisher.h`,
    `shm_subscriber.h`, `shm_message_bus.h`) are retained as the fallback
-   backend.
+   backend. *(Superseded by #126 — ALL `shm_*.h` files were subsequently removed, and `shm_types.h` was renamed to `ipc_types.h`.)*
 
 6. **Internal thread-level constructs** (`SPSCRing`, `PoseDoubleBuffer`)
    are NOT IPC — they are process-internal synchronisation primitives and
    remain in place regardless of backend selection.
 
 ### 2.3 MessageBusVariant
+
+> *(Removed in #126 — the type is now `detail::BusVariant = std::variant<std::unique_ptr<ZenohMessageBus>>` (a single, unconditional arm) defined in `message_bus.h`, not `MessageBusVariant` in `message_bus_factory.h`. `ShmMessageBus` no longer exists. The variant mechanism below survives, but with only the Zenoh arm.)*
 
 The factory uses `std::variant<...>` rather than virtual dispatch because
 `ShmMessageBus` and `ZenohMessageBus` are template factories — they cannot
@@ -154,6 +158,8 @@ endif()
 
 ### Step 3: Register in the Factory
 
+> *(Removed in #126 — the variant is now `detail::BusVariant` in `message_bus.h` and no longer includes `ShmMessageBus`; register a new backend by adding an arm there, not `MessageBusVariant` in `message_bus_factory.h`.)*
+
 In `message_bus_factory.h`:
 
 ```cpp
@@ -193,9 +199,11 @@ Create a test category in `tests/test_zenoh_ipc.cpp` (or a new file
 `tests/test_dds_ipc.cpp`) with the same structure:
 
 1. Backend-specific unit tests (under `#ifdef HAVE_DDS`)
-2. Factory integration tests (always compiled — verify SHM fallback)
+2. Factory integration tests (always compiled — verify SHM fallback) *(Removed in #126 — there is no SHM fallback to verify; the factory always resolves to Zenoh.)*
 
 ### Step 5: Update CI
+
+> *(Removed in #126 — the CI matrix axis is `sanitizer: [none, asan, tsan, ubsan]`, not `backend`; there is no per-backend CI leg and Zenoh is installed/built in every leg.)*
 
 In `.github/workflows/ci.yml`, add a matrix entry:
 
@@ -234,9 +242,9 @@ In `config/default.json`, add the backend option:
   1 factory registration. Process code does not change.
 - **Graceful degradation** — without Zenoh (or any other middleware), the
   stack still works with SHM pub/sub. Service channels are unavailable but
-  the system doesn't crash (factory returns `nullptr`).
+  the system doesn't crash (factory returns `nullptr`). *(Removed in #126 — no SHM fallback remains; Zenoh is a hard build dependency.)*
 - **Test isolation** — SHM tests run without external dependencies; Zenoh
-  tests are compile-guarded and only run when `ENABLE_ZENOH=ON`.
+  tests are compile-guarded and only run when `ENABLE_ZENOH=ON`. *(Removed in #126 — there is no `ENABLE_ZENOH` option and no SHM tests; all IPC tests build against Zenoh.)*
 - **Incremental adoption** — new backends can be added alongside existing
   ones; processes can be migrated one at a time.
 
@@ -267,6 +275,8 @@ In `config/default.json`, add the backend option:
 
 ## 5. Current Backend Inventory
 
+> *(Removed in #126 — the SHM rows below are invalid: all `shm_*.h` files were deleted and `shm_types.h` was renamed to `ipc_types.h`. Only the `zenoh_*.h` backend headers, the `ipublisher.h`/`isubscriber.h`/`iservice_channel.h` interfaces, `message_bus_factory.h`, and `spsc_ring.h` survive; `message_bus.h` — holding `detail::BusVariant` — was also added.)*
+
 | File | Backend | Role | Status |
 |------|---------|------|--------|
 | `ipublisher.h` | — | Abstract interface | ✅ Stable |
@@ -292,11 +302,15 @@ In `config/default.json`, add the backend option:
 
 ## 6. Test Configuration
 
+> *(Superseded by #126 — this entire "two build configurations" description is invalid. There is no SHM-only build, the CI matrix axis is `sanitizer: [none, asan, tsan, ubsan]` (not `backend`), the `test_shm_ipc.cpp` source no longer exists (only stale `build-*/bin/test_shm_ipc` binaries may linger), and `has_service_channels()` / `create_client()` always resolve to the Zenoh backend. `HAVE_ZENOH` is never defined, so the compile guards below are dead.)*
+
 Tests use **one source tree, two build configurations**. The CI matrix runs
 both; `#ifdef HAVE_ZENOH` compile guards control which tests are included
 in each build.
 
 ### CI Matrix
+
+> *(Removed in #126 — the `backend: [shm, zenoh]` matrix no longer exists. The real axis is `sanitizer: [none, asan, tsan, ubsan]`; there is no `shm` job and no `ENABLE_ZENOH=OFF` build.)*
 
 ```yaml
 # .github/workflows/ci.yml
