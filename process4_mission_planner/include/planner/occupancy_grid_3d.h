@@ -9,6 +9,7 @@
 #include "planner/cross_veto_decision.h"  // Issue #698 Fix #1 — promotion gate
 #include "planner/grid_cell.h"            // GridCell + GridCellHash (extracted)
 #include "planner/radar_fov_gate.h"       // RadarFovGate (cross-veto helper)
+#include "util/iclock.h"  // Issue #799 Phase B — mockable clock for testable decay
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -83,6 +84,14 @@ inline constexpr float kCosts[26] = {
 /// observed for `cell_ttl_s` seconds (default 3 s).  This prevents a
 /// single missed detection frame from wiping the grid and causing the planner
 /// to re-route straight through a known obstacle.
+///
+/// Issue #799 Phase B: PROMOTED (static-layer) cells also decay after
+/// `static_cell_ttl_s` seconds without re-observation — default now **30 s**
+/// (was 0 = permanent).  Unbounded permanent promotion let perception ghosts
+/// accumulate over a flight (25→650 cells in scenario 18) and seal the grid.
+/// Re-observed cells refresh their timestamp (real obstacles persist); HD-map
+/// cells (add_static_obstacle) are exempt; the reactive avoider backstops. See
+/// DESIGN_RATIONALE DR-054.  An explicit `0.0f` still disables decay (sentinel).
 class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
@@ -91,7 +100,7 @@ public:
                              float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f,
                              bool require_radar_for_promotion = false, int voxel_promotion_hits = 3,
-                             float static_cell_ttl_s                     = 0.0f,
+                             float static_cell_ttl_s                     = 30.0f,  // #799 Phase B
                              int   voxel_instance_promotion_observations = 0,
                              float min_obstacle_altitude_m               = 0.0f,
                              int   dynamic_confirmation_hits             = 1,
@@ -296,10 +305,10 @@ public:
         // inserted in this batch share the same logical observation
         // moment; using a single timestamp is also more semantically
         // correct (a batch is one observation, not 135k).
-        const uint64_t batch_now_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        // Issue #799 Phase B: via get_clock() (still hoisted, one call per
+        // batch — perf-neutral) so promoted-cell decay is deterministically
+        // testable under ScopedMockClock. DefaultClock is the same steady_clock.
+        const uint64_t batch_now_ns = drone::util::get_clock().now_ns();
 
         // Issue #638 Phase 3 — instance-aware promotion gate.
         // When `voxel_instance_promotion_observations_ > 0`, voxels are
@@ -618,10 +627,7 @@ public:
         // and gated on `objects.num_objects > 0`).  Faster decay response
         // means cells the drone has flown past clear out before the next
         // search cycle, instead of carrying a multi-second wake.
-        const uint64_t sweep_now_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        const uint64_t sweep_now_ns = drone::util::get_clock().now_ns();  // #799 Phase B
         sweep_static_cells(sweep_now_ns);
         return s;
     }
@@ -630,9 +636,7 @@ public:
     /// Updates timestamps for observed cells; stale cells expire after TTL.
     void update_from_objects(const drone::ipc::DetectedObjectList& objects,
                              const drone::ipc::Pose&               drone_pose) {
-        const auto     now    = std::chrono::steady_clock::now();
-        const uint64_t now_ns = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+        const uint64_t now_ns = drone::util::get_clock().now_ns();  // #799 Phase B (mockable)
 
         // Drone grid cell — used for self-exclusion zone.
         // Objects whose inflated region would overlap the drone's cell are skipped
@@ -1201,8 +1205,25 @@ private:
                         continue;
                     }
                     if (!in_bounds(c)) continue;
-                    // Already promoted — no need to track in dynamic layer
-                    if (static_occupied_.count(c) > 0) continue;
+                    // Already promoted — no need to track in the dynamic layer.
+                    if (static_occupied_.count(c) > 0) {
+                        // Issue #799 Phase B — but DO refresh its decay timestamp:
+                        // a fresh observation of an already-promoted cell means a
+                        // REAL obstacle is still in view, so it must never decay
+                        // out of the static layer.  Fail-safe: static-cell decay
+                        // may only clear the drone's un-re-observed wake, never an
+                        // obstacle still being seen.  Mirrors the voxel path's
+                        // refresh in insert_voxels(); without it, enabling the
+                        // 30 s default decay would silently drop live radar/camera
+                        // obstacles — the exact rule this layer exists to honour.
+                        if (static_cell_ttl_ns_ > 0) {
+                            if (auto it = static_cell_timestamps_.find(c);
+                                it != static_cell_timestamps_.end()) {
+                                it->second = now_ns;
+                            }
+                        }
+                        continue;
+                    }
 
                     bool was_absent = (occupied_.count(c) == 0);
 
