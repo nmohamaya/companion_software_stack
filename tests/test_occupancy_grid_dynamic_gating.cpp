@@ -283,8 +283,9 @@ TEST(OccupancyGridRadarInflation, StaticObstacleNonFiniteGeometryIgnored) {
 // Promoted (static-layer) cells now decay after `static_cell_ttl_s` (default
 // 30 s) without re-observation — bounds the perception-ghost accumulation that
 // sealed the grid in scenario 18 (25→650 static cells → D*Lite no-path).
-// Deterministic via ScopedMockClock: the grid now reads drone::util::get_clock()
-// (Phase B migration), so time is driven in microseconds — no wall-clock sleeps
+// Deterministic via ScopedMockClock (nanosecond API: now_ns() / advance_s()):
+// the grid now reads drone::util::get_clock() (Phase B migration), so a 31 s
+// TTL advance executes in microseconds of real time — no wall-clock sleeps
 // (the flaky-under-tsan anti-pattern). Re-observed cells refresh; 0 = disabled.
 
 TEST(OccupancyGridStaticDecay, PromotedGhostDecaysAfterTtl) {
