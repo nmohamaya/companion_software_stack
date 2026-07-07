@@ -118,7 +118,20 @@
              is allowlisted in the runner gate, but its presence in the log is
              what proves the topic is live (empty log → broken → FAIL). -->
         <sensor name="contact" type="contact">
-          <contact><collision>collision</collision></contact>
+          <!-- Issue #802 — explicit shared topic. Without this, each sensor
+               publishes on its own scoped topic (/world/test_world/model/<m>/
+               link/link/sensor/contact/contact) and the aggregate
+               /world/test_world/contacts the scenario contact gate captures
+               (tests/run_scenario_gazebo.sh, #740 Layer 3 / #791) never exists
+               → empty gz_contacts.log → fail-closed FAIL on every run.
+               NOTE: the <topic> MUST live INSIDE <contact> — gz-sim's Contact
+               system ignores a sensor-level <topic> for contact sensors
+               (verified empirically on gz-sim 8.14.0). gz-transport supports
+               multiple publishers on one topic. -->
+          <contact>
+            <collision>collision</collision>
+            <topic>/world/test_world/contacts</topic>
+          </contact>
         </sensor>
         <visual name="visual">
           <geometry>
@@ -184,7 +197,20 @@
              contact is published to /world/test_world/contacts and FAILs the
              scenario via the runner's collision gate. -->
         <sensor name="contact" type="contact">
-          <contact><collision>collision</collision></contact>
+          <!-- Issue #802 — explicit shared topic. Without this, each sensor
+               publishes on its own scoped topic (/world/test_world/model/<m>/
+               link/link/sensor/contact/contact) and the aggregate
+               /world/test_world/contacts the scenario contact gate captures
+               (tests/run_scenario_gazebo.sh, #740 Layer 3 / #791) never exists
+               → empty gz_contacts.log → fail-closed FAIL on every run.
+               NOTE: the <topic> MUST live INSIDE <contact> — gz-sim's Contact
+               system ignores a sensor-level <topic> for contact sensors
+               (verified empirically on gz-sim 8.14.0). gz-transport supports
+               multiple publishers on one topic. -->
+          <contact>
+            <collision>collision</collision>
+            <topic>/world/test_world/contacts</topic>
+          </contact>
         </sensor>
         <visual name="visual">
           <geometry><cylinder><radius>1.0</radius><length>1.7</length></cylinder></geometry>
@@ -209,7 +235,20 @@
              contact is published to /world/test_world/contacts and FAILs the
              scenario via the runner's collision gate. -->
         <sensor name="contact" type="contact">
-          <contact><collision>collision</collision></contact>
+          <!-- Issue #802 — explicit shared topic. Without this, each sensor
+               publishes on its own scoped topic (/world/test_world/model/<m>/
+               link/link/sensor/contact/contact) and the aggregate
+               /world/test_world/contacts the scenario contact gate captures
+               (tests/run_scenario_gazebo.sh, #740 Layer 3 / #791) never exists
+               → empty gz_contacts.log → fail-closed FAIL on every run.
+               NOTE: the <topic> MUST live INSIDE <contact> — gz-sim's Contact
+               system ignores a sensor-level <topic> for contact sensors
+               (verified empirically on gz-sim 8.14.0). gz-transport supports
+               multiple publishers on one topic. -->
+          <contact>
+            <collision>collision</collision>
+            <topic>/world/test_world/contacts</topic>
+          </contact>
         </sensor>
         <visual name="visual">
           <geometry><cylinder><radius>1.0</radius><length>6.0</length></cylinder></geometry>
@@ -234,7 +273,20 @@
              contact is published to /world/test_world/contacts and FAILs the
              scenario via the runner's collision gate. -->
         <sensor name="contact" type="contact">
-          <contact><collision>collision</collision></contact>
+          <!-- Issue #802 — explicit shared topic. Without this, each sensor
+               publishes on its own scoped topic (/world/test_world/model/<m>/
+               link/link/sensor/contact/contact) and the aggregate
+               /world/test_world/contacts the scenario contact gate captures
+               (tests/run_scenario_gazebo.sh, #740 Layer 3 / #791) never exists
+               → empty gz_contacts.log → fail-closed FAIL on every run.
+               NOTE: the <topic> MUST live INSIDE <contact> — gz-sim's Contact
+               system ignores a sensor-level <topic> for contact sensors
+               (verified empirically on gz-sim 8.14.0). gz-transport supports
+               multiple publishers on one topic. -->
+          <contact>
+            <collision>collision</collision>
+            <topic>/world/test_world/contacts</topic>
+          </contact>
         </sensor>
         <visual name="visual">
           <geometry><cylinder><radius>0.8</radius><length>2.0</length></cylinder></geometry>
@@ -259,7 +311,20 @@
              contact is published to /world/test_world/contacts and FAILs the
              scenario via the runner's collision gate. -->
         <sensor name="contact" type="contact">
-          <contact><collision>collision</collision></contact>
+          <!-- Issue #802 — explicit shared topic. Without this, each sensor
+               publishes on its own scoped topic (/world/test_world/model/<m>/
+               link/link/sensor/contact/contact) and the aggregate
+               /world/test_world/contacts the scenario contact gate captures
+               (tests/run_scenario_gazebo.sh, #740 Layer 3 / #791) never exists
+               → empty gz_contacts.log → fail-closed FAIL on every run.
+               NOTE: the <topic> MUST live INSIDE <contact> — gz-sim's Contact
+               system ignores a sensor-level <topic> for contact sensors
+               (verified empirically on gz-sim 8.14.0). gz-transport supports
+               multiple publishers on one topic. -->
+          <contact>
+            <collision>collision</collision>
+            <topic>/world/test_world/contacts</topic>
+          </contact>
         </sensor>
         <visual name="visual">
           <geometry><box><size>1.5 1.5 10</size></box></geometry>

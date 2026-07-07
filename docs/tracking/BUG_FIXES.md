@@ -2266,7 +2266,31 @@ Why it surfaced now: a Jun-29 gz-sim upgrade + reboots changed the effective SDF
 
 **Found by:** Live sim-env debugging (2026-07-07) while unblocking the #799 Phase B validation run. Bisected to e4750e0 (#794) via `git log -S`.
 
-**Test (live, gz-sim 8.14.0, this machine):** With the fix, under the PX4 launch env — `gz service -i --service /world/test_world/scene/info` returns a provider; `/world/test_world/contacts` still advertised (ground_plane + all obstacle sensors); `dynamic_pose/info` + `pose/info` present (Physics alive). Full `deploy/launch_gazebo.sh` reaches `INFO [init] Gazebo world is ready` + MAVLink up + all 7 companion processes start (previously hung → killed).
+**Test (live, gz-sim 8.14.0, this machine):** With the fix, under the PX4 launch env — `gz service -i --service /world/test_world/scene/info` returns a provider; contact sensors advertise (per-sensor topics — see Fix #64 for the aggregate-topic follow-up); `dynamic_pose/info` + `pose/info` present (Physics alive). Full `deploy/launch_gazebo.sh` reaches `INFO [init] Gazebo world is ready` + MAVLink up + all 7 companion processes start (previously hung → killed).
+
+---
+
+### Fix #64 — Contact + proximity gates captured 0 bytes: both subscribed to never-advertised topics (Issue #802)
+
+**Date:** 2026-07-07
+**Severity:** High (both flight-quality collision gates fail-closed FAILed on every run — no scenario could go green)
+**Affects:** `tests/run_scenario_gazebo.sh` contact gate (#740 Layer 3 / #791) and proximity gate (#796)
+
+**Bug:** With the sim running again after Fix #63, scenario 18 flew a full clean mission but still failed 2/21: both `gz_contacts.log` and `gz_odometry.log` were 0 bytes, tripping the fail-closed empty-log checks. Both captures were subscribed to topics nothing ever advertised:
+
+1. **Contact gate** captured `/world/test_world/contacts`, but gz-sim contact sensors publish on **per-sensor scoped topics** (`/world/test_world/model/<m>/link/link/sensor/contact/contact`) unless an explicit topic is set. The aggregate never existed.
+2. **Proximity gate** captured `/model/x500_companion/odometry`, but PX4's gz-bridge spawns the model as **`x500_companion_0`** (`${PX4_SIM_MODEL}_${instance}`), so odometry streams on `/model/x500_companion_0/odometry`.
+
+Historically masked: pre-#800 the contact gate treated an empty log as PASS (Fix #58), and the proximity gate (#797) landed while the sim was down (Fix #63) — so neither capture had ever demonstrably delivered data.
+
+**Fix:**
+
+- `sim/worlds/test_world.sdf`: pin all 5 contact sensors to the shared aggregate via `<contact><topic>/world/test_world/contacts</topic></contact>`. **Placement matters:** gz-sim's Contact system reads the topic from the `<contact>` element (`contactElem->Get<std::string>("topic", ...)` in `src/systems/contact/Contact.cc`) and **ignores a sensor-level `<topic>`** — verified empirically (sensor-level: aggregate never advertised; contact-level: advertised + publishes). gz-transport handles multiple publishers on one topic.
+- `tests/run_scenario_gazebo.sh`: discover the odometry topic by prefix (`/model/<pattern>(_N)?/odometry`) from `gz topic -l` instead of assuming the bare model name; loud WARN + constructed-name fallback stays fail-closed if silent.
+
+**Found by:** Live validation runs of Fix #63 (2026-07-07); gz-sim topic enumeration against the running stack showed the real topic names; `Contact.cc` source confirmed the `<contact><topic>` requirement.
+
+**Test (live, gz-sim 8.14.0):** Resting drone streams **18.3 MB/20 s** on the aggregate topic (scoped topic simultaneously 0 — publishing moved, not duplicated). Full scenario 18 run: `gz_contacts.log` 7.8 MB, `gz_odometry.log` 4.0 MB, and both gates **PASS** with real data — `Contact-sensor: no drone-vs-obstacle contacts`, `Proximity: no drone-vs-obstacle penetration`.
 
 ---
 
