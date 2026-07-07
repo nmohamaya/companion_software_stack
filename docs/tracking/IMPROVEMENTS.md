@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-07-07 (Issue #802 — noticed while fixing the contact-gate capture topics)
+
+#### Contact capture writes ~8 MB/run of resting-ground spam — add `<update_rate>` to the ground_plane contact sensor
+
+- **P3** (`test-infra`; `sim/worlds/test_world.sdf` ground_plane `<sensor name="contact">`) — with the aggregate `/world/test_world/contacts` topic actually delivering data (Fix #64), the ground_plane sensor streams contact messages at full physics rate (250 Hz) the entire time the drone rests on the ground: measured **18.3 MB per 20 s** resting, **7.8 MB** per scenario-18 run in `gz_contacts.log`. The gate only needs ground contacts as a liveness proof + takeoff/landing markers — not 250 Hz. **Fix:** add `<update_rate>10</update_rate>` (or similar) to the **ground_plane** sensor only; leave the 4 obstacle sensors at full rate (a real strike is short — don't risk undersampling it). Semantic check before landing it: confirm `lib_check_contacts.py` liveness + allowlist logic is rate-independent. **When to do it:** next touch of the world file or if capture size ever bothers a long scenario. **Cross-ref:** Issue #802 / PR #803 (Fix #64).
+
 ### 2026-06-29 (Issue #799 Phase C — found while fixing the scenario report generator)
 
 #### `_report_ipc_latency()` uses a multi-byte em-dash as a `sort -t` delimiter

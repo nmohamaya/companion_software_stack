@@ -26,21 +26,26 @@
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type="adiabatic"/>
 
-    <!-- ⚠️ DO NOT add any <world>-level <plugin> here. ⚠️
-         In gz-sim (Harmonic/8.x), the presence of ANY <world> <plugin> in the
-         SDF makes gz IGNORE $GZ_SIM_SERVER_CONFIG_PATH entirely — PX4's
-         server.config (src/modules/simulation/gz_bridge/server.config) is what
-         provides SceneBroadcaster (→ /world/<name>/scene/info, the exact service
-         px4-rc.gzsim waits for), Physics, Sensors, Imu, NavSat, Magnetometer …
-         Declaring even one plugin here silently drops ALL of them → PX4 loops
-         "Waiting for Gazebo world…" forever and the sim never starts.
+    <!-- ⚠️ DO NOT add any SYSTEM <plugin> as a direct child of <world>. ⚠️
+         (GUI plugins inside the <gui> block below are fine — they configure the
+         client-side 3D viewer only and have no effect on server plugin loading.)
+         In gz-sim (Harmonic/8.x), the presence of ANY system plugin declared
+         directly under <world> makes gz IGNORE $GZ_SIM_SERVER_CONFIG_PATH
+         entirely — PX4's server.config (in the PX4-Autopilot repo:
+         src/modules/simulation/gz_bridge/server.config, exported via gz_env.sh)
+         is what provides SceneBroadcaster (→ /world/<name>/scene/info, the
+         exact service px4-rc.gzsim waits for), Physics, Sensors, Imu, NavSat,
+         Magnetometer … Declaring even one system plugin here silently drops
+         ALL of them → PX4 loops "Waiting for Gazebo world…" forever and the
+         sim never starts.
          Issue #791/#794 originally added a `gz-sim-contact-system` plugin here;
          it was both redundant (server.config already loads Contact,
          entity_type="world" entity_name="*") and destructive. The Contact
          system from server.config processes the <sensor type="contact"> elements
-         defined on the obstacle/ground models below, so /world/test_world/contacts
-         still publishes and the #740 Layer-3 collision gate still fails CLOSED —
-         WITHOUT overriding the rest of the server config. See BUG_FIXES.md.
+         defined on the obstacle/ground models below, publishing on the explicit
+         shared <contact><topic> (/world/test_world/contacts), so the #740
+         Layer-3 collision gate still fails CLOSED — WITHOUT overriding the rest
+         of the server config. See BUG_FIXES.md (Fix #63/#64).
          If you ever need a bespoke server plugin, add it to PX4's server.config,
          never to this world file. -->
 

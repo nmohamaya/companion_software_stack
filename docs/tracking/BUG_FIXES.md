@@ -2266,7 +2266,7 @@ Why it surfaced now: a Jun-29 gz-sim upgrade + reboots changed the effective SDF
 
 **Found by:** Live sim-env debugging (2026-07-07) while unblocking the #799 Phase B validation run. Bisected to e4750e0 (#794) via `git log -S`.
 
-**Test (live, gz-sim 8.14.0, this machine):** With the fix, under the PX4 launch env — `gz service -i --service /world/test_world/scene/info` returns a provider; contact sensors advertise (per-sensor topics — see Fix #64 for the aggregate-topic follow-up); `dynamic_pose/info` + `pose/info` present (Physics alive). Full `deploy/launch_gazebo.sh` reaches `INFO [init] Gazebo world is ready` + MAVLink up + all 7 companion processes start (previously hung → killed).
+**Test (live, gz-sim 8.14.0, this machine):** With the fix, under the PX4 launch env — `gz service -i --service /world/test_world/scene/info` returns a provider; contact sensors advertise (per-sensor topics — see Fix #64 for the aggregate-topic follow-up); `dynamic_pose/info` + `pose/info` present (Physics alive). Full `deploy/launch_gazebo.sh` reaches `INFO [init] Gazebo world is ready` + MAVLink up + the full companion stack starts (process count: CLAUDE.md §Process Map; previously hung → killed).
 
 ---
 
