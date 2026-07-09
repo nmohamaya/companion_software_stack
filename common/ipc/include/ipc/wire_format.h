@@ -72,7 +72,7 @@ enum class WireMessageType : uint16_t {
 ///
 /// Layout (32 bytes, packed):
 ///   [0..3]   magic            — 0x4E4F5244 ("DRON" LE)
-///   [4]      version          — wire format version (currently 2)
+///   [4]      version          — wire format version (see `kWireVersion`)
 ///   [5]      flags            — reserved (0)
 ///   [6..7]   msg_type         — WireMessageType enum
 ///   [8..11]  payload_size     — size of payload following this header
