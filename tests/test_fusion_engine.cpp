@@ -2658,9 +2658,14 @@ drone::perception::FusedObjectList mofn_step_multi(
     drone::perception::UKFFusionEngine& engine, const std::vector<drone::ipc::RadarDetection>& dets,
     uint64_t t_ns, uint32_t frame) {
     drone::ipc::RadarDetectionList radar{};
-    radar.timestamp_ns   = t_ns;
-    radar.num_detections = static_cast<uint32_t>(dets.size());
-    for (size_t i = 0; i < dets.size(); ++i) radar.detections[i] = dets[i];
+    radar.timestamp_ns = t_ns;
+    // PR #814 review: guard the fixed-size IPC array. detections[] holds
+    // MAX_RADAR_DETECTIONS (1024) — these tests stay well under, but a future
+    // caller must not silently overflow it.
+    EXPECT_LE(dets.size(), static_cast<size_t>(drone::ipc::MAX_RADAR_DETECTIONS));
+    radar.num_detections = static_cast<uint32_t>(
+        std::min(dets.size(), static_cast<size_t>(drone::ipc::MAX_RADAR_DETECTIONS)));
+    for (uint32_t i = 0; i < radar.num_detections; ++i) radar.detections[i] = dets[i];
     engine.set_radar_detections(radar);
     drone::perception::TrackedObjectList empty;
     empty.timestamp_ns   = t_ns;

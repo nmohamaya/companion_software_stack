@@ -4282,8 +4282,8 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 **Date:** 2026-07-07  
 **Category:** Perception / Safety (radar-primary architecture)  
 **Files Modified:**
-- `process2_perception/include/perception/ukf_fusion_engine.h` — `OrphanCandidate` struct, 3 `RadarNoiseConfig` fields (`orphan_init_hits`/`_window_s`/`_radius_m`), bounded `orphan_candidates_` buffer (64, stalest evicted), `orphan_candidate_count()` test accessor.
-- `process2_perception/src/ukf_fusion_engine.cpp` — M-of-N confirmation in the Phase D3 orphan block (candidate sweep timed by radar-frame timestamps; world-frame matching when pose available; confirmed candidates fall through to the unchanged creation block); factory loads + clamps the 3 keys (hits [1,10] fail-safe cap, warn-and-clamp).
+- `process2_perception/include/perception/ukf_fusion_engine.h` — `OrphanCandidate` struct, 3 `RadarNoiseConfig` fields (`orphan_init_hits`/`_window_s`/`_radius_m`), bounded `orphan_candidates_` buffer (64, lowest-hits-first eviction with stalest as tiebreak — PR #814 review), `orphan_candidate_count()` test accessor.
+- `process2_perception/src/ukf_fusion_engine.cpp` — M-of-N confirmation in the Phase D3 orphan block via `expire_orphan_candidates()` + `confirm_orphan_candidate()` helpers (candidate sweep timed by radar-frame timestamps; world-frame matching when pose available; confirmed candidates fall through to the unchanged creation block); factory loads + clamps the 3 keys (hits [1,10] fail-safe cap, warn-and-clamp).
 - `config/default.json` — the 3 keys under `perception.fusion.radar` (defaults 3 / 1.0 s / 2.0 m).
 - `tests/test_fusion_engine.cpp` — new `RadarOrphanMofN` suite (4 tests); 11 pre-existing orphan-mechanics tests pin `orphan_init_hits=1` (they exercise other gates).
 

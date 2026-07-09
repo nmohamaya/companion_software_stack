@@ -692,6 +692,83 @@ Eigen::Vector3f UKFFusionEngine::body_to_world(const Eigen::Vector3f& body) cons
             drone_east_ + body.x() * sin_y + body.y() * cos_y, drone_up_ - body.z()};
 }
 
+// ── Issue #799 Phase A — radar-orphan M-of-N confirmation (PR #814 review) ──
+
+void UKFFusionEngine::expire_orphan_candidates(uint64_t now_ns) {
+    // Window is timed by radar-frame timestamps (data-driven → unit tests are
+    // deterministic without a mock clock).  Guard the subtraction: an
+    // out-of-order/older frame stamp must not underflow uint64.
+    const auto window_ns =
+        static_cast<uint64_t>(std::max(0.0f, radar_cfg_.orphan_init_window_s) * 1e9f);
+    orphan_candidates_.erase(std::remove_if(orphan_candidates_.begin(), orphan_candidates_.end(),
+                                            [&](const OrphanCandidate& c) {
+                                                return now_ns >= c.last_seen_ns &&
+                                                       (now_ns - c.last_seen_ns) > window_ns;
+                                            }),
+                             orphan_candidates_.end());
+}
+
+bool UKFFusionEngine::confirm_orphan_candidate(const Eigen::Vector3f& body_pos, uint64_t now_ns) {
+    // Candidates live in world frame when pose is known (stable against drone
+    // motion — same convention as dormant re-ID), body frame otherwise.
+    // has_pose_ flips false→true once when VIO locks — body-frame candidates
+    // must not be radius-compared against world-frame positions (spurious
+    // near-origin matches, blended running means).  Clear the buffer on the
+    // frame switch; fail-safe — only ever delays confirmation.
+    if (orphan_candidates_world_frame_ != has_pose_) {
+        orphan_candidates_.clear();
+        orphan_candidates_world_frame_ = has_pose_;
+    }
+    const Eigen::Vector3f cand_pos = has_pose_ ? body_to_world(body_pos) : body_pos;
+
+    size_t match_idx = orphan_candidates_.size();
+    for (size_t ci = 0; ci < orphan_candidates_.size(); ++ci) {
+        if ((orphan_candidates_[ci].pos - cand_pos).norm() < radar_cfg_.orphan_init_radius_m) {
+            match_idx = ci;
+            break;
+        }
+    }
+
+    if (match_idx == orphan_candidates_.size()) {
+        if (orphan_candidates_.size() >= kMaxOrphanCandidates) {
+            // Clutter-storm bound: evict lowest-hits-first (stalest as
+            // tiebreak) so a multi-hit real-obstacle candidate outlives a
+            // storm of one-shot clutter.
+            orphan_candidates_.erase(std::min_element(
+                orphan_candidates_.begin(), orphan_candidates_.end(),
+                [](const OrphanCandidate& a, const OrphanCandidate& b) {
+                    return std::tie(a.hits, a.last_seen_ns) < std::tie(b.hits, b.last_seen_ns);
+                }));
+        }
+        OrphanCandidate cand;
+        cand.pos           = cand_pos;
+        cand.hits          = 1;
+        cand.first_seen_ns = now_ns;
+        cand.last_seen_ns  = now_ns;
+        orphan_candidates_.push_back(cand);
+        return false;  // not confirmed yet
+    }
+
+    OrphanCandidate& match = orphan_candidates_[match_idx];
+    // hits must count DISTINCT, forward-moving frames — a second same-frame
+    // detection (wide obstacle, twin returns) or an out-of-order frame must
+    // not inflate the count (or move last_seen_ns backwards).  Absorb without
+    // counting.
+    if (now_ns <= match.last_seen_ns) {
+        return false;
+    }
+    match.hits++;
+    const float alpha  = 1.0f / static_cast<float>(match.hits);
+    match.pos          = (1.0f - alpha) * match.pos + alpha * cand_pos;
+    match.last_seen_ns = now_ns;
+    if (match.hits < radar_cfg_.orphan_init_hits) {
+        return false;  // still tentative
+    }
+    // Confirmed — remove the candidate; caller creates the track.
+    orphan_candidates_.erase(orphan_candidates_.begin() + static_cast<std::ptrdiff_t>(match_idx));
+    return true;
+}
+
 int UKFFusionEngine::find_nearest_dormant(const Eigen::Vector3f& world_pos,
                                           const Eigen::Matrix3f& pos_cov) const {
     // Covariance-aware merge radius (A3): use 2σ of the largest position
@@ -1431,22 +1508,9 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     // any existing filter (camera or radar-only).  This enables detection
     // of obstacles outside camera FOV (Issue #231: gated by radar_only_enabled).
     if (has_radar_data_ && radar_enabled_ && radar_cfg_.radar_only_enabled) {
-        // Issue #799 Phase A — expire stale orphan candidates once per frame.
-        // Window is timed by radar-frame timestamps (data-driven → unit tests
-        // are deterministic without a mock clock).  Guard the subtraction:
-        // an out-of-order/older frame stamp must not underflow uint64.
-        {
-            const uint64_t now_ns = radar_dets_.timestamp_ns;
-            const auto     window_ns =
-                static_cast<uint64_t>(std::max(0.0f, radar_cfg_.orphan_init_window_s) * 1e9f);
-            orphan_candidates_.erase(
-                std::remove_if(orphan_candidates_.begin(), orphan_candidates_.end(),
-                               [&](const OrphanCandidate& c) {
-                                   return now_ns >= c.last_seen_ns &&
-                                          (now_ns - c.last_seen_ns) > window_ns;
-                               }),
-                orphan_candidates_.end());
-        }
+        // Issue #799 Phase A — expire stale orphan candidates once per frame
+        // (helper extracted per PR #814 review).
+        expire_orphan_candidates(radar_dets_.timestamp_ns);
 
         for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
             if (radar_matched[ri]) continue;
@@ -1492,70 +1556,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             // inside orphan_init_window_s rejects them at the source, while a
             // persistent real obstacle confirms in M consecutive frames
             // (~M/20 s).  orphan_init_hits==1 preserves legacy immediate
-            // creation.  Candidates live in world frame when pose is known
-            // (stable against drone motion — same convention as dormant
-            // re-ID), body frame otherwise.
-            if (radar_cfg_.orphan_init_hits > 1) {
-                // PR #814 review P2: has_pose_ flips false→true once when VIO
-                // locks — body-frame candidates must not be radius-compared
-                // against world-frame positions (spurious near-origin matches,
-                // blended running means).  Clear the buffer on the frame
-                // switch; fail-safe — only ever delays confirmation.
-                if (orphan_candidates_world_frame_ != has_pose_) {
-                    orphan_candidates_.clear();
-                    orphan_candidates_world_frame_ = has_pose_;
-                }
-                const Eigen::Vector3f cand_pos = has_pose_ ? body_to_world(body_pos) : body_pos;
-                const uint64_t        now_ns   = radar_dets_.timestamp_ns;
-
-                size_t match_idx = orphan_candidates_.size();
-                for (size_t ci = 0; ci < orphan_candidates_.size(); ++ci) {
-                    if ((orphan_candidates_[ci].pos - cand_pos).norm() <
-                        radar_cfg_.orphan_init_radius_m) {
-                        match_idx = ci;
-                        break;
-                    }
-                }
-                if (match_idx == orphan_candidates_.size()) {
-                    if (orphan_candidates_.size() >= kMaxOrphanCandidates) {
-                        // Clutter-storm bound — PR #814 review P2: evict
-                        // lowest-hits-first (stalest as tiebreak) so a
-                        // multi-hit real-obstacle candidate outlives a storm
-                        // of one-shot clutter.
-                        orphan_candidates_.erase(std::min_element(
-                            orphan_candidates_.begin(), orphan_candidates_.end(),
-                            [](const OrphanCandidate& a, const OrphanCandidate& b) {
-                                return std::tie(a.hits, a.last_seen_ns) <
-                                       std::tie(b.hits, b.last_seen_ns);
-                            }));
-                    }
-                    OrphanCandidate cand;
-                    cand.pos           = cand_pos;
-                    cand.hits          = 1;
-                    cand.first_seen_ns = now_ns;
-                    cand.last_seen_ns  = now_ns;
-                    orphan_candidates_.push_back(cand);
-                    continue;  // not confirmed yet — no track this frame
-                }
-                OrphanCandidate& match = orphan_candidates_[match_idx];
-                // PR #814 review P3: hits must count DISTINCT, forward-moving
-                // frames — a second same-frame detection (wide obstacle, twin
-                // returns) or an out-of-order frame must not inflate the count
-                // (or move last_seen_ns backwards).  Absorb without counting.
-                if (now_ns <= match.last_seen_ns) {
-                    continue;
-                }
-                match.hits++;
-                const float alpha  = 1.0f / static_cast<float>(match.hits);
-                match.pos          = (1.0f - alpha) * match.pos + alpha * cand_pos;
-                match.last_seen_ns = now_ns;
-                if (match.hits < radar_cfg_.orphan_init_hits) {
-                    continue;  // still tentative
-                }
-                // Confirmed — remove the candidate and fall through to the
-                // existing creation block below.
-                orphan_candidates_.erase(orphan_candidates_.begin() +
-                                         static_cast<std::ptrdiff_t>(match_idx));
+            // creation.  (Logic in confirm_orphan_candidate() — PR #814 review.)
+            if (radar_cfg_.orphan_init_hits > 1 &&
+                !confirm_orphan_candidate(body_pos, radar_dets_.timestamp_ns)) {
+                continue;  // still tentative — no track this frame
             }
 
             // Create new radar-only track (guard overflow to stay in high-bit range)

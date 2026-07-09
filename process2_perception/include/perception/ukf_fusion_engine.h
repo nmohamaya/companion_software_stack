@@ -317,6 +317,17 @@ private:
                                          const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *
                                                                           10.0f) const;
 
+    // Issue #799 Phase A — radar-orphan M-of-N confirmation helpers.  Split out
+    // of fuse() (PR #814 review) so the candidate-buffer logic reads and unit-
+    // tests in isolation.  Both operate on orphan_candidates_ and are only
+    // called from the single-threaded fuse() radar-orphan block.
+    /// Drop candidates not re-observed within orphan_init_window_s of now_ns.
+    void expire_orphan_candidates(uint64_t now_ns);
+    /// Fold one unmatched orphan (body-frame) into the candidate buffer.
+    /// @return true if this return completes an M-of-N run (caller creates the
+    ///         track); false if still tentative (caller skips the frame).
+    [[nodiscard]] bool confirm_orphan_candidate(const Eigen::Vector3f& body_pos, uint64_t now_ns);
+
     /// Try to associate a UKF filter with unmatched radar detections.
     /// Returns true and updates the filter if a match is found.
     bool try_associate_radar(ObjectUKF& ukf, std::vector<bool>& radar_matched,
