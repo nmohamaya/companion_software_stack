@@ -7,9 +7,13 @@
 #include "perception/ifusion_engine.h"
 #include "perception/kalman_tracker.h"
 #include "perception/ukf_fusion_engine.h"
+#include "util/config.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <memory>
 
 #include <gtest/gtest.h>
 
@@ -2763,4 +2767,118 @@ TEST(RadarOrphanMofN, PoseArrivalClearsBodyFrameCandidates) {
     EXPECT_EQ(mofn_step(*engine, det, 4 * kFrameNs, 4).objects.size(), 0u);  // hit 2
     ASSERT_EQ(mofn_step(*engine, det, 5 * kFrameNs, 5).objects.size(), 1u)
         << "fresh world-frame 3-hit run confirms";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Issue #799 Phase A — fail-safe clamp regression tests (PR #814 review, P2)
+//
+// DR-056's rule-compliance argument (b) rests on `create_fusion_engine`
+// clamping orphan_init_hits to [1,10] and window/radius to [0.1,10]: "a config
+// typo cannot suppress real obstacles indefinitely."  Every other test in this
+// file constructs RadarNoiseConfig directly and therefore BYPASSES that clamp.
+// These tests drive the real factory path — the one production uses
+// (process2_perception/src/main.cpp) — so the safety cap is locked by a test
+// rather than only asserted in prose.
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+/// Build a UKF engine through the production factory from an on-disk config.
+/// Returns the engine (owning) + a downcast pointer for the config accessor.
+struct FactoryEngine {
+    std::unique_ptr<drone::perception::IFusionEngine> owned;
+    drone::perception::UKFFusionEngine*               ukf{nullptr};
+    std::string                                       path;
+
+    FactoryEngine() = default;
+    // Move-only: the user destructor suppresses the implicit move ctor, and the
+    // temp config file must be removed exactly once (by whoever owns the path).
+    FactoryEngine(const FactoryEngine&)            = delete;
+    FactoryEngine& operator=(const FactoryEngine&) = delete;
+    FactoryEngine(FactoryEngine&& o) noexcept
+        : owned(std::move(o.owned)), ukf(o.ukf), path(std::move(o.path)) {
+        o.ukf = nullptr;
+        o.path.clear();  // a moved-from std::string is valid-but-unspecified
+    }
+    FactoryEngine& operator=(FactoryEngine&&) = delete;
+    ~FactoryEngine() {
+        if (!path.empty()) std::remove(path.c_str());
+    }
+};
+
+FactoryEngine make_factory_engine(const std::string& radar_json_body) {
+    static int    seq = 0;
+    FactoryEngine fe;
+    fe.path = "/tmp/drone_test_orphan_clamp_" + std::to_string(::getpid()) + "_" +
+              std::to_string(++seq) + ".json";
+    {
+        std::ofstream ofs(fe.path);
+        ofs << R"({"perception":{"fusion":{"radar":{"enabled":true,)" << radar_json_body
+            << R"(}}}})";
+    }
+    drone::Config cfg;
+    EXPECT_TRUE(cfg.load(fe.path));
+    fe.owned = drone::perception::create_fusion_engine("ukf", make_test_calib(), &cfg);
+    fe.ukf   = dynamic_cast<drone::perception::UKFFusionEngine*>(fe.owned.get());
+    return fe;
+}
+}  // namespace
+
+TEST(RadarOrphanClamp, HitsAboveCapClampedToTen) {
+    // orphan_init_hits = 99 would need ~5 s of continuous returns at 20 Hz
+    // before a real obstacle could ever create a track. The [1,10] cap is what
+    // bounds that suppression — assert it, don't assume it.
+    auto fe = make_factory_engine(R"("orphan_init_hits":99)");
+    ASSERT_NE(fe.ukf, nullptr);
+    EXPECT_EQ(fe.ukf->radar_config().orphan_init_hits, 10u)
+        << "orphan_init_hits=99 must clamp to the fail-safe cap of 10 (DR-056)";
+}
+
+TEST(RadarOrphanClamp, HitsBelowMinClampedToOne) {
+    // 0 (or negative) would disable the gate's meaning; clamp to the legacy
+    // sentinel 1 (immediate creation) rather than to 0.
+    auto fe_zero = make_factory_engine(R"("orphan_init_hits":0)");
+    ASSERT_NE(fe_zero.ukf, nullptr);
+    EXPECT_EQ(fe_zero.ukf->radar_config().orphan_init_hits, 1u)
+        << "orphan_init_hits=0 must clamp up to 1 (legacy immediate creation)";
+
+    auto fe_neg = make_factory_engine(R"("orphan_init_hits":-5)");
+    ASSERT_NE(fe_neg.ukf, nullptr);
+    EXPECT_EQ(fe_neg.ukf->radar_config().orphan_init_hits, 1u)
+        << "a negative orphan_init_hits must clamp to 1, never wrap the uint32";
+}
+
+TEST(RadarOrphanClamp, WindowAndRadiusClampedToBounds) {
+    auto fe_hi = make_factory_engine(R"("orphan_init_window_s":999.0,"orphan_init_radius_m":99.0)");
+    ASSERT_NE(fe_hi.ukf, nullptr);
+    EXPECT_FLOAT_EQ(fe_hi.ukf->radar_config().orphan_init_window_s, 10.0f);
+    EXPECT_FLOAT_EQ(fe_hi.ukf->radar_config().orphan_init_radius_m, 10.0f)
+        << "an oversized association radius would merge distinct obstacles into "
+           "one candidate — clamp it";
+
+    auto fe_lo =
+        make_factory_engine(R"("orphan_init_window_s":0.0001,"orphan_init_radius_m":-1.0)");
+    ASSERT_NE(fe_lo.ukf, nullptr);
+    EXPECT_FLOAT_EQ(fe_lo.ukf->radar_config().orphan_init_window_s, 0.1f);
+    EXPECT_FLOAT_EQ(fe_lo.ukf->radar_config().orphan_init_radius_m, 0.1f)
+        << "a zero/negative radius would make every return its own candidate — "
+           "no obstacle could ever confirm";
+}
+
+TEST(RadarOrphanClamp, ClampedHitsActuallyBoundSuppression) {
+    // The behavioural half of the fail-safe claim: with a typo'd hits=99, a
+    // persistent real obstacle must still confirm — at the clamped 10th frame,
+    // not the 99th. This is what "cannot suppress obstacles indefinitely" means.
+    auto fe = make_factory_engine(R"("orphan_init_hits":99,"promotion_hits":1)");
+    ASSERT_NE(fe.ukf, nullptr);
+    fe.ukf->set_drone_altitude(4.0f);
+    fe.ukf->set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+
+    const auto det = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+    for (uint32_t frame = 1; frame <= 9; ++frame) {
+        EXPECT_EQ(mofn_step(*fe.ukf, det, frame * kFrameNs, frame).objects.size(), 0u)
+            << "hit " << frame << "/10: still tentative";
+    }
+    EXPECT_EQ(mofn_step(*fe.ukf, det, 10 * kFrameNs, 10).objects.size(), 1u)
+        << "hit 10/10: the clamped cap must confirm here — a real obstacle is "
+           "bounded-delayed, never indefinitely suppressed (DR-056 (b)+(c))";
 }

@@ -58,12 +58,21 @@ struct RadarNoiseConfig {
     // Issue #799 Phase A — M-of-N track-initiation confirmation for radar
     // orphans.  A single unmatched return no longer creates a track (and its
     // dormant world-memory entry); it must re-occur orphan_init_hits times
-    // within orphan_init_radius_m inside orphan_init_window_s first.
+    // within orphan_init_radius_m of the running-mean candidate position.
     // 1 = legacy immediate creation.  Clamped [1,10] at config load — the
     // fail-safe cap guarantees a config typo cannot suppress real obstacles
     // indefinitely (CLAUDE.md perception-suppression-gate rule).
+    //
+    // NOTE on orphan_init_window_s: it bounds the gap between CONSECUTIVE
+    // returns (a candidate expires only if it goes unseen for longer than the
+    // window), NOT the absolute span from first sighting to confirmation.  So
+    // M hits may legitimately span more than one window as long as no single
+    // gap exceeds it.  This is deliberate: the rolling bound biases toward
+    // false-accept (confirming a real obstacle observed intermittently),
+    // whereas an absolute span bound would bias toward false-reject — the
+    // wrong direction for a perception-suppression gate.
     uint32_t orphan_init_hits     = 3;     // M consistent returns to confirm
-    float    orphan_init_window_s = 1.0f;  // N: candidate expiry window
+    float    orphan_init_window_s = 1.0f;  // N: max gap between consecutive returns
     float    orphan_init_radius_m = 2.0f;  // R: association radius for hits
 
     // Azimuth sign convention (Issue #348):
@@ -226,6 +235,12 @@ public:
     /// Provide ML depth map for depth-enhanced fusion (Issue #430).
     /// Takes ownership via move to avoid copying ~1.2MB per frame at 30Hz.
     void set_depth_map(drone::hal::DepthMap depth_map) override;
+
+    /// Access the (post-clamp) radar config. Exposed so the fail-safe bounds
+    /// applied in `create_fusion_engine` — the mechanism DR-056 relies on to
+    /// guarantee a config typo cannot suppress obstacles indefinitely — are
+    /// assertable by tests rather than only asserted in prose.
+    [[nodiscard]] const RadarNoiseConfig& radar_config() const noexcept { return radar_cfg_; }
 
     /// Access dormant obstacles (for testing).
     [[nodiscard]] const std::vector<DormantObstacle>& dormant_obstacles() const {

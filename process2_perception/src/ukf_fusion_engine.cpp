@@ -764,7 +764,13 @@ bool UKFFusionEngine::confirm_orphan_candidate(const Eigen::Vector3f& body_pos, 
     if (match.hits < radar_cfg_.orphan_init_hits) {
         return false;  // still tentative
     }
-    // Confirmed — remove the candidate; caller creates the track.
+    // Confirmed.  Log the confirmation latency (first sighting → confirm): the
+    // direct measure of how long the gate delays a REAL obstacle, which is the
+    // quantity DR-056's fail-safe argument turns on and the tuning signal for
+    // the residual mis-projection ghosts (#815).
+    DRONE_LOG_DEBUG("[UKF] Orphan confirmed after {} hits, {:.0f} ms since first sighting",
+                    match.hits, static_cast<double>(now_ns - match.first_seen_ns) / 1e6);
+    // Remove the candidate; caller creates the track.
     orphan_candidates_.erase(orphan_candidates_.begin() + static_cast<std::ptrdiff_t>(match_idx));
     return true;
 }

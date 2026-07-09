@@ -175,7 +175,7 @@
                 "orphan_proximity_m": 5.0,
                 "max_orphan_range_m": 25.0,
                 "promotion_hits": 6,
-                "_comment_orphan_init": "#799 Phase A — M-of-N radar-orphan track-init confirmation: a track (and its dormant world-memory entry) is only created after orphan_init_hits consistent returns within orphan_init_radius_m inside orphan_init_window_s. 1 = legacy immediate creation. hits clamped [1,10] (fail-safe cap), window/radius clamped [0.1,10].",
+                "_comment_orphan_init": "#799 Phase A — M-of-N radar-orphan track-init confirmation: a track (and its dormant world-memory entry) is only created after orphan_init_hits consistent returns within orphan_init_radius_m of the candidate position. orphan_init_window_s bounds the gap between CONSECUTIVE returns (a candidate expires only after going unseen that long), not the absolute first-sighting-to-confirm span — the rolling bound biases false-accept, the safe direction. 1 = legacy immediate creation. hits clamped [1,10] (fail-safe cap), window/radius clamped [0.1,10].",
                 "orphan_init_hits": 3,
                 "orphan_init_window_s": 1.0,
                 "orphan_init_radius_m": 2.0
