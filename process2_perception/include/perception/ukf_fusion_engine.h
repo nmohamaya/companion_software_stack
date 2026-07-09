@@ -285,10 +285,14 @@ private:
     uint32_t next_radar_track_id_{0x80000000u};
 
     // Issue #799 Phase A — tentative radar-orphan candidates awaiting M-of-N
-    // confirmation.  Bounded (kMaxOrphanCandidates, oldest evicted) so a
-    // clutter storm cannot grow it without limit.
+    // confirmation.  Bounded (kMaxOrphanCandidates; lowest-hits-then-stalest
+    // evicted) so a clutter storm cannot grow it without limit.
     static constexpr size_t      kMaxOrphanCandidates = 64;
     std::vector<OrphanCandidate> orphan_candidates_;
+    // Which frame the buffered candidates live in (world iff has_pose_ when
+    // stored).  When VIO pose first locks mid-run the frames become
+    // incomparable — the buffer is cleared on the switch (PR #814 review).
+    bool orphan_candidates_world_frame_{false};
 
     // Issue #645 — diagnostic counter for radar-only S-matrix fallback path.
     // Increments every time `try_associate_radar` exhausts (a) direct LLT,

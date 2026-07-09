@@ -2649,3 +2649,113 @@ TEST(RadarOrphanMofN, StaleCandidateExpires) {
     auto r5 = mofn_step(*engine, det, after_gap + 2 * kFrameNs, 5);
     ASSERT_EQ(r5.objects.size(), 1u) << "fresh 3-hit run after expiry must confirm";
 }
+
+// ── PR #814 review-fix regression tests ──────────────────────────────
+
+namespace {
+// Multi-detection step for the review-fix tests.
+drone::perception::FusedObjectList mofn_step_multi(
+    drone::perception::UKFFusionEngine& engine, const std::vector<drone::ipc::RadarDetection>& dets,
+    uint64_t t_ns, uint32_t frame) {
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = t_ns;
+    radar.num_detections = static_cast<uint32_t>(dets.size());
+    for (size_t i = 0; i < dets.size(); ++i) radar.detections[i] = dets[i];
+    engine.set_radar_detections(radar);
+    drone::perception::TrackedObjectList empty;
+    empty.timestamp_ns   = t_ns;
+    empty.frame_sequence = frame;
+    return engine.fuse(empty);
+}
+}  // namespace
+
+TEST(RadarOrphanMofN, SameFrameDoubleDetectionCountsOnce) {
+    // PR #814 review P3: two same-frame returns within the radius (wide
+    // obstacle, twin returns) must count as ONE hit — confirmation still
+    // requires M distinct frames, not M returns.
+    auto       engine = make_mofn_engine(/*init_hits=*/3);
+    const auto det_a  = make_radar_det(12.0f, 0.50f, 0.1f, 0.0f);
+    const auto det_b  = make_radar_det(12.2f, 0.51f, 0.1f, 0.0f);  // ~0.3 m from det_a
+
+    EXPECT_EQ(mofn_step_multi(*engine, {det_a, det_b}, 1 * kFrameNs, 1).objects.size(), 0u);
+    EXPECT_EQ(engine->orphan_candidate_count(), 1u) << "twin returns → one candidate";
+
+    EXPECT_EQ(mofn_step(*engine, det_a, 2 * kFrameNs, 2).objects.size(), 0u)
+        << "frame 2 must be hit 2/3, NOT a premature confirmation — same-frame "
+           "twin must not have double-counted";
+    ASSERT_EQ(mofn_step(*engine, det_a, 3 * kFrameNs, 3).objects.size(), 1u)
+        << "hit 3/3 on the third DISTINCT frame confirms";
+}
+
+TEST(RadarOrphanMofN, EvictionPreservesMultiHitCandidate) {
+    // PR #814 review P2: eviction is lowest-hits-first — a clutter storm that
+    // saturates the 64-candidate buffer must not evict a multi-hit
+    // real-obstacle candidate.
+    auto       engine = make_mofn_engine(/*init_hits=*/3, /*window_s=*/1.0f, /*radius_m=*/0.5f);
+    const auto real   = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+
+    // 64 scattered one-shot positions, pairwise > 0.5 m apart and away from
+    // the real det: 8 azimuths × 4 elevations × 2 ranges.
+    auto scatter = [](int variant) {
+        std::vector<drone::ipc::RadarDetection> dets;
+        const float az0[8] = {-2.0f, -1.5f, -1.0f, -0.5f, 0.0f, 1.0f, 1.5f, 2.0f};
+        const float el0[4] = {-0.2f, 0.15f, 0.5f, 0.85f};
+        const float shift  = variant == 0 ? 0.0f : 0.25f;
+        for (float r : {8.0f, 16.0f})
+            for (float az : az0)
+                for (float el : el0) dets.push_back(make_radar_det(r, az + shift, el, 0.0f));
+        return dets;  // 64 detections
+    };
+
+    // Frame 1: real + 30 clutter — below the cap, so the real candidate can
+    // reach hits=2 next frame BEFORE eviction pressure starts.  (A hits=1
+    // candidate inside a saturating same-frame storm is indistinguishable
+    // from the clutter — evicting it there is legitimate; the property under
+    // test is that a MULTI-hit candidate survives.)
+    auto f1_scatter = scatter(0);
+    auto f1 = std::vector<drone::ipc::RadarDetection>(f1_scatter.begin(), f1_scatter.begin() + 30);
+    f1.insert(f1.begin(), real);
+    EXPECT_EQ(mofn_step_multi(*engine, f1, 1 * kFrameNs, 1).objects.size(), 0u);
+    EXPECT_EQ(engine->orphan_candidate_count(), 31u);
+
+    // Frame 2: real again (hits→2) + 64 NEW clutter positions — saturates the
+    // buffer and forces evictions; lowest-hits-first must sacrifice hits=1
+    // clutter, never the hits=2 real candidate.
+    auto f2 = scatter(1);
+    f2.insert(f2.begin(), real);
+    EXPECT_EQ(mofn_step_multi(*engine, f2, 2 * kFrameNs, 2).objects.size(), 0u);
+    EXPECT_EQ(engine->orphan_candidate_count(), 64u) << "buffer capped at 64";
+
+    // Frame 3: real alone → hits 3/3 → confirmed. If eviction had been
+    // hits-blind, the real candidate would have died in the storm and this
+    // would be hit 1 of a fresh cycle.
+    ASSERT_EQ(mofn_step(*engine, real, 3 * kFrameNs, 3).objects.size(), 1u)
+        << "multi-hit candidate must outlive a saturating clutter storm";
+}
+
+TEST(RadarOrphanMofN, PoseArrivalClearsBodyFrameCandidates) {
+    // PR #814 review P2: when VIO pose first locks, body-frame candidates are
+    // incomparable with world-frame positions — the buffer must clear and the
+    // confirmation cycle restart (fail-safe: only ever delays, never creates
+    // from mixed frames).
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;
+    rcfg.orphan_init_hits          = 3;
+    auto engine = std::make_unique<drone::perception::UKFFusionEngine>(make_test_calib(), rcfg,
+                                                                       true, 5.0f, 32);
+    engine->set_drone_altitude(4.0f);  // NO pose yet — candidates body-frame
+
+    const auto det = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+    EXPECT_EQ(mofn_step(*engine, det, 1 * kFrameNs, 1).objects.size(), 0u);
+    EXPECT_EQ(mofn_step(*engine, det, 2 * kFrameNs, 2).objects.size(), 0u);  // hits = 2
+    EXPECT_EQ(engine->orphan_candidate_count(), 1u);
+
+    // VIO locks — same physical detection now maps to world frame.
+    engine->set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    EXPECT_EQ(mofn_step(*engine, det, 3 * kFrameNs, 3).objects.size(), 0u)
+        << "buffer cleared on frame switch — this must be hit 1 of a fresh cycle";
+    EXPECT_EQ(engine->orphan_candidate_count(), 1u) << "exactly one fresh world-frame candidate";
+    EXPECT_EQ(mofn_step(*engine, det, 4 * kFrameNs, 4).objects.size(), 0u);  // hit 2
+    ASSERT_EQ(mofn_step(*engine, det, 5 * kFrameNs, 5).objects.size(), 1u)
+        << "fresh world-frame 3-hit run confirms";
+}
