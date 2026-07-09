@@ -665,6 +665,7 @@ void UKFFusionEngine::reset() {
     filters_.clear();
     dormant_obstacles_.clear();
     track_to_dormant_.clear();
+    orphan_candidates_.clear();  // Issue #799 Phase A — drop tentative orphans too
     has_radar_data_      = false;
     has_depth_map_       = false;
     latest_depth_map_    = {};
@@ -1430,6 +1431,23 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     // any existing filter (camera or radar-only).  This enables detection
     // of obstacles outside camera FOV (Issue #231: gated by radar_only_enabled).
     if (has_radar_data_ && radar_enabled_ && radar_cfg_.radar_only_enabled) {
+        // Issue #799 Phase A — expire stale orphan candidates once per frame.
+        // Window is timed by radar-frame timestamps (data-driven → unit tests
+        // are deterministic without a mock clock).  Guard the subtraction:
+        // an out-of-order/older frame stamp must not underflow uint64.
+        {
+            const uint64_t now_ns = radar_dets_.timestamp_ns;
+            const auto     window_ns =
+                static_cast<uint64_t>(std::max(0.0f, radar_cfg_.orphan_init_window_s) * 1e9f);
+            orphan_candidates_.erase(
+                std::remove_if(orphan_candidates_.begin(), orphan_candidates_.end(),
+                               [&](const OrphanCandidate& c) {
+                                   return now_ns >= c.last_seen_ns &&
+                                          (now_ns - c.last_seen_ns) > window_ns;
+                               }),
+                orphan_candidates_.end());
+        }
+
         for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
             if (radar_matched[ri]) continue;
             const auto& rdet = radar_dets_.detections[ri];
@@ -1465,6 +1483,58 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 }
             }
             if (too_close) continue;
+
+            // ── Issue #799 Phase A — M-of-N track-initiation confirmation ──
+            // A single unmatched return must NOT create a track (and its
+            // dormant world-memory entry): Gazebo-injected / real-radar false
+            // alarms are spatially random one-shots, so requiring
+            // orphan_init_hits consistent returns within orphan_init_radius_m
+            // inside orphan_init_window_s rejects them at the source, while a
+            // persistent real obstacle confirms in M consecutive frames
+            // (~M/20 s).  orphan_init_hits==1 preserves legacy immediate
+            // creation.  Candidates live in world frame when pose is known
+            // (stable against drone motion — same convention as dormant
+            // re-ID), body frame otherwise.
+            if (radar_cfg_.orphan_init_hits > 1) {
+                const Eigen::Vector3f cand_pos = has_pose_ ? body_to_world(body_pos) : body_pos;
+                const uint64_t        now_ns   = radar_dets_.timestamp_ns;
+
+                OrphanCandidate* match = nullptr;
+                for (auto& cand : orphan_candidates_) {
+                    if ((cand.pos - cand_pos).norm() < radar_cfg_.orphan_init_radius_m) {
+                        match = &cand;
+                        break;
+                    }
+                }
+                if (match == nullptr) {
+                    if (orphan_candidates_.size() >= kMaxOrphanCandidates) {
+                        // Clutter-storm bound: evict the stalest candidate.
+                        orphan_candidates_.erase(std::min_element(
+                            orphan_candidates_.begin(), orphan_candidates_.end(),
+                            [](const OrphanCandidate& a, const OrphanCandidate& b) {
+                                return a.last_seen_ns < b.last_seen_ns;
+                            }));
+                    }
+                    OrphanCandidate cand;
+                    cand.pos           = cand_pos;
+                    cand.hits          = 1;
+                    cand.first_seen_ns = now_ns;
+                    cand.last_seen_ns  = now_ns;
+                    orphan_candidates_.push_back(cand);
+                    continue;  // not confirmed yet — no track this frame
+                }
+                match->hits++;
+                const float alpha   = 1.0f / static_cast<float>(match->hits);
+                match->pos          = (1.0f - alpha) * match->pos + alpha * cand_pos;
+                match->last_seen_ns = now_ns;
+                if (match->hits < radar_cfg_.orphan_init_hits) {
+                    continue;  // still tentative
+                }
+                // Confirmed — remove the candidate and fall through to the
+                // existing creation block below.
+                orphan_candidates_.erase(orphan_candidates_.begin() +
+                                         (match - orphan_candidates_.data()));
+            }
 
             // Create new radar-only track (guard overflow to stay in high-bit range)
             if (next_radar_track_id_ == 0xFFFFFFFFu) next_radar_track_id_ = 0x80000000u;
@@ -1632,6 +1702,42 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                                    "to 1",
                                    raw_promotion);
                     radar_cfg.radar_only_promotion_hits = 1;
+                }
+            }
+
+            // Issue #799 Phase A — M-of-N orphan track-initiation confirmation.
+            // orphan_init_hits is clamped to [1, 10]: the lower bound keeps the
+            // gate meaningful (1 = legacy immediate creation), the upper bound
+            // is the fail-safe cap mandated by the CLAUDE.md perception-
+            // suppression-gate rule — a config typo must not be able to delay
+            // real-obstacle track creation indefinitely.
+            {
+                const int raw_hits     = cfg->get<int>("perception.fusion.radar.orphan_init_hits",
+                                                       static_cast<int>(radar_cfg.orphan_init_hits));
+                const int clamped_hits = std::clamp(raw_hits, 1, 10);
+                if (clamped_hits != raw_hits) {
+                    DRONE_LOG_WARN("[UKF] radar orphan_init_hits={} out of range [1,10], "
+                                   "clamping to {}",
+                                   raw_hits, clamped_hits);
+                }
+                radar_cfg.orphan_init_hits = static_cast<uint32_t>(clamped_hits);
+
+                const float raw_window = cfg->get<float>(
+                    "perception.fusion.radar.orphan_init_window_s", radar_cfg.orphan_init_window_s);
+                radar_cfg.orphan_init_window_s = std::clamp(raw_window, 0.1f, 10.0f);
+                if (radar_cfg.orphan_init_window_s != raw_window) {
+                    DRONE_LOG_WARN("[UKF] radar orphan_init_window_s={} out of range [0.1,10], "
+                                   "clamping to {}",
+                                   raw_window, radar_cfg.orphan_init_window_s);
+                }
+
+                const float raw_radius = cfg->get<float>(
+                    "perception.fusion.radar.orphan_init_radius_m", radar_cfg.orphan_init_radius_m);
+                radar_cfg.orphan_init_radius_m = std::clamp(raw_radius, 0.1f, 10.0f);
+                if (radar_cfg.orphan_init_radius_m != raw_radius) {
+                    DRONE_LOG_WARN("[UKF] radar orphan_init_radius_m={} out of range [0.1,10], "
+                                   "clamping to {}",
+                                   raw_radius, radar_cfg.orphan_init_radius_m);
                 }
             }
         }

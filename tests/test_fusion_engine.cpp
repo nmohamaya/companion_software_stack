@@ -1305,6 +1305,8 @@ TEST(RadarPrimaryTest, RadarOnlyConstructorWithAzimuth) {
 TEST(RadarPrimaryTest, RadarOrphanCreatesTrack) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 1;  // immediate output for this test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1333,6 +1335,8 @@ TEST(RadarPrimaryTest, RadarOrphanCreatesTrack) {
 TEST(RadarPrimaryTest, RadarOrphanDefaultRadius) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_default_radius_m = 1.5f;
     rcfg.radar_only_promotion_hits   = 1;  // immediate output for this test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
@@ -1379,6 +1383,8 @@ TEST(RadarPrimaryTest, RadarOrphanProximityPreventsDuplicate) {
 TEST(RadarPrimaryTest, RadarOrphanTrackPersistsAcrossFrames) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 1;  // immediate output for persistence test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1437,6 +1443,8 @@ TEST(RadarPrimaryTest, RadarOnlyTrackIDHighBit) {
 TEST(RadarPrimaryTest, RadarOnlyDormantEntry) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 1;  // immediate output for dormant test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1488,6 +1496,8 @@ TEST(RadarPrimaryTest, GroundFilterAppliesToOrphans) {
 TEST(RadarPrimaryTest, EmptyCameraListRadarOutput) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 1;  // immediate output for this test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1517,6 +1527,8 @@ TEST(RadarPrimaryTest, EmptyCameraListRadarOutput) {
 TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 1;  // immediate output for adoption test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1826,6 +1838,8 @@ TEST(RadarOnlyTrackTest, OrphanPromotionAfterNFrames) {
     // consecutive radar observations are received.
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 3;
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1871,6 +1885,8 @@ TEST(RadarOnlyTrackTest, TrackMaintainsIDAfterPromotion) {
     // After promotion, the track ID should remain stable across frames.
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 2;
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -1972,6 +1988,8 @@ TEST(RadarOnlyTrackTest, PromotionHitsConfigurable) {
     // Verify different promotion_hits values work: set to 5.
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_only_promotion_hits = 5;
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
@@ -2042,6 +2060,8 @@ TEST(RadarOnlyTrackTest, ProximityGateRejectsDuplicateOrphans) {
     // by the proximity check.
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_orphan_proximity_m  = 5.0f;
     rcfg.radar_only_promotion_hits = 1;  // immediate output
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
@@ -2069,6 +2089,8 @@ TEST(RadarOnlyTrackTest, MaxOrphanRangeRejectsDistantDetections) {
     // Radar detections beyond max_orphan_range_m should be ignored.
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
+    rcfg.orphan_init_hits =
+        1;  // legacy immediate creation — this test exercises other orphan gates, not #799-A init confirmation
     rcfg.radar_max_orphan_range_m  = 25.0f;
     rcfg.radar_only_promotion_hits = 1;
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
@@ -2503,4 +2525,127 @@ TEST(RadarFusionTest, ConstructionAcceptsRadarOnValidStd) {
     // minimal test fixture; the point is no auto-disable).
     auto result = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Issue #799 Phase A — M-of-N radar-orphan track-initiation confirmation
+//
+// A single unmatched radar return must no longer create a track (and its
+// dormant world-memory entry).  It becomes a tentative OrphanCandidate and
+// only instantiates an ObjectUKF after orphan_init_hits consistent returns
+// within orphan_init_radius_m inside orphan_init_window_s.  These tests set
+// radar_only_promotion_hits = 1 so that track creation == emission — the
+// output list is the observable creation signal, no engine introspection
+// beyond orphan_candidate_count() / dormant_obstacles() needed.
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+// Engine wired for M-of-N tests: radar-only enabled, promotion gate open
+// (creation == emission), pose provided so candidates and dormant entries
+// use the world frame (the production path).
+std::unique_ptr<drone::perception::UKFFusionEngine> make_mofn_engine(uint32_t init_hits,
+                                                                     float    window_s = 1.0f,
+                                                                     float    radius_m = 2.0f) {
+    // unique_ptr: the engine is non-movable (atomic diagnostic counter).
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // creation == emission
+    rcfg.orphan_init_hits          = init_hits;
+    rcfg.orphan_init_window_s      = window_s;
+    rcfg.orphan_init_radius_m      = radius_m;
+    auto engine = std::make_unique<drone::perception::UKFFusionEngine>(make_test_calib(), rcfg,
+                                                                       true, 5.0f, 32);
+    engine->set_drone_altitude(4.0f);
+    engine->set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    return engine;
+}
+
+// One fuse() step: feed a radar list with a single detection at t_ns.
+drone::perception::FusedObjectList mofn_step(drone::perception::UKFFusionEngine& engine,
+                                             const drone::ipc::RadarDetection& det, uint64_t t_ns,
+                                             uint32_t frame) {
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = t_ns;
+    radar.num_detections = 1;
+    radar.detections[0]  = det;
+    engine.set_radar_detections(radar);
+    drone::perception::TrackedObjectList empty;
+    empty.timestamp_ns   = t_ns;
+    empty.frame_sequence = frame;
+    return engine.fuse(empty);
+}
+
+constexpr uint64_t kFrameNs = 50'000'000ULL;  // 50 ms ≈ 20 Hz radar
+}  // namespace
+
+TEST(RadarOrphanMofN, OneShotFalseAlarmsNeverCreateTracks) {
+    // Ten spatially-scattered one-shot false alarms (the Gazebo radar HAL's
+    // injected-false-alarm pattern) — none may become a track OR a dormant
+    // world-memory entry.  Positions ~3.6 m apart (> 2 m radius) at 12 m.
+    auto engine = make_mofn_engine(/*init_hits=*/3);
+    for (uint32_t i = 0; i < 10; ++i) {
+        const float az     = -1.0f + 0.22f * static_cast<float>(i);
+        auto        det    = make_radar_det(12.0f, az, 0.1f, 0.0f);
+        auto        result = mofn_step(*engine, det, (i + 1) * kFrameNs, i + 1);
+        EXPECT_EQ(result.objects.size(), 0u)
+            << "one-shot false alarm " << i << " must not create a track";
+    }
+    EXPECT_EQ(engine->dormant_obstacles().size(), 0u)
+        << "ghosts must not acquire persistent world-frame (dormant) memory";
+    EXPECT_EQ(engine->orphan_candidate_count(), 10u)
+        << "each scatter should be a lone tentative candidate";
+}
+
+TEST(RadarOrphanMofN, PersistentReturnConfirmsAfterMHits) {
+    // A stable real obstacle re-observed at the same position confirms on
+    // exactly the M-th consistent return — and only then registers dormant.
+    auto       engine = make_mofn_engine(/*init_hits=*/3);
+    const auto det    = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+
+    auto r1 = mofn_step(*engine, det, 1 * kFrameNs, 1);
+    EXPECT_EQ(r1.objects.size(), 0u) << "hit 1/3: tentative only";
+    EXPECT_EQ(engine->orphan_candidate_count(), 1u);
+    EXPECT_EQ(engine->dormant_obstacles().size(), 0u);
+
+    auto r2 = mofn_step(*engine, det, 2 * kFrameNs, 2);
+    EXPECT_EQ(r2.objects.size(), 0u) << "hit 2/3: tentative only";
+
+    auto r3 = mofn_step(*engine, det, 3 * kFrameNs, 3);
+    ASSERT_EQ(r3.objects.size(), 1u) << "hit 3/3: confirmed — track must exist";
+    EXPECT_GE(r3.objects[0].track_id, 0x80000000u) << "radar-only ID range";
+    EXPECT_TRUE(r3.objects[0].has_radar);
+    EXPECT_EQ(engine->orphan_candidate_count(), 0u) << "candidate consumed on confirmation";
+    EXPECT_EQ(engine->dormant_obstacles().size(), 1u)
+        << "dormant registration happens exactly once, at confirmation";
+}
+
+TEST(RadarOrphanMofN, InitHitsOneKeepsLegacyImmediateCreation) {
+    // orphan_init_hits == 1 must bypass the candidate buffer entirely —
+    // exact pre-#799-A behaviour (single return → immediate track).
+    auto       engine = make_mofn_engine(/*init_hits=*/1);
+    const auto det    = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+    auto       r1     = mofn_step(*engine, det, 1 * kFrameNs, 1);
+    ASSERT_EQ(r1.objects.size(), 1u) << "legacy mode: first return creates the track";
+    EXPECT_EQ(engine->orphan_candidate_count(), 0u) << "buffer must be bypassed";
+}
+
+TEST(RadarOrphanMofN, StaleCandidateExpires) {
+    // Two hits, then a silence longer than orphan_init_window_s: the
+    // candidate must expire — a later lone return starts a fresh cycle
+    // (no track), and only a fresh consecutive M-run confirms.
+    auto       engine = make_mofn_engine(/*init_hits=*/3, /*window_s=*/1.0f);
+    const auto det    = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+
+    EXPECT_EQ(mofn_step(*engine, det, 1 * kFrameNs, 1).objects.size(), 0u);
+    EXPECT_EQ(mofn_step(*engine, det, 2 * kFrameNs, 2).objects.size(), 0u);  // hits = 2
+
+    // 2 s of silence (> 1 s window) — the candidate expires on the next frame.
+    const uint64_t after_gap = 2 * kFrameNs + 2'000'000'000ULL;
+    EXPECT_EQ(mofn_step(*engine, det, after_gap, 3).objects.size(), 0u)
+        << "post-gap return must start a FRESH candidate (old 2 hits forgotten)";
+    EXPECT_EQ(engine->orphan_candidate_count(), 1u);
+
+    // Fresh consecutive run: 2 more hits complete a new 3-of-N.
+    EXPECT_EQ(mofn_step(*engine, det, after_gap + kFrameNs, 4).objects.size(), 0u);
+    auto r5 = mofn_step(*engine, det, after_gap + 2 * kFrameNs, 5);
+    ASSERT_EQ(r5.objects.size(), 1u) << "fresh 3-hit run after expiry must confirm";
 }

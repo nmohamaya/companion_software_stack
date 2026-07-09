@@ -55,6 +55,17 @@ struct RadarNoiseConfig {
     uint32_t radar_only_promotion_hits = 6;     // radar hits for static promotion (0.3s at 20Hz)
     bool     radar_only_enabled        = true;  // enable radar-only track initiation (Issue #231)
 
+    // Issue #799 Phase A — M-of-N track-initiation confirmation for radar
+    // orphans.  A single unmatched return no longer creates a track (and its
+    // dormant world-memory entry); it must re-occur orphan_init_hits times
+    // within orphan_init_radius_m inside orphan_init_window_s first.
+    // 1 = legacy immediate creation.  Clamped [1,10] at config load — the
+    // fail-safe cap guarantees a config typo cannot suppress real obstacles
+    // indefinitely (CLAUDE.md perception-suppression-gate rule).
+    uint32_t orphan_init_hits     = 3;     // M consistent returns to confirm
+    float    orphan_init_window_s = 1.0f;  // N: candidate expiry window
+    float    orphan_init_radius_m = 2.0f;  // R: association radius for hits
+
     // Azimuth sign convention (Issue #348):
     // true  = negate azimuth (Gazebo/Simulated: FLU → UKF FRD)
     // false = native FRD (real radar hardware, e.g. TI AWR series)
@@ -177,6 +188,16 @@ struct DormantObstacle {
     uint64_t        last_seen_ns = 0;                        // timestamp of last observation
 };
 
+/// Issue #799 Phase A — a tentative radar-orphan awaiting M-of-N confirmation.
+/// Positions are world-frame when drone pose is available (stable against
+/// drone motion — same convention as DormantObstacle), body-frame otherwise.
+struct OrphanCandidate {
+    Eigen::Vector3f pos           = Eigen::Vector3f::Zero();  // running-mean position
+    uint32_t        hits          = 0;                        // consistent returns so far
+    uint64_t        first_seen_ns = 0;
+    uint64_t        last_seen_ns  = 0;
+};
+
 /// UKF-based fusion engine with camera + radar fusion.
 /// Maintains per-object UKF instances, matched by track_id.
 /// Dormant obstacle pool enables cross-view re-identification (Issue #237).
@@ -209,6 +230,12 @@ public:
     /// Access dormant obstacles (for testing).
     [[nodiscard]] const std::vector<DormantObstacle>& dormant_obstacles() const {
         return dormant_obstacles_;
+    }
+
+    /// Issue #799 Phase A — pending (unconfirmed) radar-orphan candidates.
+    /// Exposed for tests + run-report diagnostics.
+    [[nodiscard]] size_t orphan_candidate_count() const noexcept {
+        return orphan_candidates_.size();
     }
 
     /// Issue #645 — count of radar-only association attempts where the full-S
@@ -256,6 +283,12 @@ private:
 
     // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
     uint32_t next_radar_track_id_{0x80000000u};
+
+    // Issue #799 Phase A — tentative radar-orphan candidates awaiting M-of-N
+    // confirmation.  Bounded (kMaxOrphanCandidates, oldest evicted) so a
+    // clutter storm cannot grow it without limit.
+    static constexpr size_t      kMaxOrphanCandidates = 64;
+    std::vector<OrphanCandidate> orphan_candidates_;
 
     // Issue #645 — diagnostic counter for radar-only S-matrix fallback path.
     // Increments every time `try_associate_radar` exhausts (a) direct LLT,

@@ -2295,6 +2295,24 @@ Historically masked: pre-#800 the contact gate treated an empty log as PASS (Fix
 
 ---
 
+### Fix #65 — Radar ghosts at the source: single unmatched return created a track + permanent dormant memory (Issue #799 Phase A — ROOT CAUSE)
+
+**Date:** 2026-07-07
+**Severity:** High (perception ghost source — root cause of the #799 grid-seal chain)
+**Affects:** `process2_perception/src/ukf_fusion_engine.cpp` Phase D3 radar-orphan processing
+
+**Bug:** A **single** unmatched radar return passing 3 cheap gates (range ≤ 25 m, ground-plane, ≥ 5 m from existing filters) immediately created an `ObjectUKF` **and registered a dormant obstacle** — persistent world-frame memory that re-identifies later returns near the same spot. The 6-hit `radar_only_promotion_hits` gate only delayed *output*, not creation. With the Gazebo radar HAL's injected false alarms (rate 0.02; real 77 GHz radar has comparable Pfa), every one-shot ghost became a track: **31 radar tracks for 4 physical obstacles** even on the first 21/21-green run. Downstream, those tracks fed grid promotions — the accumulation that Phase B's decay (Fix in #801) had to absorb and that originally sealed scenario 18 (25→650 static cells → D\*Lite no-path).
+
+**Root Cause:** No track-*initiation* confirmation. All existing gates were per-return quality checks; nothing required the detection to be *repeatable* before instantiating state that persists (UKF + dormant world memory).
+
+**Fix (M-of-N init confirmation, `OrphanCandidate` buffer):** an orphan return first becomes a tentative candidate; the track and its dormant entry are only created after **`orphan_init_hits` (default 3, clamped [1,10] — fail-safe cap) consistent returns within `orphan_init_radius_m` (2 m) inside `orphan_init_window_s` (1 s)**. Candidates are world-frame when pose is available (same convention as dormant re-ID), buffer bounded at 64 (stalest evicted), window timed by radar-frame timestamps (deterministic unit tests). `orphan_init_hits = 1` = exact legacy behaviour. Fail-safe analysis in DR-055: a persistent real obstacle confirms in ~0.15 s and cannot be dropped; `ObstacleAvoider3D` + the untouched camera path backstop the window.
+
+**Found by:** #799 root-cause analysis (2026-06-29); confirmed by the 21/21 run of 2026-07-07 still reporting "31 independent radar tracks created".
+
+**Test:** `RadarOrphanMofN` suite (4 tests): scattered one-shot false alarms never create tracks *or dormant entries*; a persistent return confirms exactly on hit M with a single dormant registration; `orphan_init_hits=1` preserves legacy first-frame creation; a stale candidate expires past the window and a fresh M-run reconfirms. 11 pre-existing orphan-mechanics tests pin `orphan_init_hits=1` (they exercise promotion/proximity/range gates, not init confirmation). Live scenario-18 validation: radar track count expected 31 → ~4-8 (recorded on #799).
+
+---
+
 ### Fix #10 — Intermittent Zenoh Test Failures Under Parallel CTest
 
 **Date:** 2026-03-02

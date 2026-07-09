@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **105 C++ + 5 shell + 1 Python** | **2164 (no SDK, 8 Cosys-SDK tests skipped) / 2172 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #806 contracts-lite +6 tests in new `test_contracts_manifest.cpp` (`ContractsManifest`: manifest parses; kWireVersion matches code; bidirectional topic coverage; struct names + `sizeof` match compiled structs — the wire-contract drift gate, ADR-017). `ctest -N --test-dir build` reports **2164** (no SDK) / **2172** (+SDK). Previous PR (#799 Phase B): +3 decay tests → `test_occupancy_grid_dynamic_gating.cpp` at 16. For earlier deltas see PROGRESS.md. |
+| **Total** | **105 C++ + 5 shell + 1 Python** | **2168 (no SDK, 8 Cosys-SDK tests skipped) / 2176 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #799 Phase A radar-orphan M-of-N +4 tests in `test_fusion_engine.cpp` (`RadarOrphanMofN`: one-shot false alarms never create tracks; persistent return confirms on hit M; hits=1 legacy bypass; stale-candidate expiry) → that file now 78 tests. `ctest -N --test-dir build` reports **2168** (no SDK) / **2176** (+SDK). Previous PR (#806 contracts-lite): +6 tests in `test_contracts_manifest.cpp`. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -554,7 +554,7 @@ solver. These are shared infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 74 tests
+### test_fusion_engine.cpp — 78 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
 IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237),
@@ -573,6 +573,7 @@ depth edge cases (Issue #419).
 | `RadarFusionTest` | 16 | Radar measurement model, covariance reduction, azimuth sign convention, radar-initialized depth override, camera+radar tighter than either, gate rejects outlier, noise config, disabled-by-default, set_radar_detections+fuse, has_radar flag, ground filter (reject/pass/disabled), altitude gate (reject/accept/configurable), radar detection reservation prevents double-init, orphan output gating by radar_orphan_min_hits |
 | `RadarPrimaryTest` | 11 | Radar-primary depth override, reservation prevents double-init, orphan output gating, radar update count, multi-radar association |
 | `RadarOnlyTrackTest` | 8 | Radar-only track creation, output gating, camera adoption, depth confidence |
+| `RadarOrphanMofN` | 4 | Issue #799 Phase A — M-of-N orphan init confirmation: one-shot false alarms never create tracks/dormants, persistent return confirms on hit M with single dormant registration, `orphan_init_hits=1` legacy bypass, stale-candidate expiry + fresh reconfirmation |
 | `CovarianceConfidenceTest` | 4 | Monotonic confidence decay with range, close range high confidence, far range low confidence, kDepthMaxM penalty preserved |
 | `HeightPriorsTest` | 3 | Class-specific depth differs by class, UNKNOWN uses default 3.0m, config override applied |
 | `RadarLearnedHeightTest` | 4 | Radar back-calculates height, EMA converges, learned height overrides class prior, new track uses prior |
