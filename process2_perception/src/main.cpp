@@ -598,16 +598,17 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
         if (has_pose) {
             engine.set_drone_altitude(static_cast<float>(latest_pose.translation[2]));
 
-            // Pass full pose for dormant obstacle re-identification.
-            const double qw  = latest_pose.quaternion[0];
-            const double qx  = latest_pose.quaternion[1];
-            const double qy  = latest_pose.quaternion[2];
-            const double qz  = latest_pose.quaternion[3];
-            const float  yaw = static_cast<float>(
-                std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+            // Pass full pose (position + orientation quaternion) for dormant
+            // re-ID AND the attitude-aware ground gate (#816).  The quaternion
+            // (w,x,y,z) is forwarded directly — pitch/roll set a radar return's
+            // true world altitude, so yaw alone is unsafe (dropped obstacles).
             engine.set_drone_pose(static_cast<float>(latest_pose.translation[0]),
                                   static_cast<float>(latest_pose.translation[1]),
-                                  static_cast<float>(latest_pose.translation[2]), yaw);
+                                  static_cast<float>(latest_pose.translation[2]),
+                                  static_cast<float>(latest_pose.quaternion[0]),
+                                  static_cast<float>(latest_pose.quaternion[1]),
+                                  static_cast<float>(latest_pose.quaternion[2]),
+                                  static_cast<float>(latest_pose.quaternion[3]));
         }
 
         // Read latest radar detections (latest-value — single read)

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <Eigen/Core>
+#include <Eigen/Geometry>  // Eigen::Quaternionf (body→world attitude, #816)
 
 namespace drone::perception {
 
@@ -79,6 +80,22 @@ struct RadarNoiseConfig {
     // true  = negate azimuth (Gazebo/Simulated: FLU → UKF FRD)
     // false = native FRD (real radar hardware, e.g. TI AWR series)
     bool negate_azimuth = true;
+
+    // Issue #816 — attitude-aware ground gate.  The historical gate used the raw
+    // sensor elevation (`alt = drone_alt + range·sin(el)`), ignoring drone
+    // pitch/roll and the sensor mount tilt — which BOTH admits ground as ghosts
+    // (#815) AND drops real obstacles under nose-up pitch (a P1 safety
+    // suppression).  These fields feed the attitude-aware replacement.
+    // Sensor→body mount extrinsics (rad); default matches the x500_companion
+    // lidar (−5° pitch).  Compensated in fusion until the HAL emits body-frame
+    // detections (staged: #816 PR1 here, PR2 in the HAL).
+    float mount_roll_rad  = 0.0f;
+    float mount_pitch_rad = -0.087f;
+    float mount_yaw_rad   = 0.0f;
+    // Fail-safe margin (rad): reject a return as ground only if it is below the
+    // floor even after allowing this much attitude uncertainty.  Biases
+    // false-accept (keep the obstacle).  Clamped [0, 0.35] at config load.
+    float attitude_uncertainty_rad = 0.02f;
 
     /// Apply sign convention to raw azimuth. Inlined for hot-path use.
     [[nodiscard]] float az_sign(float raw_azimuth_rad) const {
@@ -229,8 +246,13 @@ public:
     ///                    the world origin sits on the ground plane).
     void set_drone_altitude(float altitude_m) override;
 
-    /// Provide full drone pose for world-frame dormant re-identification.
-    void set_drone_pose(float north, float east, float up, float yaw) override;
+    /// Provide full drone pose — position + orientation quaternion (w,x,y,z,
+    /// matching drone::ipc::Pose) — for world-frame dormant re-identification
+    /// AND the attitude-aware ground gate (#816).  The quaternion (not just yaw)
+    /// is required: pitch/roll determine a radar return's true world altitude,
+    /// and getting it wrong drops real obstacles under nose-up pitch.
+    void set_drone_pose(float north, float east, float up, float qw, float qx, float qy,
+                        float qz) override;
 
     /// Provide ML depth map for depth-enhanced fusion (Issue #430).
     /// Takes ownership via move to avoid copying ~1.2MB per frame at 30Hz.
@@ -266,6 +288,37 @@ public:
         return s_matrix_fallback_count_.load(std::memory_order_relaxed);
     }
 
+    /// Issue #816 — attitude-aware ground-gate instrumentation.  Permanent
+    /// diagnostics (not throwaway logging) so this bug class cannot silently
+    /// recur.  Relaxed-ordering observability counters (same rationale as
+    /// s_matrix_fallback_count above); read from the run-report/health threads.
+    /// Number of radar returns the ground gate rejected as ground.
+    [[nodiscard]] uint64_t ground_gate_rejects() const noexcept {
+        return ground_gate_rejects_.load(std::memory_order_relaxed);
+    }
+    /// THE CANARY: returns where the naive (level-flight) verdict and the
+    /// attitude-aware verdict DISAGREE — the direct, ongoing measure of how
+    /// often attitude mattered.  A run with attitude and zero flips means the
+    /// fix never engaged (suspicious); flips > 0 proves it did.
+    [[nodiscard]] uint64_t ground_gate_attitude_flips() const noexcept {
+        return ground_gate_attitude_flips_.load(std::memory_order_relaxed);
+    }
+    /// Largest |naive_alt − attitude_aware_alt| seen (millimetres) — the
+    /// worst-case altitude correction the attitude term applied.
+    [[nodiscard]] uint64_t max_attitude_correction_mm() const noexcept {
+        return max_attitude_correction_mm_.load(std::memory_order_relaxed);
+    }
+
+    /// Issue #816 — attitude-aware ground gate.  Returns true if a radar return
+    /// at (range, RAW sensor azimuth, elevation) should be suppressed as a
+    /// ground return, given the current pose (`set_drone_pose`) + altitude.
+    /// Fail-safe: never suppresses when attitude is unknown; biases false-accept
+    /// via `attitude_uncertainty_rad`.  Also updates the instrumentation
+    /// counters (hence non-const).  PUBLIC so the safety-critical pitch/roll
+    /// retention property can be exhaustively unit-tested directly, not only
+    /// inferred through the orphan/association paths.
+    [[nodiscard]] bool is_ground_return(float range_m, float raw_azimuth_rad, float elevation_rad);
+
 private:
     CalibrationData                         calib_;
     RadarNoiseConfig                        radar_cfg_;
@@ -277,12 +330,16 @@ private:
     float                          drone_altitude_m_{0.0f};
     bool                           has_altitude_{false};
 
-    // Drone pose for body→world transform (dormant re-ID)
+    // Drone pose for body→world transform (dormant re-ID + #816 ground gate).
     float drone_north_{0.0f};
     float drone_east_{0.0f};
     float drone_up_{0.0f};
-    float drone_yaw_{0.0f};
+    float drone_yaw_{0.0f};  // derived from the quaternion (yaw-only consumers)
     bool  has_pose_{false};
+    // Issue #816 — full body→world orientation.  Stored as a quaternion so the
+    // ground gate can compute a return's true world altitude under any attitude
+    // (not just yaw).  Identity until the first pose arrives.
+    Eigen::Quaternionf body_to_world_q_{Eigen::Quaternionf::Identity()};
 
     // Dormant obstacle pool — world-frame memory of lost tracks
     std::vector<DormantObstacle> dormant_obstacles_;
@@ -320,6 +377,11 @@ private:
     // can be called off-thread (run-report / P7).  Relaxed ordering —
     // pure observability counter, no synchronization implied.
     std::atomic<uint64_t> s_matrix_fallback_count_{0};
+
+    // Issue #816 — attitude-aware ground-gate instrumentation (see accessors).
+    std::atomic<uint64_t> ground_gate_rejects_{0};
+    std::atomic<uint64_t> ground_gate_attitude_flips_{0};
+    std::atomic<uint64_t> max_attitude_correction_mm_{0};
 
     struct DepthEstimate {
         float depth      = 8.0f;

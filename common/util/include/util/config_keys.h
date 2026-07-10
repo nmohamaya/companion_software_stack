@@ -773,10 +773,19 @@ inline constexpr const char* MIN_RANGE_M         = ".min_range_m";
 inline constexpr const char* FOV_AZIMUTH_RAD     = ".fov_azimuth_rad";
 inline constexpr const char* FOV_ELEVATION_RAD   = ".fov_elevation_rad";
 inline constexpr const char* GROUND_FILTER_ALT_M = ".ground_filter_alt_m";
-inline constexpr const char* FALSE_ALARM_RATE    = ".false_alarm_rate";
-inline constexpr const char* NUM_TARGETS         = ".num_targets";
-inline constexpr const char* GZ_SCAN_TOPIC       = ".gz_scan_topic";
-inline constexpr const char* GZ_ODOM_TOPIC       = ".gz_odom_topic";
+// Issue #816 — sensor mount extrinsics (sensor→body rotation, radians).
+// The lidar/radar is mounted with a fixed tilt (x500_companion: pitch −0.087);
+// the attitude-aware ground gate must compensate it, else it mis-estimates a
+// return's world altitude by range·sin(mount).  Owned by the HAL/sensor; the
+// fusion gate also reads them until the HAL emits body-frame detections
+// (staged: #816 PR1 fusion compensates, PR2 HAL takes over).
+inline constexpr const char* MOUNT_ROLL_RAD   = ".mount_roll_rad";
+inline constexpr const char* MOUNT_PITCH_RAD  = ".mount_pitch_rad";
+inline constexpr const char* MOUNT_YAW_RAD    = ".mount_yaw_rad";
+inline constexpr const char* FALSE_ALARM_RATE = ".false_alarm_rate";
+inline constexpr const char* NUM_TARGETS      = ".num_targets";
+inline constexpr const char* GZ_SCAN_TOPIC    = ".gz_scan_topic";
+inline constexpr const char* GZ_ODOM_TOPIC    = ".gz_odom_topic";
 // Issue #635 — clustering bin sizes for emulated forward-radar from lidar.
 // Cosys-AirSim's GPULidar produces ~1000 raw points per scan; without
 // clustering the first 128 in scan order are kept (an angular slice) and

@@ -8,12 +8,14 @@
 #include "perception/kalman_tracker.h"
 #include "perception/ukf_fusion_engine.h"
 #include "util/config.h"
+#include "util/sensor_geometry.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <memory>
+#include <optional>
 
 #include <gtest/gtest.h>
 
@@ -784,6 +786,9 @@ TEST(RadarFusionTest, GroundFilterRejectsLowAltitude) {
 
     UKFFusionEngine engine(calib, radar_cfg, true);
     engine.set_drone_altitude(5.0f);
+    // #816 — the ground gate now needs attitude; a level identity pose
+    // engages it exactly as level flight (drone at 5 m AGL, facing north).
+    engine.set_drone_pose(0.0f, 0.0f, 5.0f, 1.0f, 0.0f, 0.0f, 0.0f);
 
     auto              trk   = make_test_tracked();
     float             depth = test_estimate_depth(calib, trk);
@@ -832,6 +837,9 @@ TEST(RadarFusionTest, GroundFilterPassesHighAltitude) {
 
     UKFFusionEngine engine(calib, radar_cfg, true);
     engine.set_drone_altitude(5.0f);
+    // #816 — the ground gate now needs attitude; a level identity pose
+    // engages it exactly as level flight (drone at 5 m AGL, facing north).
+    engine.set_drone_pose(0.0f, 0.0f, 5.0f, 1.0f, 0.0f, 0.0f, 0.0f);
 
     auto              trk   = make_test_tracked();
     float             depth = test_estimate_depth(calib, trk);
@@ -873,6 +881,9 @@ TEST(RadarFusionTest, GroundFilterDisabledPassesAll) {
 
     UKFFusionEngine engine(calib, radar_cfg, true);
     engine.set_drone_altitude(5.0f);
+    // #816 — the ground gate now needs attitude; a level identity pose
+    // engages it exactly as level flight (drone at 5 m AGL, facing north).
+    engine.set_drone_pose(0.0f, 0.0f, 5.0f, 1.0f, 0.0f, 0.0f, 0.0f);
 
     auto              trk   = make_test_tracked();
     float             depth = test_estimate_depth(calib, trk);
@@ -1052,7 +1063,8 @@ TEST(DormantReIDTest, NewTrackCreatesDormantEntry) {
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
 
     // Provide drone pose so dormant logic activates
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);  // at origin, facing north, 4m up
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f,
+                          0.000000f);  // at origin, facing north, 4m up
     engine.set_drone_altitude(4.0f);
 
     // Provide radar so the track becomes radar-confirmed (required for dormant entry)
@@ -1078,7 +1090,7 @@ TEST(DormantReIDTest, ReidentifiesTrackAtSimilarWorldPosition) {
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
 
     // Drone at origin, facing north (yaw=0)
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     engine.set_drone_altitude(4.0f);
 
     // First track: creates a radar-confirmed dormant entry
@@ -1098,7 +1110,7 @@ TEST(DormantReIDTest, ReidentifiesTrackAtSimilarWorldPosition) {
 
     // Simpler approach: keep yaw=0, move drone slightly. The same pixel position
     // from a slightly different drone position produces a nearby world point.
-    engine.set_drone_pose(1.0f, 0.0f, 4.0f, 0.0f);  // moved 1m north
+    engine.set_drone_pose(1.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);  // moved 1m north
 
     // Provide radar for the second track too
     set_matching_radar(engine);
@@ -1117,7 +1129,7 @@ TEST(DormantReIDTest, ReidentifiedObjectHasWorldFrameFlag) {
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
 
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     engine.set_drone_altitude(4.0f);
 
     // Frame 1: track 1 creates radar-confirmed dormant entry
@@ -1135,7 +1147,7 @@ TEST(DormantReIDTest, ReidentifiedObjectHasWorldFrameFlag) {
     engine.fuse(empty);
 
     // Frame 3: track 2 appears from slightly shifted drone, same world area
-    engine.set_drone_pose(1.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(1.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     set_matching_radar(engine);
     TrackedObjectList tracked2;
     tracked2.timestamp_ns   = 3000;
@@ -1159,7 +1171,7 @@ TEST(DormantReIDTest, DormantPoolRespectsCap) {
     // Place drone far enough apart that each track creates a unique dormant entry.
     // Each track at a different drone position → different world position → no merge.
     for (int i = 0; i < 5; ++i) {
-        engine.set_drone_pose(static_cast<float>(i) * 100.0f, 0.0f, 4.0f, 0.0f);
+        engine.set_drone_pose(static_cast<float>(i) * 100.0f, 0.0f, 4.0f, 1.0f, 0.0f, 0.0f, 0.0f);
         set_matching_radar(engine);
 
         TrackedObjectList tracked;
@@ -1186,7 +1198,7 @@ TEST(DormantReIDTest, ResetClearsDormantState) {
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
 
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     engine.set_drone_altitude(4.0f);
     set_matching_radar(engine);
 
@@ -1205,7 +1217,7 @@ TEST(DormantReIDTest, CameraOnlyTrackDoesNotCreateDormant) {
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
 
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     engine.set_drone_altitude(4.0f);
     // No radar detections — track will be camera-only
 
@@ -1241,7 +1253,7 @@ TEST(DormantReIDTest, DistantTrackCreatesNewDormantEntry) {
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
 
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     engine.set_drone_altitude(4.0f);
 
     // Track 1: creates radar-confirmed dormant entry
@@ -1260,7 +1272,7 @@ TEST(DormantReIDTest, DistantTrackCreatesNewDormantEntry) {
     engine.fuse(empty);
 
     // Track 2 from a very different drone position — should NOT merge
-    engine.set_drone_pose(100.0f, 100.0f, 4.0f, 0.0f);  // 100m away
+    engine.set_drone_pose(100.0f, 100.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);  // 100m away
     set_matching_radar(engine);
     TrackedObjectList tracked2;
     tracked2.timestamp_ns   = 3000;
@@ -1314,7 +1326,7 @@ TEST(RadarPrimaryTest, RadarOrphanCreatesTrack) {
     rcfg.radar_only_promotion_hits = 1;  // immediate output for this test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
 
     // Provide radar detection with NO camera tracks
     drone::ipc::RadarDetectionList radar{};
@@ -1452,7 +1464,7 @@ TEST(RadarPrimaryTest, RadarOnlyDormantEntry) {
     rcfg.radar_only_promotion_hits = 1;  // immediate output for dormant test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
-    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
 
     drone::ipc::RadarDetectionList radar{};
     radar.timestamp_ns   = 1000;
@@ -2559,7 +2571,7 @@ std::unique_ptr<drone::perception::UKFFusionEngine> make_mofn_engine(uint32_t in
     auto engine = std::make_unique<drone::perception::UKFFusionEngine>(make_test_calib(), rcfg,
                                                                        true, 5.0f, 32);
     engine->set_drone_altitude(4.0f);
-    engine->set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine->set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     return engine;
 }
 
@@ -2760,7 +2772,7 @@ TEST(RadarOrphanMofN, PoseArrivalClearsBodyFrameCandidates) {
     EXPECT_EQ(engine->orphan_candidate_count(), 1u);
 
     // VIO locks — same physical detection now maps to world frame.
-    engine->set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    engine->set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
     EXPECT_EQ(mofn_step(*engine, det, 3 * kFrameNs, 3).objects.size(), 0u)
         << "buffer cleared on frame switch — this must be hit 1 of a fresh cycle";
     EXPECT_EQ(engine->orphan_candidate_count(), 1u) << "exactly one fresh world-frame candidate";
@@ -2871,7 +2883,7 @@ TEST(RadarOrphanClamp, ClampedHitsActuallyBoundSuppression) {
     auto fe = make_factory_engine(R"("orphan_init_hits":99,"promotion_hits":1)");
     ASSERT_NE(fe.ukf, nullptr);
     fe.ukf->set_drone_altitude(4.0f);
-    fe.ukf->set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+    fe.ukf->set_drone_pose(0.0f, 0.0f, 4.0f, 1.000000f, 0.0f, 0.0f, 0.000000f);
 
     const auto det = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
     for (uint32_t frame = 1; frame <= 9; ++frame) {
@@ -2881,4 +2893,164 @@ TEST(RadarOrphanClamp, ClampedHitsActuallyBoundSuppression) {
     EXPECT_EQ(mofn_step(*fe.ukf, det, 10 * kFrameNs, 10).objects.size(), 1u)
         << "hit 10/10: the clamped cap must confirm here — a real obstacle is "
            "bounded-delayed, never indefinitely suppressed (DR-056 (b)+(c))";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Issue #816 — attitude-aware ground gate: the SAFETY regression suite.
+//
+// The former gate (`drone_alt + range·sin(elevation)`) ignored drone pitch/roll
+// and the −5° sensor mount, so at reachable nose-up pitch it REJECTED real
+// obstacles as ground (P1). Airframe reaches ~18° pitch / ~17° roll (measured).
+//
+// Method (rigorous — no convention hand-waving): place a real obstacle in WORLD
+// coordinates, project it into the sensor frame via the inverse of the exact
+// rotation the gate uses (body attitude ∘ mount), feed that (range, az, el) to
+// is_ground_return, and assert. Because the gate applies the forward rotation,
+// it must recover the obstacle's true world altitude for ANY attitude — so a
+// real obstacle above the floor can never be dropped.
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+constexpr float kD2R   = 3.14159265358979323846f / 180.0f;
+constexpr float kFovEl = 20.0f * kD2R;  // vertical FOV ±20°
+constexpr float kFovAz = 30.0f * kD2R;  // horizontal FOV ±30°
+
+drone::perception::UKFFusionEngine make_gate_engine(float mount_pitch = -0.087f) {
+    RadarNoiseConfig cfg;
+    cfg.ground_filter_enabled = true;
+    cfg.min_object_altitude_m = 0.3f;
+    cfg.mount_pitch_rad       = mount_pitch;
+    return drone::perception::UKFFusionEngine(make_test_calib(), cfg, true);
+}
+
+// Set the drone at (alt) with the given body attitude (identity = level).
+void set_attitude(drone::perception::UKFFusionEngine& e, float alt, float roll_deg, float pitch_deg,
+                  float yaw_deg = 0.0f) {
+    e.set_drone_altitude(alt);
+    const Eigen::Quaternionf q = drone::util::quat_from_rpy(roll_deg * kD2R, pitch_deg * kD2R,
+                                                            yaw_deg * kD2R);
+    e.set_drone_pose(0.0f, 0.0f, alt, q.w(), q.x(), q.y(), q.z());
+}
+
+// Project a world obstacle (due north, horizontal range r, height h, drone at
+// alt with the given attitude + mount) into the sensor frame. Returns
+// {slant, az, el} if within the sensor FOV, else nullopt.
+struct SensorReturn {
+    float slant, az, el;
+};
+std::optional<SensorReturn> project_to_sensor(float h, float r, float alt, float roll_deg,
+                                              float pitch_deg, float mount_pitch = -0.087f) {
+    const Eigen::Quaternionf body  = drone::util::quat_from_rpy(roll_deg * kD2R, pitch_deg * kD2R,
+                                                                0.0f);
+    const Eigen::Quaternionf mount = drone::util::quat_from_rpy(0.0f, mount_pitch, 0.0f);
+    const Eigen::Quaternionf sensor_to_world = body * mount;
+    const Eigen::Vector3f    world_off(r, 0.0f, h - alt);  // due north, up by (h-alt)
+    const float              slant    = world_off.norm();
+    const Eigen::Vector3f    ray_body = sensor_to_world.conjugate() * (world_off / slant);
+    const float              el       = std::asin(std::max(-1.0f, std::min(1.0f, ray_body.z())));
+    const float              az       = std::atan2(ray_body.y(), ray_body.x());
+    if (std::fabs(el) > kFovEl || std::fabs(az) > kFovAz) return std::nullopt;
+    return SensorReturn{slant, az, el};
+}
+}  // namespace
+
+TEST(RadarGroundGateAttitude, RealObstacleNeverDroppedAcrossPitchRollSweep) {
+    // THE safety property. Every plausible obstacle × range, pitch and roll
+    // swept ±25° (beyond the airframe envelope): a return inside the sensor FOV
+    // must NEVER be suppressed as ground.
+    auto        engine  = make_gate_engine();
+    const float alt     = 4.48f;  // measured cruise altitude
+    int         checked = 0;
+    for (float h : {0.5f, 1.0f, 1.7f, 2.0f, 3.0f}) {
+        for (float r : {10.0f, 15.0f, 20.0f, 25.0f}) {
+            for (int pitch = -25; pitch <= 25; ++pitch) {
+                for (int roll = -25; roll <= 25; roll += 5) {
+                    auto ret = project_to_sensor(h, r, alt, static_cast<float>(roll),
+                                                 static_cast<float>(pitch));
+                    if (!ret) continue;  // obstacle outside FOV — not observable
+                    set_attitude(engine, alt, static_cast<float>(roll), static_cast<float>(pitch));
+                    ++checked;
+                    ASSERT_FALSE(engine.is_ground_return(ret->slant, ret->az, ret->el))
+                        << "REAL obstacle DROPPED: h=" << h << "m r=" << r << "m pitch=" << pitch
+                        << "° roll=" << roll << "°";
+                }
+            }
+        }
+    }
+    EXPECT_GT(checked, 1000) << "sweep must exercise many attitudes";
+}
+
+TEST(RadarGroundGateAttitude, NearGroundRejected_FarGroundFailSafeKept) {
+    // #815 direction + the margin/range tradeoff (DR-057). NEAR ground (inside
+    // the gate's confident range, slant < floor/sin(margin) ≈ 15 m at δ=0.02) is
+    // rejected once the −5° mount is compensated. FAR ground is fail-safe KEPT:
+    // altitude gating cannot distinguish 22 m ground from a low obstacle at the
+    // sensor's angular resolution, so the gate keeps it and Phase-B decay + the
+    // reactive avoider handle it.
+    auto        engine = make_gate_engine();
+    const float alt    = 4.48f;
+    set_attitude(engine, alt, 0.0f, 0.0f);  // level
+
+    auto near = project_to_sensor(0.0f, 12.2f, alt, 0.0f, 0.0f);  // ~13 m slant
+    ASSERT_TRUE(near.has_value()) << "near ground must be in FOV";
+    ASSERT_LT(near->slant, 15.0f);
+    EXPECT_TRUE(engine.is_ground_return(near->slant, near->az, near->el))
+        << "near ground (slant " << near->slant << "m) must be rejected (mount compensated)";
+
+    auto far = project_to_sensor(0.0f, 21.5f, alt, 0.0f, 0.0f);  // ~22 m slant
+    ASSERT_TRUE(far.has_value());
+    ASSERT_GT(far->slant, 18.0f);
+    EXPECT_FALSE(engine.is_ground_return(far->slant, far->az, far->el))
+        << "far ground (slant " << far->slant
+        << "m) is fail-safe KEPT — irreducible by altitude gating, decayed by Phase B";
+}
+
+TEST(RadarGroundGateAttitude, NearGroundStillRejectedUnderPitch) {
+    // Near-ground rejection must survive attitude: a ~13 m-slant ground return
+    // with the drone pitched ±10° is still ground and must be rejected — the
+    // attitude compensation removes the pitch, not just the mount.
+    auto        engine = make_gate_engine();
+    const float alt    = 4.48f;
+    for (int pitch : {-10, 0, 10}) {
+        auto ret = project_to_sensor(0.0f, 12.2f, alt, 0.0f, static_cast<float>(pitch));
+        if (!ret || ret->slant >= 15.0f) continue;
+        set_attitude(engine, alt, 0.0f, static_cast<float>(pitch));
+        EXPECT_TRUE(engine.is_ground_return(ret->slant, ret->az, ret->el))
+            << "near ground must stay rejected at pitch " << pitch << "°";
+    }
+}
+
+TEST(RadarGroundGateAttitude, FailSafeNoPoseNeverSuppresses) {
+    // Attitude unknown ⇒ the gate must NEVER suppress (keep the obstacle).
+    auto engine = make_gate_engine();
+    engine.set_drone_altitude(4.48f);  // altitude but NO pose
+    EXPECT_FALSE(engine.is_ground_return(20.0f, 0.0f, -0.5f))
+        << "no pose ⇒ attitude unknown ⇒ fail-safe: never suppress";
+}
+
+TEST(RadarGroundGateAttitude, InstrumentationCanaryFlipsUnderPitch) {
+    // The permanent diagnostic must register that attitude mattered: under
+    // nose-up pitch a low-but-real return flips the verdict vs the naive gate.
+    auto        engine = make_gate_engine();
+    const float alt    = 4.48f;
+    // Sweep low real obstacles under nose-up pitch. In this regime the naive
+    // gate (raw pitched elevation) computes a below-floor altitude and would
+    // DROP a real obstacle, while the attitude-aware gate recovers its true
+    // height and KEEPS it — the exact P1 bug this fixes. Every in-FOV return we
+    // keep here that the naive gate would have dropped is a canary flip.
+    int fed = 0;
+    for (float h : {0.8f, 1.2f, 1.6f, 2.0f}) {
+        for (int pitch = 6; pitch <= 16; ++pitch) {
+            auto ret = project_to_sensor(h, 13.0f, alt, 0.0f, static_cast<float>(pitch));
+            if (!ret) continue;
+            set_attitude(engine, alt, 0.0f, static_cast<float>(pitch));
+            EXPECT_FALSE(engine.is_ground_return(ret->slant, ret->az, ret->el))
+                << "real obstacle h=" << h << "m at pitch " << pitch << "° must be KEPT";
+            ++fed;
+        }
+    }
+    ASSERT_GT(fed, 0) << "sweep must exercise at least one in-FOV pitched return";
+    EXPECT_GT(engine.ground_gate_attitude_flips(), 0u)
+        << "the canary MUST fire — some naive verdicts differ from attitude-aware";
+    EXPECT_GT(engine.max_attitude_correction_mm(), 0u);
 }
