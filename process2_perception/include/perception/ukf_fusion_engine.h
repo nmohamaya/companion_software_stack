@@ -55,6 +55,26 @@ struct RadarNoiseConfig {
     uint32_t radar_only_promotion_hits = 6;     // radar hits for static promotion (0.3s at 20Hz)
     bool     radar_only_enabled        = true;  // enable radar-only track initiation (Issue #231)
 
+    // Issue #799 Phase A — M-of-N track-initiation confirmation for radar
+    // orphans.  A single unmatched return no longer creates a track (and its
+    // dormant world-memory entry); it must re-occur orphan_init_hits times
+    // within orphan_init_radius_m of the running-mean candidate position.
+    // 1 = legacy immediate creation.  Clamped [1,10] at config load — the
+    // fail-safe cap guarantees a config typo cannot suppress real obstacles
+    // indefinitely (CLAUDE.md perception-suppression-gate rule).
+    //
+    // NOTE on orphan_init_window_s: it bounds the gap between CONSECUTIVE
+    // returns (a candidate expires only if it goes unseen for longer than the
+    // window), NOT the absolute span from first sighting to confirmation.  So
+    // M hits may legitimately span more than one window as long as no single
+    // gap exceeds it.  This is deliberate: the rolling bound biases toward
+    // false-accept (confirming a real obstacle observed intermittently),
+    // whereas an absolute span bound would bias toward false-reject — the
+    // wrong direction for a perception-suppression gate.
+    uint32_t orphan_init_hits     = 3;     // M consistent returns to confirm
+    float    orphan_init_window_s = 1.0f;  // N: max gap between consecutive returns
+    float    orphan_init_radius_m = 2.0f;  // R: association radius for hits
+
     // Azimuth sign convention (Issue #348):
     // true  = negate azimuth (Gazebo/Simulated: FLU → UKF FRD)
     // false = native FRD (real radar hardware, e.g. TI AWR series)
@@ -177,6 +197,16 @@ struct DormantObstacle {
     uint64_t        last_seen_ns = 0;                        // timestamp of last observation
 };
 
+/// Issue #799 Phase A — a tentative radar-orphan awaiting M-of-N confirmation.
+/// Positions are world-frame when drone pose is available (stable against
+/// drone motion — same convention as DormantObstacle), body-frame otherwise.
+struct OrphanCandidate {
+    Eigen::Vector3f pos           = Eigen::Vector3f::Zero();  // running-mean position
+    uint32_t        hits          = 0;                        // consistent returns so far
+    uint64_t        first_seen_ns = 0;
+    uint64_t        last_seen_ns  = 0;
+};
+
 /// UKF-based fusion engine with camera + radar fusion.
 /// Maintains per-object UKF instances, matched by track_id.
 /// Dormant obstacle pool enables cross-view re-identification (Issue #237).
@@ -206,9 +236,21 @@ public:
     /// Takes ownership via move to avoid copying ~1.2MB per frame at 30Hz.
     void set_depth_map(drone::hal::DepthMap depth_map) override;
 
+    /// Access the (post-clamp) radar config. Exposed so the fail-safe bounds
+    /// applied in `create_fusion_engine` — the mechanism DR-056 relies on to
+    /// guarantee a config typo cannot suppress obstacles indefinitely — are
+    /// assertable by tests rather than only asserted in prose.
+    [[nodiscard]] const RadarNoiseConfig& radar_config() const noexcept { return radar_cfg_; }
+
     /// Access dormant obstacles (for testing).
     [[nodiscard]] const std::vector<DormantObstacle>& dormant_obstacles() const {
         return dormant_obstacles_;
+    }
+
+    /// Issue #799 Phase A — pending (unconfirmed) radar-orphan candidates.
+    /// Exposed for tests + run-report diagnostics.
+    [[nodiscard]] size_t orphan_candidate_count() const noexcept {
+        return orphan_candidates_.size();
     }
 
     /// Issue #645 — count of radar-only association attempts where the full-S
@@ -257,6 +299,16 @@ private:
     // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
     uint32_t next_radar_track_id_{0x80000000u};
 
+    // Issue #799 Phase A — tentative radar-orphan candidates awaiting M-of-N
+    // confirmation.  Bounded (kMaxOrphanCandidates; lowest-hits-then-stalest
+    // evicted) so a clutter storm cannot grow it without limit.
+    static constexpr size_t      kMaxOrphanCandidates = 64;
+    std::vector<OrphanCandidate> orphan_candidates_;
+    // Which frame the buffered candidates live in (world iff has_pose_ when
+    // stored).  When VIO pose first locks mid-run the frames become
+    // incomparable — the buffer is cleared on the switch (PR #814 review).
+    bool orphan_candidates_world_frame_{false};
+
     // Issue #645 — diagnostic counter for radar-only S-matrix fallback path.
     // Increments every time `try_associate_radar` exhausts (a) direct LLT,
     // (b) diagonal-epsilon regularization, and (c) eigenvalue-clamp recovery,
@@ -279,6 +331,17 @@ private:
     int             find_nearest_dormant(const Eigen::Vector3f& world_pos,
                                          const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *
                                                                           10.0f) const;
+
+    // Issue #799 Phase A — radar-orphan M-of-N confirmation helpers.  Split out
+    // of fuse() (PR #814 review) so the candidate-buffer logic reads and unit-
+    // tests in isolation.  Both operate on orphan_candidates_ and are only
+    // called from the single-threaded fuse() radar-orphan block.
+    /// Drop candidates not re-observed within orphan_init_window_s of now_ns.
+    void expire_orphan_candidates(uint64_t now_ns);
+    /// Fold one unmatched orphan (body-frame) into the candidate buffer.
+    /// @return true if this return completes an M-of-N run (caller creates the
+    ///         track); false if still tentative (caller skips the frame).
+    [[nodiscard]] bool confirm_orphan_candidate(const Eigen::Vector3f& body_pos, uint64_t now_ns);
 
     /// Try to associate a UKF filter with unmatched radar detections.
     /// Returns true and updates the filter if a match is found.

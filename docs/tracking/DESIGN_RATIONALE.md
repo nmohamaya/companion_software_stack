@@ -1532,3 +1532,27 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** the team decides ADRs should carry a standing "current-state" addendum that *is* SSOT-linked (distinct from the frozen decision body), or the immutability norm itself is revised.
 
 **Date:** 2026-07-07 (Copilot review, PR #812)
+
+---
+
+## DR-056: Radar-orphan tracks require M-of-N init confirmation by default (Issue #799 Phase A)
+
+**Question:** Should an unmatched ("orphan") radar return keep creating a track — and its dormant world-memory entry — on the **first** detection (with only the 6-hit output gate downstream), or only after **M consistent returns within radius R inside window N** (default 3 hits / 2 m / 1 s)?
+
+**Arguments for first-return creation (the previous behaviour):**
+- Earliest possible track: a real obstacle starts accumulating UKF updates ~0.15 s sooner.
+- Simpler pipeline — no candidate buffer, no new tunables.
+
+**Arguments for M-of-N confirmation (the new default):**
+- Track creation was the ghost source #799's other layers only mitigated: every injected/real radar false alarm (spatially-random one-shots) became an `ObjectUKF` **plus a dormant obstacle** — persistent world-frame memory that re-IDs later returns near the same spot. Even the first 21/21-green run created **31 radar tracks for 4 physical obstacles**; Phase B's grid decay was absorbing the load downstream.
+- One-shot false alarms essentially never recur 3× within 2 m inside 1 s; a persistent real return trivially does (3 consecutive frames at 20 Hz).
+- **Fail-safe per the CLAUDE.md perception-suppression-gate rule:** (a) the reactive `ObstacleAvoider3D` and the untouched camera→grid path backstop the confirmation window; (b) `orphan_init_hits` is clamped **[1, 10]** and window/radius [0.1, 10] at config load — a typo cannot suppress obstacles indefinitely (locked by the `RadarOrphanClamp` factory-path tests, not asserted in prose alone); (c) in the **world frame** (pose available — the normal flight case) a persistent real obstacle cannot be *dropped*, only delayed ~0.15 s on top of the pre-existing 0.3 s output gate (`radar_only_promotion_hits = 6`) — total first-output latency rises ~0.45 s vs 0.30 s, all inside the avoider's reactive envelope. Bias: false-accept.
+- **Precision on (c) — the body-frame + high-yaw exception.** The "delayed, never dropped" guarantee is airtight only in the world frame. In the **body-frame fallback** (pre-VIO-lock) under drone yaw, a static obstacle at range *r* sweeps ≈ *r*·Δθ laterally per frame (≈ 2.25 m at *r* = 15 m, 3 rad/s yaw) — beyond `orphan_init_radius_m = 2 m`, so its returns never associate into one candidate and it **never confirms**: dropped at track-init, not merely delayed. Safety still holds, but it is carried by the reactive `ObstacleAvoider3D` in that window, *not* by the track. The same physics, with a *lagging* world pose, is the residual mis-projection ghost class (**#815**): a constant yaw-lag during a constant-rate spin projects a real return to a *consistently wrong* world position, which M-of-N then confirms as a ghost.
+- **Precision on the window semantics.** `orphan_init_window_s` bounds the gap between **consecutive** returns (a candidate expires only after going unseen that long), not the absolute first-sighting-to-confirmation span. M hits may therefore span more than one window provided no single gap exceeds it. Deliberate: the rolling bound biases toward false-accept (confirming an intermittently-observed real obstacle); an absolute-span bound would bias toward false-reject — the wrong direction for a suppression gate.
+- `orphan_init_hits = 1` is the documented legacy sentinel (buffer bypassed entirely) for radars with negligible false-alarm rates.
+
+**Decision:** **M-of-N, default 3 / 1.0 s / 2.0 m** in `config/default.json` + the `RadarNoiseConfig` code fallback. Candidates live in world frame when pose is available (same convention as dormant re-ID; body-frame fallback can only slow confirmation, never suppress). Candidate buffer bounded at 64 (lowest-hits-first eviction, stalest as tiebreak) so a clutter storm cannot grow it unbounded or evict a multi-hit real-obstacle candidate. The sim's false-alarm injection stays enabled — real radar has false alarms; perception must be robust rather than the sim neutered (maximize-stack-coverage rule).
+
+**Revisit when:** a live run shows late confirmation on a real obstacle (proximity-gate warning / grid gap → drop M to 2, still kills one-shots), or a radar with strong multipath produces *spatially-stable* ghosts that pass M-of-N (then add a Mahalanobis novelty gate on top — see #815, the residual mis-projection ghost class found in Phase A validation), or scenario 18's radar-track count fails to drop toward the physical obstacle count.
+
+**Date:** 2026-07-07 (Issue #799 Phase A)
