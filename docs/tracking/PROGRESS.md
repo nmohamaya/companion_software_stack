@@ -4293,4 +4293,21 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #116 (Issue #799 Phase A — radar-orphan M-of-N). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #117 — Attitude-aware radar ground gate (Issue #816 — P1 safety)
+
+**Date:** 2026-07-10  
+**Category:** Perception / **Safety (P1)**  
+**Files Modified:**
+- `common/util/include/util/sensor_geometry.h` (new) — attitude-aware sensor↔world projection (`return_world_altitude_m` etc.); FLU/ENU convention verified empirically vs real Pose data.
+- `process2_perception/include/perception/{ifusion_engine.h,ukf_fusion_engine.h}`, `.../src/ukf_fusion_engine.cpp` — `set_drone_pose` carries the full quaternion; `is_ground_return()` centralises the two former flat-formula gate sites; fail-safe margin; permanent instrumentation counters; factory load + clamp.
+- `process2_perception/src/main.cpp` — forward the full pose quaternion (was discarding pitch/roll).
+- `config/default.json`, `common/util/include/util/config_keys.h` — `perception.radar.mount_{roll,pitch,yaw}_rad` + `perception.fusion.radar.attitude_uncertainty_rad`.
+- `tests/test_sensor_geometry.cpp` (new, 6), `tests/test_frame_contracts.cpp` (new, 6 — Tier-1 of #817), `tests/test_fusion_engine.cpp` (`RadarGroundGateAttitude` ±25° sweep, 5).
+
+**What:** The radar ground filter computed a return's altitude from the raw sensor elevation (`drone_alt + range·sin(el)`), ignoring drone pitch/roll and the −5° mount. Under nose-up pitch it **dropped real obstacles as ground** (P1 — a 1.7 m obstacle at 15 m dropped at 10–14° nose-up, and the airframe reaches 18°); in level flight it admitted ground as ghosts (#815). Now the gate projects each return through the true body→world rotation and fails safe.
+
+**Why:** P1 safety — a perception-suppression gate must never drop a real obstacle (CLAUDE.md rule). See [BUG_FIXES.md](BUG_FIXES.md) Fix #66 and **DR-057** (incl. the margin-vs-range tradeoff: the gate rejects near-range ground; the #815 far arc is irreducible by altitude and stays fail-safe, decayed by Phase B). Frame conventions pinned by an executable contract test (Tier-1 of the typed-frames epic #817). The original #815 timestamp-skew hypothesis was measured and falsified first. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #117 (Issue #816 — attitude-aware radar ground gate). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

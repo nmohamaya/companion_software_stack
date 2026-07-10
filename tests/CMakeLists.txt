@@ -100,6 +100,9 @@ add_drone_test(test_clock_migration_767 test_clock_migration_767.cpp)
 # ── Sensor geometry (attitude-aware ground gate, #816) ───────
 add_drone_test(test_sensor_geometry test_sensor_geometry.cpp)
 
+# ── Frame contract (executable spec pinning frame conventions, #816/#817) ──
+add_drone_test(test_frame_contracts test_frame_contracts.cpp)
+
 # ── Result<T,E> type tests ───────────────────────────────────
 add_drone_test(test_result          test_result.cpp)
 

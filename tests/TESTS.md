@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **105 C++ + 5 shell + 1 Python** | **2172 (no SDK, 8 Cosys-SDK tests skipped) / 2180 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #799 Phase A radar-orphan M-of-N +11 tests in `test_fusion_engine.cpp` (`RadarOrphanMofN`: one-shot false alarms never create tracks; persistent return confirms on hit M; hits=1 legacy bypass; stale-candidate expiry; 3 review-fix tests) plus `RadarOrphanClamp` ×4 (factory-path fail-safe clamp: hits 99→10, 0/negative→1, window/radius bounds, and the behavioural proof that a clamped typo still confirms a real obstacle at hit 10) → that file now 85 tests. `ctest -N --test-dir build` reports **2172** (no SDK) / **2180** (+SDK). Previous PR (#806 contracts-lite): +6 tests in `test_contracts_manifest.cpp`. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2189 (no SDK, 8 Cosys-SDK tests skipped) / 2197 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #816 attitude-aware radar ground gate (P1 safety) +17 tests — new `test_sensor_geometry.cpp` (6: projection math incl. roll×azimuth coupling), new `test_frame_contracts.cpp` (6: executable frame-convention spec, Tier-1 of #817), and `RadarGroundGateAttitude` (5: ±25° pitch/roll sweep proving a real obstacle is never dropped, near/far ground, fail-safe, canary) in `test_fusion_engine.cpp` (now 90). `ctest -N --test-dir build` reports **2189** (no SDK) / **2197** (+SDK). Previous PR (#799 Phase A): +7 radar-orphan M-of-N tests. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -554,7 +554,7 @@ solver. These are shared infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 85 tests
+### test_fusion_engine.cpp — 90 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
 IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237),
