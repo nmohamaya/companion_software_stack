@@ -85,13 +85,10 @@ struct RadarNoiseConfig {
     // sensor elevation (`alt = drone_alt + range·sin(el)`), ignoring drone
     // pitch/roll and the sensor mount tilt — which BOTH admits ground as ghosts
     // (#815) AND drops real obstacles under nose-up pitch (a P1 safety
-    // suppression).  These fields feed the attitude-aware replacement.
-    // Sensor→body mount extrinsics (rad); default matches the x500_companion
-    // lidar (−5° pitch).  Compensated in fusion until the HAL emits body-frame
-    // detections (staged: #816 PR1 here, PR2 in the HAL).
-    float mount_roll_rad  = 0.0f;
-    float mount_pitch_rad = -0.087f;
-    float mount_yaw_rad   = 0.0f;
+    // suppression).  Since #816 PR2 the HAL owns the mount rotation and emits
+    // BODY-frame az/el on /radar_detections, so fusion only applies the drone's
+    // body→world attitude (no mount fields here — double compensation would
+    // re-break the gate).
     // Fail-safe margin (rad): reject a return as ground only if it is below the
     // floor even after allowing this much attitude uncertainty.  Biases
     // false-accept (keep the obstacle).  Clamped [0, 0.35] at config load.

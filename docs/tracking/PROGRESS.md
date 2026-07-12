@@ -4310,4 +4310,20 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #117 (Issue #816 — attitude-aware radar ground gate). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #118 — HAL attitude gate + body-frame radar contract (Issue #816 PR 2)
+
+**Date:** 2026-07-10  
+**Category:** Perception / HAL / Safety (completes #816)  
+**Files Modified:**
+- `common/hal/include/hal/gazebo_radar.h` — HAL owns the mount rotation (config `perception.radar.mount_*`): every ray + injected false alarm is rotated sensor→body before publishing; the HAL's own ground gate (the second copy of the P1-buggy flat formula) is now attitude-aware via `util/sensor_geometry.h` public statics (`sensor_to_body_angles`, `ground_gate_should_reject`), requires BOTH altitude and attitude to reject, and carries the same fail-safe margin (`perception.radar.attitude_uncertainty_rad`, clamped [0,0.35]); post-noise angle clamps widened by the mount magnitude.
+- `process2_perception/{include/perception/ukf_fusion_engine.h,src/ukf_fusion_engine.cpp}` — PR-1 interim mount composition REMOVED from fusion (double compensation would re-break the gate); `is_ground_return` applies body→world only.
+- `process2_perception/src/main.cpp` — periodic `[GroundGate] rejects/attitude_flips/max_correction_mm` INFO line (~10 s cadence, off the per-detection hot path).
+- `tests/lib_scenario_logging.sh` — `_report_perception` prints the ground-gate counters on every run (canary visible per-run; "(not reported)" is itself a signal).
+- `common/ipc/include/ipc/ipc_types.h`, `contracts/README.md` — frame contract documented: `/radar_detections` az/el are BODY-frame FLU.
+- `tests/test_gazebo_radar.cpp` — new `GazeboRadarGroundGate` suite (5) — first-ever HAL ground-filter coverage; `tests/test_fusion_engine.cpp` gate suite updated to the body-frame contract (FOV check in sensor frame, gate fed body angles).
+
+**What/Why:** Completes #816: single owner for the mount extrinsic (the sensor boundary), one shared attitude-aware formula in both gates, and the permanent `attitude_flips` canary surfaced end-to-end (engine counters → periodic log → run-report) so this bug class cannot silently recur. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md) (live re-baseline noted there).
+
+---
+
+*Last updated after Improvement #118 (Issue #816 PR 2 — HAL attitude gate + body-frame contract). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

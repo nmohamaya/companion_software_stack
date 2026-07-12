@@ -327,4 +327,89 @@ TEST(GazeboRadarFallbackTest, GazeboBackendThrowsWithoutLib) {
     EXPECT_THROW(drone::hal::create_radar(cfg, "perception.radar"), std::runtime_error);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Issue #816 PR2 — HAL attitude-aware ground gate + mount compensation.
+// FIRST ground-filter coverage for the HAL (none existed before #816): the
+// HAL's flat `drone_alt + range·sin(el)` gate shared the exact P1 bug fixed in
+// the fusion engine.  These tests exercise the public statics directly (same
+// pattern as ray_to_detection above).
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+constexpr float kD2R816 = 3.14159265358979323846f / 180.0f;
+}
+
+TEST(GazeboRadarGroundGate, MountCompensationTiltsRayIntoBodyFrame) {
+    // A boresight sensor ray (az=0, el=0) through the −5° mount must come out
+    // pointing 5° DOWN in the body frame.
+    const auto mount  = drone::util::quat_from_rpy(0.0f, -0.087f, 0.0f);
+    auto [az_b, el_b] = drone::hal::GazeboRadarBackend::sensor_to_body_angles(0.0f, 0.0f, mount);
+    EXPECT_NEAR(az_b, 0.0f, 1e-4f);
+    EXPECT_NEAR(el_b, -0.087f, 1e-3f) << "mount pitch must tilt the emitted body elevation down";
+
+    // Identity mount = angles unchanged.
+    auto [az_i, el_i] = drone::hal::GazeboRadarBackend::sensor_to_body_angles(
+        0.3f, -0.2f, Eigen::Quaternionf::Identity());
+    EXPECT_NEAR(az_i, 0.3f, 1e-5f);
+    EXPECT_NEAR(el_i, -0.2f, 1e-5f);
+}
+
+TEST(GazeboRadarGroundGate, RealObstacleKeptAcrossPitchSweep) {
+    // THE safety property at the HAL layer: a real 1.7 m obstacle at 15 m,
+    // pitch swept ±25° (beyond the airframe envelope) — the gate must NEVER
+    // reject it.  Body-frame geometry: el_body points at the obstacle top from
+    // altitude 4.48 m; the gate must recover its true world altitude under any
+    // attitude.
+    const float alt = 4.48f, h = 1.7f, r = 15.0f;
+    const float slant   = std::sqrt(r * r + (h - alt) * (h - alt));
+    const float el_body = std::asin((h - alt) / slant);  // body el when level
+    for (int pitch = -25; pitch <= 25; ++pitch) {
+        const auto body_to_world =
+            drone::util::quat_from_rpy(0.0f, static_cast<float>(pitch) * kD2R816, 0.0f);
+        // The body-frame elevation of a FIXED world point changes with pitch:
+        // el_b(pitch) = el_world − pitch (small-angle at az=0).
+        const float el_b = el_body - static_cast<float>(pitch) * kD2R816;
+        EXPECT_FALSE(drone::hal::GazeboRadarBackend::ground_gate_should_reject(
+            true, true, alt, slant, 0.0f, el_b, body_to_world, 0.5f, 0.02f))
+            << "REAL obstacle dropped by HAL gate at pitch " << pitch << "°";
+    }
+}
+
+TEST(GazeboRadarGroundGate, GroundRejectedLevelFlight) {
+    // Level flight, ground return at 12 m slant (inside the confident range):
+    // world altitude ≈ 0 → must be rejected against a 0.5 m floor.
+    const float alt = 4.48f, slant = 12.0f;
+    const float el_b = std::asin(-alt / slant);  // ray hits ground at 12 m
+    EXPECT_TRUE(drone::hal::GazeboRadarBackend::ground_gate_should_reject(
+        true, true, alt, slant, 0.0f, el_b, Eigen::Quaternionf::Identity(), 0.5f, 0.02f))
+        << "near ground must be rejected in level flight";
+}
+
+TEST(GazeboRadarGroundGate, NoAttitudeNeverRejects) {
+    // Fail-safe: attitude unknown ⇒ never suppress, even an obviously-ground
+    // return.  (The old HAL gate rejected with altitude alone — the unsafe
+    // path this replaces.)
+    const float alt = 4.48f, slant = 12.0f;
+    const float el_b = std::asin(-alt / slant);
+    EXPECT_FALSE(drone::hal::GazeboRadarBackend::ground_gate_should_reject(
+        true, /*has_attitude=*/false, alt, slant, 0.0f, el_b, Eigen::Quaternionf::Identity(), 0.5f,
+        0.02f))
+        << "no attitude ⇒ fail-safe keep";
+    EXPECT_FALSE(drone::hal::GazeboRadarBackend::ground_gate_should_reject(
+        /*has_altitude=*/false, true, alt, slant, 0.0f, el_b, Eigen::Quaternionf::Identity(), 0.5f,
+        0.02f))
+        << "no altitude ⇒ fail-safe keep";
+}
+
+TEST(GazeboRadarGroundGate, MarginBiasesFalseAccept) {
+    // A return floating just at the floor must be KEPT: the margin
+    // (range·sin(attitude_uncertainty)) absorbs plausible attitude error.
+    const float alt = 4.48f, slant = 12.0f, floor_m = 0.5f;
+    // Ray to a point exactly AT the floor altitude.
+    const float el_b = std::asin((floor_m - alt) / slant);
+    EXPECT_FALSE(drone::hal::GazeboRadarBackend::ground_gate_should_reject(
+        true, true, alt, slant, 0.0f, el_b, Eigen::Quaternionf::Identity(), floor_m, 0.02f))
+        << "a floor-height return is within the margin — keep (false-accept bias)";
+}
+
 #endif  // HAVE_GAZEBO

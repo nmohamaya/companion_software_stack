@@ -644,6 +644,25 @@ _report_perception() {
     echo "  Radar-only dormant re-IDs : ${radar_reids}"
     echo "  Camera dormant re-IDs     : ${camera_reids}"
     echo "  Camera adoptions          : ${adoption_count}"
+
+    # Issue #816 — permanent attitude-aware ground-gate diagnostics.  The LAST
+    # [GroundGate] line carries cumulative counters; attitude_flips is the
+    # canary proving attitude compensation ENGAGED (a naive-vs-aware verdict
+    # disagreement).  Reported on every run so this bug class cannot silently
+    # recur; "(not reported)" is itself a signal (gate never ran / UKF off).
+    local gate_line
+    gate_line=$(grep -a "\[GroundGate\]" "$log" 2>/dev/null | tail -1)
+    if [[ -n "$gate_line" ]]; then
+        local gg_rejects gg_flips gg_corr
+        gg_rejects=$(echo "$gate_line" | grep -oE "rejects=[0-9]+" | cut -d= -f2)
+        gg_flips=$(echo "$gate_line" | grep -oE "attitude_flips=[0-9]+" | cut -d= -f2)
+        gg_corr=$(echo "$gate_line" | grep -oE "max_correction_mm=[0-9]+" | cut -d= -f2)
+        echo "  Ground-gate rejects       : ${gg_rejects:-?}"
+        echo "  Ground-gate attitude flips: ${gg_flips:-?}  (canary: >0 = attitude compensation engaged, #816)"
+        echo "  Max attitude correction   : ${gg_corr:-?} mm"
+    else
+        echo "  Ground-gate diagnostics   : (not reported — UKF radar gate inactive?)"
+    fi
     echo ""
     echo "  Observations:"
 

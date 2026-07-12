@@ -711,6 +711,12 @@ static_assert(std::is_trivially_copyable_v<FaultOverrides>,
 // ═══════════════════════════════════════════════════════════
 
 /// Single radar return — range, bearing, Doppler velocity.
+///
+/// FRAME CONTRACT (Issue #816 PR2): azimuth_rad/elevation_rad are BODY-frame
+/// FLU (+az = left, +el = up) — the producing HAL compensates the sensor mount
+/// extrinsics (perception.radar.mount_*) before publishing, so consumers apply
+/// only the vehicle's body→world attitude.  Executable spec:
+/// tests/test_frame_contracts.cpp; helpers: util/sensor_geometry.h.
 struct RadarDetection {
     uint64_t timestamp_ns{0};
     float    range_m{0.0f};

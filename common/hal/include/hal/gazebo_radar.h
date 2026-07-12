@@ -27,6 +27,7 @@
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
+#include "util/sensor_geometry.h"
 
 #include <algorithm>
 #include <atomic>
@@ -35,6 +36,7 @@
 #include <mutex>
 #include <random>
 #include <string>
+#include <tuple>
 
 #include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/odometry.pb.h>
@@ -74,7 +76,32 @@ public:
         , elevation_noise_(
               0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_ELEVATION_STD_RAD, 0.026f))
         , velocity_noise_(
-              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_VELOCITY_STD_MPS, 0.1f)) {}
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_VELOCITY_STD_MPS, 0.1f)) {
+        // Issue #816 PR2 — the HAL owns the sensor→body mount rotation: emitted
+        // az/el are BODY-frame (mount-compensated), so no downstream consumer
+        // needs to know the extrinsics.  x500_companion lidar: pitch −0.087.
+        const float mr    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_ROLL_RAD, 0.0f);
+        const float mp    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_PITCH_RAD, -0.087f);
+        const float my    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_YAW_RAD, 0.0f);
+        sensor_to_body_q_ = drone::util::quat_from_rpy(mr, mp, my);
+        // Widen the post-noise angle clamps by the mount magnitude: body-frame
+        // angles are shifted by the mount, so clamping to the raw sensor FOV
+        // would clip legitimate returns near the tilted edge.
+        clamp_az_rad_ = fov_azimuth_rad_ / 2.0f + std::fabs(my) + std::fabs(mr);
+        clamp_el_rad_ = fov_elevation_rad_ / 2.0f + std::fabs(mp) + std::fabs(mr);
+        // Fail-safe margin for the attitude-aware ground gate (same semantics
+        // as the fusion gate's key): reject as ground only if below the floor
+        // even after allowing this much attitude error.  Clamped [0, 0.35] —
+        // negative would bias toward dropping obstacles (the unsafe direction).
+        const float raw_margin =
+            cfg.get<float>(section + drone::cfg_key::hal::ATTITUDE_UNCERTAINTY_RAD, 0.02f);
+        attitude_uncertainty_rad_ = std::clamp(raw_margin, 0.0f, 0.35f);
+        if (attitude_uncertainty_rad_ != raw_margin) {
+            DRONE_LOG_WARN("[GazeboRadar] attitude_uncertainty_rad={} out of range [0,0.35], "
+                           "clamping to {}",
+                           raw_margin, attitude_uncertainty_rad_);
+        }
+    }
 
     ~GazeboRadarBackend() override { shutdown(); }
 
@@ -191,6 +218,40 @@ public:
         return {azimuth, elevation};
     }
 
+    /// Issue #816 PR2 — rotate a sensor-frame ray bearing into the BODY frame
+    /// through the mount extrinsics, returning (azimuth, elevation) in body
+    /// coordinates.  Emitted detections use these, so downstream consumers
+    /// (fusion ground gate, UKF cartesian conversion) need no mount knowledge.
+    static std::pair<float, float> sensor_to_body_angles(float azimuth, float elevation,
+                                                         const Eigen::Quaternionf& sensor_to_body) {
+        const float           cos_el = std::cos(elevation);
+        const Eigen::Vector3f dir_s(cos_el * std::cos(azimuth),  // forward
+                                    cos_el * std::sin(azimuth),  // left (FLU)
+                                    std::sin(elevation));        // up
+        const Eigen::Vector3f dir_b = sensor_to_body * dir_s;
+        const float           az_b  = std::atan2(dir_b.y(), dir_b.x());
+        const float           el_b  = std::asin(std::clamp(dir_b.z(), -1.0f, 1.0f));
+        return {az_b, el_b};
+    }
+
+    /// Issue #816 — attitude-aware HAL ground gate (shares the math with the
+    /// fusion gate via util/sensor_geometry).  Returns true iff the return is
+    /// confidently BELOW floor_m: requires BOTH altitude and attitude (an
+    /// unknown attitude must never suppress — fail-safe), and biases
+    /// false-accept by margin_rad of allowed attitude error.
+    /// Public + static so the safety property is directly unit-testable
+    /// (same pattern as ray_to_detection).
+    static bool ground_gate_should_reject(bool has_altitude, bool has_attitude, float drone_alt_m,
+                                          float range_m, float az_body_rad, float el_body_rad,
+                                          const Eigen::Quaternionf& body_to_world, float floor_m,
+                                          float margin_rad) {
+        if (!has_altitude || !has_attitude) return false;  // fail-safe: keep
+        const float alt    = drone::util::return_world_altitude_m(drone_alt_m, range_m, az_body_rad,
+                                                                  el_body_rad, body_to_world);
+        const float margin = range_m * std::sin(std::max(0.0f, margin_rad));
+        return (alt + margin) < floor_m;
+    }
+
 private:
     // ── gz-transport callbacks ────────────────────────────────
 
@@ -212,14 +273,23 @@ private:
         const float rng_min = static_cast<float>(msg.range_min());
         const float rng_max = std::min(static_cast<float>(msg.range_max()), max_range_m_);
 
-        // Get current body velocity (under lock)
+        // Get current body velocity + attitude snapshot (under lock).
+        // Issue #816 PR2: one attitude per scan — every ray of this scan is
+        // projected with the same body→world rotation.
         float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+        float qw = 1.0f, qx = 0.0f, qy = 0.0f, qz = 0.0f;
         {
             std::lock_guard<std::mutex> lock(odom_mutex_);
             vx = body_vx_;
             vy = body_vy_;
             vz = body_vz_;
+            qw = att_w_;
+            qx = att_x_;
+            qy = att_y_;
+            qz = att_z_;
         }
+        const bool               has_att       = has_attitude_.load(std::memory_order_acquire);
+        const Eigen::Quaternionf body_to_world = drone::util::quat_from_wxyz(qw, qx, qy, qz);
 
         const int total_rays    = h_count * std::max(v_count, 1);
         const int ray_data_size = msg.ranges_size();
@@ -237,33 +307,44 @@ private:
             // Skip invalid rays (inf, NaN, out of range)
             if (!std::isfinite(range) || range < rng_min || range > rng_max) continue;
 
-            // Compute ray angles from index
-            const int h_idx = i % h_count;
-            const int v_idx = (v_count > 1) ? (i / h_count) : 0;
-            auto [az, el] = ray_index_to_angles(h_idx, v_idx, h_count, std::max(v_count, 1), h_min,
-                                                h_max, v_min, v_max);
+            // Compute ray angles from index (raw SENSOR frame)
+            const int h_idx   = i % h_count;
+            const int v_idx   = (v_count > 1) ? (i / h_count) : 0;
+            auto [az_s, el_s] = ray_index_to_angles(h_idx, v_idx, h_count, std::max(v_count, 1),
+                                                    h_min, h_max, v_min, v_max);
 
-            // Ground rejection: compute ray's world-frame altitude and skip
-            // returns below ground_filter_alt_m_ (Issue #229).
-            // object_alt = drone_alt + range * sin(elevation)
-            // Skip filter if no odometry altitude received yet — avoids dropping
-            // all detections when the vehicle spawns above ground.
-            if (has_altitude_.load(std::memory_order_acquire)) {
-                const float object_alt = drone_altitude_m_.load(std::memory_order_acquire) +
-                                         range * std::sin(el);
-                if (object_alt < ground_filter_alt_m_) continue;
+            // Issue #816 PR2 — rotate through the mount extrinsics so the
+            // emitted az/el are BODY-frame (the wire contract for
+            // /radar_detections; consumers need no mount knowledge).
+            auto [az, el] = sensor_to_body_angles(az_s, el_s, sensor_to_body_q_);
+
+            // Ground rejection (Issue #229, attitude-aware since #816):
+            // world altitude via the full body→world rotation, fail-safe —
+            // rejects only with BOTH altitude and attitude present, and only
+            // when confidently below the floor (margin biases false-accept).
+            // Previously `drone_alt + range·sin(raw_el)`, which ignored drone
+            // pitch/roll and the −5° mount: it admitted ground at 14–24 m as
+            // ghosts (#815) and dropped real obstacles under nose-up pitch.
+            if (ground_gate_should_reject(has_altitude_.load(std::memory_order_acquire), has_att,
+                                          drone_altitude_m_.load(std::memory_order_acquire), range,
+                                          az, el, body_to_world, ground_filter_alt_m_,
+                                          attitude_uncertainty_rad_)) {
+                continue;
             }
 
-            // Build detection from ray geometry + body velocity
+            // Build detection from ray geometry + body velocity (body-frame
+            // angles ⇒ the Doppler projection now uses the true body ray).
             auto det = ray_to_detection(range, az, el, vx, vy, vz);
 
             // Add noise — clamp range to [rng_min, rng_max] to avoid
-            // physically invalid sub-minimum-range detections
+            // physically invalid sub-minimum-range detections.  Angle clamps
+            // are the sensor FOV widened by the mount magnitude (body-frame
+            // angles are shifted by the mount — see ctor).
             det.range_m       = std::clamp(det.range_m + range_noise_(rng_), rng_min, rng_max);
-            det.azimuth_rad   = std::clamp(det.azimuth_rad + azimuth_noise_(rng_),
-                                           -fov_azimuth_rad_ / 2.0f, fov_azimuth_rad_ / 2.0f);
+            det.azimuth_rad   = std::clamp(det.azimuth_rad + azimuth_noise_(rng_), -clamp_az_rad_,
+                                           clamp_az_rad_);
             det.elevation_rad = std::clamp(det.elevation_rad + elevation_noise_(rng_),
-                                           -fov_elevation_rad_ / 2.0f, fov_elevation_rad_ / 2.0f);
+                                           -clamp_el_rad_, clamp_el_rad_);
             det.radial_velocity_mps += velocity_noise_(rng_);
 
             det.timestamp_ns = list.timestamp_ns;
@@ -276,16 +357,21 @@ private:
         if (list.num_detections < drone::ipc::MAX_RADAR_DETECTIONS &&
             false_alarm_dist_(rng_) < false_alarm_rate_) {
             drone::ipc::RadarDetection fa{};
-            fa.timestamp_ns  = list.timestamp_ns;
-            fa.range_m       = uniform_dist_(rng_) * max_range_m_;
-            fa.azimuth_rad   = uniform_dist_(rng_) * fov_azimuth_rad_ - fov_azimuth_rad_ / 2.0f;
-            fa.elevation_rad = uniform_dist_(rng_) * fov_elevation_rad_ - fov_elevation_rad_ / 2.0f;
-            fa.radial_velocity_mps                 = velocity_noise_(rng_);
-            fa.rcs_dbsm                            = -10.0f;
-            fa.snr_db                              = 3.0f;
-            fa.confidence                          = 0.1f;
-            fa.track_id                            = next_tid++;
-            list.detections[list.num_detections++] = fa;
+            fa.timestamp_ns = list.timestamp_ns;
+            fa.range_m      = uniform_dist_(rng_) * max_range_m_;
+            // False alarms are receiver artifacts in the SENSOR frame — convert
+            // to body like real rays so the wire contract stays uniform (#816).
+            const float fa_az_s = uniform_dist_(rng_) * fov_azimuth_rad_ - fov_azimuth_rad_ / 2.0f;
+            const float fa_el_s = uniform_dist_(rng_) * fov_elevation_rad_ -
+                                  fov_elevation_rad_ / 2.0f;
+            std::tie(fa.azimuth_rad, fa.elevation_rad) = sensor_to_body_angles(fa_az_s, fa_el_s,
+                                                                               sensor_to_body_q_);
+            fa.radial_velocity_mps                     = velocity_noise_(rng_);
+            fa.rcs_dbsm                                = -10.0f;
+            fa.snr_db                                  = 3.0f;
+            fa.confidence                              = 0.1f;
+            fa.track_id                                = next_tid++;
+            list.detections[list.num_detections++]     = fa;
         }
 
         next_track_id_ = next_tid;
@@ -321,6 +407,19 @@ private:
             drone_altitude_m_.store(static_cast<float>(msg.pose().position().z()),
                                     std::memory_order_release);
             has_altitude_.store(true, std::memory_order_release);
+
+            // Issue #816 PR2 — body→world attitude for the attitude-aware
+            // ground gate.  Multi-field → mutex (same rule as velocities);
+            // published flag stays a lock-free atomic for the scan hot path.
+            if (msg.pose().has_orientation()) {
+                const auto&                 o = msg.pose().orientation();
+                std::lock_guard<std::mutex> lock(odom_mutex_);
+                att_w_ = static_cast<float>(o.w());
+                att_x_ = static_cast<float>(o.x());
+                att_y_ = static_cast<float>(o.y());
+                att_z_ = static_cast<float>(o.z());
+                has_attitude_.store(true, std::memory_order_release);
+            }
         }
 
         odom_count_.fetch_add(1, std::memory_order_acq_rel);
@@ -345,15 +444,30 @@ private:
     mutable std::mutex             mutex_;
     drone::ipc::RadarDetectionList cached_detections_{};
 
-    // ── Body velocity (guarded by odom_mutex_) ────────────────
+    // ── Body velocity + attitude (guarded by odom_mutex_) ─────
     mutable std::mutex odom_mutex_;
     float              body_vx_{0.0f};
     float              body_vy_{0.0f};
     float              body_vz_{0.0f};
+    // Issue #816 PR2 — body→world attitude (Pose order w,x,y,z) for the
+    // attitude-aware ground gate.  Multi-field ⇒ mutex; identity until the
+    // first odometry message (has_attitude_ gates any rejection).
+    float att_w_{1.0f};
+    float att_x_{0.0f};
+    float att_y_{0.0f};
+    float att_z_{0.0f};
 
     // ── Drone altitude for HAL-level ground filtering ────────
     std::atomic<float> drone_altitude_m_{0.0f};
     std::atomic<bool>  has_altitude_{false};
+    std::atomic<bool>  has_attitude_{false};
+
+    // ── Issue #816 PR2 — mount extrinsics + gate margin (set in ctor,
+    //    immutable afterwards; read from the scan callback without a lock) ──
+    Eigen::Quaternionf sensor_to_body_q_{Eigen::Quaternionf::Identity()};
+    float              clamp_az_rad_{0.5235f};
+    float              clamp_el_rad_{0.349f};
+    float              attitude_uncertainty_rad_{0.02f};
 
     // ── RNG for noise injection (guarded by rng_mutex_) ───────
     mutable std::mutex                            rng_mutex_;

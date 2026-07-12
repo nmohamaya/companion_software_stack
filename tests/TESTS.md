@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2189 (no SDK, 8 Cosys-SDK tests skipped) / 2197 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #816 attitude-aware radar ground gate (P1 safety) +17 tests — new `test_sensor_geometry.cpp` (6: projection math incl. roll×azimuth coupling), new `test_frame_contracts.cpp` (6: executable frame-convention spec, Tier-1 of #817), and `RadarGroundGateAttitude` (5: ±25° pitch/roll sweep proving a real obstacle is never dropped, near/far ground, fail-safe, canary) in `test_fusion_engine.cpp` (now 90). `ctest -N --test-dir build` reports **2189** (no SDK) / **2197** (+SDK). Previous PR (#799 Phase A): +7 radar-orphan M-of-N tests. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2192 (no SDK, 8 Cosys-SDK tests skipped) / 2200 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #816 PR2 (HAL attitude gate + body-frame emission) +5 tests — new `GazeboRadarGroundGate` suite in `test_gazebo_radar.cpp` (now 22): mount rotation to body frame, ±25° pitch sweep keeps a real obstacle, level-flight ground rejected, no-attitude fail-safe, margin false-accept bias. `ctest -N --test-dir build` reports **2192** (no SDK) / **2200** (+SDK) — note: live count re-baselined (previously documented 2189; live base measured 2187, delta −2 from doc drift, live ctest is the SSOT). Previous PR (#816 PR1): +17 attitude-gate tests. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -504,7 +504,7 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ---
 
-### test_gazebo_radar.cpp — 17 tests
+### test_gazebo_radar.cpp — 22 tests
 
 **What it tests:** `GazeboRadarBackend` — Gazebo radar HAL that converts gpu_lidar rays + odometry into `RadarDetectionList` with noise and Doppler.
 
@@ -512,6 +512,7 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 |-------|-------|-------------------|
 | `GazeboRadarTest` | 15 | Factory creation, topic-based naming, subscription via `init()`, double-init rejection, empty read before data, message counts, `ray_to_detection()` conversion (zero velocity, forward Doppler, oblique Doppler, vertical Doppler), SNR vs range, FOV mapping (single ray, multi-ray horizontal, vertical), factory gazebo/simulated backends |
 | `GazeboRadarFallbackTest` | 2 | Fallback to simulated when `HAVE_GAZEBO` is not defined; gazebo backend throws `std::runtime_error` |
+| `GazeboRadarGroundGate` | 5 | Issue #816 PR2 — HAL attitude-aware ground gate (first HAL ground-filter coverage): mount rotation emits body-frame angles, real 1.7 m obstacle kept across a ±25° pitch sweep, level-flight near ground rejected, no-attitude/no-altitude fail-safe keeps, floor-height return kept (margin false-accept bias) |
 
 **Key files under test:** `hal/gazebo_radar.h`, `hal/hal_factory.h`
 
