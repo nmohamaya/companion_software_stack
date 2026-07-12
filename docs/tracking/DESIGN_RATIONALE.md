@@ -1556,3 +1556,30 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** a live run shows late confirmation on a real obstacle (proximity-gate warning / grid gap → drop M to 2, still kills one-shots), or a radar with strong multipath produces *spatially-stable* ghosts that pass M-of-N (then add a Mahalanobis novelty gate on top — see #815, the residual mis-projection ghost class found in Phase A validation), or scenario 18's radar-track count fails to drop toward the physical obstacle count.
 
 **Date:** 2026-07-07 (Issue #799 Phase A)
+
+## DR-057: Attitude-aware radar ground gate with a fail-safe margin that caps ground-rejection range (Issue #816)
+
+**Question:** The radar ground filter decided "is this return ground?" from `drone_alt + range·sin(elevation)` using the RAW sensor elevation — attitude-blind. How should it account for drone pitch/roll and the −5° sensor mount, given that the fix is P1 safety-critical (the old gate DROPPED real obstacles under nose-up pitch) but altitude resolution at range is fundamentally limited?
+
+**Context / why it matters:** measured in scenario 18, the airframe reaches |pitch| p99 11° / max 18°, |roll| p99 13°. The attitude-blind error is `range·sin(attitude)` — several metres at obstacle range. It is wrong in BOTH directions: it admitted ground at 14–24 m as ghosts (#815), and — worse — rejected a real 1.7 m obstacle at 15 m as ground at 10–14° nose-up (a suppression that violates the perception-suppression-gate rule).
+
+**Decision — three coupled calls:**
+
+1. **Compute the true world altitude via the full body→world rotation** (`common/util/sensor_geometry.h`), composing the sensor mount extrinsic with the drone's Pose quaternion, instead of the flat `sin(el)`. This alone fixes the P1 safety bug: a real obstacle's return projects to its true height regardless of attitude, so it is never dropped. Frame convention (FLU body → ENU world, `el>0`=up, `+pitch`=nose-up) is **verified empirically against real scenario-18 Pose data**, not assumed — nose-up must raise a forward ray, and getting the sign backwards would reject MORE obstacles.
+
+2. **Fail-safe margin, not a hard threshold.** Suppress only if `world_alt + range·sin(attitude_uncertainty_rad) < min_object_altitude_m` — i.e. only when the return is below the floor even allowing for attitude-estimation error. Bias: false-accept. **The margin must be ≥ the VIO attitude error**, else a floor-height real obstacle is dropped when the pose estimate is slightly off. This is the load-bearing safety constraint.
+
+3. **Accept that this caps ground-rejection RANGE, and let Phase B cover the rest.** The margin forces `rejection_range ≤ floor / sin(attitude_uncertainty)` (≈15 m at the 0.02 default). Ground is only in-FOV beyond ~12 m anyway, so the gate rejects a **near band (~12–15 m)** and **fail-safe KEEPS far ground** — the #815 21–24 m arc is *irreducible by altitude gating* at the sensor's angular resolution (to reject 24 m ground you'd need attitude+measurement certainty < 0.7°, tighter than real VIO). Far ghosts remain the domain of Phase-B static-cell decay (DR-054) + M-of-N (DR-056) + the reactive `ObstacleAvoider3D`.
+
+**Arguments considered:**
+- *No margin (hard `world_alt < floor`)* — would reject far ground too (better #815), but drops a real floor-height obstacle under any attitude error. Rejected: violates the false-accept rule; safety must win.
+- *Large margin (2.9°, safe for poor VIO)* — rejects ground only < 6 m (never, since ground isn't in-FOV that close), so the gate rejects nothing observable. Rejected: no #815 benefit at all.
+- *0.02 (~1.15°)* — chosen: rejects the near band, safe for good VIO (Gazebo pose is ground-truth; real VIO ~1° is comparable), and the reactive avoider backstops any residual on noisier hardware. Tunable per platform.
+
+**Consequence for #815:** #816 does **not** eliminate the ghost arc — it is the P1 safety fix plus a near-range ghost reduction. #815's far arc is an accepted, decayed residual. `body_to_world`'s separate yaw-only bug (dormant re-ID world Z, unused for XY matching) is deferred to the typed-frames epic (#817) rather than half-fixed here.
+
+**Permanent instrumentation** (not throwaway): `ground_gate_attitude_flips` (the canary — returns where the naive and attitude-aware verdicts disagree), `ground_gate_rejects`, `max_attitude_correction_mm`, surfaced in the scenario run-report, so this bug class cannot silently recur.
+
+**Revisit when:** real-hardware VIO attitude error is characterised (raise/lower the margin to match), OR a Mahalanobis/multi-return ground-plane estimator replaces the per-return altitude gate (would reject far ground safely and could close #815's arc), OR the typed-frames epic (#817) lands and lets `body_to_world` become a full rotation safely.
+
+**Date:** 2026-07-10 (Issue #816)

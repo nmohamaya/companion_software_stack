@@ -52,9 +52,13 @@ public:
     /// Default no-op — only UKFFusionEngine uses altitude data.
     virtual void set_drone_altitude(float /*altitude_m*/) {}
 
-    /// Provide full drone pose for world-frame dormant obstacle re-identification.
+    /// Provide full drone pose — position + orientation quaternion (w,x,y,z, per
+    /// drone::ipc::Pose) — for world-frame dormant re-identification and the
+    /// attitude-aware radar ground gate (#816).  The full orientation (not just
+    /// yaw) is required: pitch/roll set a radar return's true world altitude.
     /// Default no-op — only UKFFusionEngine uses this.
-    virtual void set_drone_pose(float /*north*/, float /*east*/, float /*up*/, float /*yaw*/) {}
+    virtual void set_drone_pose(float /*north*/, float /*east*/, float /*up*/, float /*qw*/,
+                                float /*qx*/, float /*qy*/, float /*qz*/) {}
 
     /// Provide ML depth map for depth-enhanced fusion (takes ownership via move).
     /// Default no-op — only UKFFusionEngine uses ML depth data.

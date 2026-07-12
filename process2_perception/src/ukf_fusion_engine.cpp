@@ -6,6 +6,7 @@
 #include "perception/fusion_engine.h"
 #include "util/config.h"
 #include "util/ilogger.h"
+#include "util/sensor_geometry.h"  // attitude-aware ground gate (#816)
 
 #include <algorithm>
 #include <cmath>
@@ -675,14 +676,72 @@ void UKFFusionEngine::reset() {
     // counts forward.  Otherwise a previous run's failures would
     // contaminate the next run's run-report.
     s_matrix_fallback_count_.store(0, std::memory_order_relaxed);
+    // Issue #816 — clear the attitude-aware ground-gate counters too.
+    ground_gate_rejects_.store(0, std::memory_order_relaxed);
+    ground_gate_attitude_flips_.store(0, std::memory_order_relaxed);
+    max_attitude_correction_mm_.store(0, std::memory_order_relaxed);
+    has_pose_        = false;
+    body_to_world_q_ = Eigen::Quaternionf::Identity();
 }
 
-void UKFFusionEngine::set_drone_pose(float north, float east, float up, float yaw) {
+void UKFFusionEngine::set_drone_pose(float north, float east, float up, float qw, float qx,
+                                     float qy, float qz) {
     drone_north_ = north;
     drone_east_  = east;
     drone_up_    = up;
-    drone_yaw_   = yaw;
-    has_pose_    = true;
+    // Full body→world orientation for the attitude-aware ground gate (#816).
+    // quat_from_wxyz fail-safes a non-finite/degenerate quaternion to identity.
+    body_to_world_q_ = drone::util::quat_from_wxyz(qw, qx, qy, qz);
+    // Yaw for the existing yaw-only consumers (dormant re-ID body_to_world) —
+    // the same extraction the P2 loop performed before.
+    drone_yaw_ = std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
+    has_pose_  = true;
+}
+
+// Issue #816 — attitude-aware ground gate.  Returns true if a radar return at
+// (range, raw_sensor_azimuth, elevation) is a GROUND return that should be
+// suppressed.  Replaces the two former `drone_alt + range·sin(el)` sites which
+// ignored drone pitch/roll and the sensor mount tilt — a P1 safety bug that
+// dropped real obstacles under nose-up pitch (and admitted ground as ghosts,
+// #815).  Fail-safe: never rejects without attitude; biases false-accept by
+// `attitude_uncertainty_rad`.  Also drives the permanent instrumentation.
+bool UKFFusionEngine::is_ground_return(float range_m, float raw_azimuth_rad, float elevation_rad) {
+    // No pose ⇒ attitude unknown ⇒ never suppress (fail-safe — keep the
+    // obstacle).  Matches the historical `if (has_altitude_)` guard intent.
+    if (!has_pose_ || !has_altitude_) {
+        return false;
+    }
+    // Compose the sensor mount rotation with the body→world rotation so the ray
+    // is projected from the true sensor frame, not the (tilted) mount frame.
+    // Pass the RAW sensor azimuth (FLU, +az=left) — sensor_geometry uses FLU,
+    // NOT the UKF's az_sign'd FRD convention.
+    const Eigen::Quaternionf sensor_to_world =
+        body_to_world_q_ * drone::util::quat_from_rpy(radar_cfg_.mount_roll_rad,
+                                                      radar_cfg_.mount_pitch_rad,
+                                                      radar_cfg_.mount_yaw_rad);
+    const float alt = drone::util::return_world_altitude_m(
+        drone_altitude_m_, range_m, raw_azimuth_rad, elevation_rad, sensor_to_world);
+    // Fail-safe margin: only suppress if below the floor even after allowing
+    // attitude_uncertainty_rad of tilt error.  Bias: false-accept.
+    const float margin   = range_m * std::sin(std::max(0.0f, radar_cfg_.attitude_uncertainty_rad));
+    const bool  suppress = (alt + margin) < radar_cfg_.min_object_altitude_m;
+
+    // ── Instrumentation (#816) — permanent, so this class can't silently recur.
+    // Compare against the naive level-flight verdict to detect where attitude
+    // actually mattered (the canary).
+    const float naive_alt      = drone_altitude_m_ + range_m * std::sin(elevation_rad);
+    const bool  naive_suppress = naive_alt < radar_cfg_.min_object_altitude_m;
+    if (suppress) {
+        ground_gate_rejects_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (suppress != naive_suppress) {
+        ground_gate_attitude_flips_.fetch_add(1, std::memory_order_relaxed);
+    }
+    const auto correction_mm = static_cast<uint64_t>(std::fabs(alt - naive_alt) * 1000.0f + 0.5f);
+    uint64_t   prev          = max_attitude_correction_mm_.load(std::memory_order_relaxed);
+    while (correction_mm > prev && !max_attitude_correction_mm_.compare_exchange_weak(
+                                       prev, correction_mm, std::memory_order_relaxed)) {}
+    return suppress;
 }
 
 Eigen::Vector3f UKFFusionEngine::body_to_world(const Eigen::Vector3f& body) const {
@@ -1038,23 +1097,22 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     if (has_radar_data_) {
         radar_matched.resize(radar_dets_.num_detections, false);
 
-        // Ground-plane filter: reject radar detections that resolve below a minimum
-        // altitude threshold.  object_alt = drone_alt + range * sin(elevation).
-        // Ground returns have negative elevation and resolve near Z=0.
+        // Ground-plane filter: reject radar detections that resolve below a
+        // minimum altitude.  Issue #816 — attitude-aware via is_ground_return()
+        // (accounts for drone pitch/roll + sensor mount; was `drone_alt +
+        // range·sin(el)`, which dropped real obstacles under nose-up pitch).
         if (radar_cfg_.ground_filter_enabled && has_altitude_) {
             int filtered = 0;
             for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
-                const auto& rdet       = radar_dets_.detections[ri];
-                const float object_alt = drone_altitude_m_ +
-                                         rdet.range_m * std::sin(rdet.elevation_rad);
-                if (object_alt < radar_cfg_.min_object_altitude_m) {
+                const auto& rdet = radar_dets_.detections[ri];
+                if (is_ground_return(rdet.range_m, rdet.azimuth_rad, rdet.elevation_rad)) {
                     radar_matched[ri] = true;  // skip in association loop
                     ++filtered;
                 }
             }
             if (filtered > 0) {
                 DRONE_LOG_DEBUG("[UKF] Ground filter: rejected {}/{} radar detections "
-                                "(alt < {:.1f}m)",
+                                "(attitude-aware, floor {:.1f}m)",
                                 filtered, radar_dets_.num_detections,
                                 radar_cfg_.min_object_altitude_m);
             }
@@ -1529,11 +1587,12 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
             // 2. Ground-plane filter (redundant safety net) — applied even when
             //    the main ground filter is disabled, to prevent phantom ground tracks.
-            //    No altitude gate: flying objects (drones, birds) may be at any altitude.
-            if (has_altitude_) {
-                const float object_alt = drone_altitude_m_ +
-                                         rdet.range_m * std::sin(rdet.elevation_rad);
-                if (object_alt < radar_cfg_.min_object_altitude_m) continue;
+            //    Issue #816 — attitude-aware (see is_ground_return): the naive
+            //    `drone_alt + range·sin(el)` here was the site that admitted
+            //    ground at 14–24 m as ghosts (#815) AND dropped real obstacles
+            //    under nose-up pitch.  Flying objects at altitude are unaffected.
+            if (is_ground_return(rdet.range_m, rdet.azimuth_rad, rdet.elevation_rad)) {
+                continue;
             }
 
             // Convert to body-frame for proximity check (Issue #348).
@@ -1696,6 +1755,29 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                 "perception.fusion.radar.ground_filter_enabled", radar_cfg.ground_filter_enabled);
             radar_cfg.min_object_altitude_m = cfg->get<float>(
                 "perception.fusion.radar.min_object_altitude_m", radar_cfg.min_object_altitude_m);
+            // Issue #816 — attitude-aware ground gate: sensor mount extrinsics
+            // (owned under perception.radar, the sensor namespace) + the
+            // fail-safe margin (a fusion-gate property).  Margin clamped [0,
+            // 0.35]: a negative margin would make the gate MORE aggressive
+            // (drop obstacles — the wrong direction); an oversized one disables
+            // ground rejection entirely.
+            radar_cfg.mount_roll_rad  = cfg->get<float>("perception.radar.mount_roll_rad",
+                                                        radar_cfg.mount_roll_rad);
+            radar_cfg.mount_pitch_rad = cfg->get<float>("perception.radar.mount_pitch_rad",
+                                                        radar_cfg.mount_pitch_rad);
+            radar_cfg.mount_yaw_rad   = cfg->get<float>("perception.radar.mount_yaw_rad",
+                                                        radar_cfg.mount_yaw_rad);
+            {
+                const float raw_margin =
+                    cfg->get<float>("perception.fusion.radar.attitude_uncertainty_rad",
+                                    radar_cfg.attitude_uncertainty_rad);
+                radar_cfg.attitude_uncertainty_rad = std::clamp(raw_margin, 0.0f, 0.35f);
+                if (radar_cfg.attitude_uncertainty_rad != raw_margin) {
+                    DRONE_LOG_WARN("[UKF] radar attitude_uncertainty_rad={} out of range "
+                                   "[0,0.35], clamping to {}",
+                                   raw_margin, radar_cfg.attitude_uncertainty_rad);
+                }
+            }
             radar_cfg.altitude_gate_m = cfg->get<float>("perception.fusion.radar.altitude_gate_m",
                                                         radar_cfg.altitude_gate_m);
             radar_cfg.radar_orphan_proximity_m = cfg->get<float>(

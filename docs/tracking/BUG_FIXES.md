@@ -2313,6 +2313,26 @@ Historically masked: pre-#800 the contact gate treated an empty log as PASS (Fix
 
 ---
 
+### Fix #66 — Attitude-blind radar ground gate dropped REAL obstacles under nose-up pitch (Issue #816 — P1 SAFETY)
+
+**Date:** 2026-07-10
+**Severity:** **Critical (P1 safety — a perception-suppression gate that DROPPED real obstacles)**
+**Affects:** `process2_perception/src/ukf_fusion_engine.cpp` (both radar ground-filter sites); root cause reached via `set_drone_pose` carrying yaw only.
+
+**Bug:** The radar ground filter computed a return's altitude as `object_alt = drone_alt + range·sin(elevation)` from the **raw sensor elevation**, ignoring (a) drone pitch/roll and (b) the lidar's **−0.087 rad (−5°) mount tilt** (SDF-only, invisible to the stack). The error is `range·sin(attitude_error)` — several metres at obstacle range. It failed **both** ways:
+- **Dropped real obstacles (the P1).** Under nose-up pitch the gate under-estimated altitude and rejected real obstacles as ground. Measured drop-bands (drone at 4.48 m): a **1.7 m obstacle at 15 m dropped at 10.5–14.2° nose-up**; a 0.5 m obstacle at 20 m dropped at 5.8–13.5° (≈p95 pitch). The airframe reaches |pitch| p99 11° / max 18° (`gz_odometry.log`, scenario-18 run `2026-07-10_170752_PASS`). Nose-up happens exactly while decelerating toward a waypoint — i.e. approaching obstacles. Only the reactive `ObstacleAvoider3D` stood behind it.
+- **Admitted ground as ghosts (#815).** In level flight the uncompensated −5° mount over-estimated altitude, so ground returns at 14–24 m passed the 0.3 m floor. Ground is static ⇒ spatially consistent ⇒ passed the #799 Phase A M-of-N gate by design.
+
+**Root cause:** `set_drone_pose(north, east, up, yaw)` carried only YAW; pitch/roll never reached the gate. The world altitude of a body-frame return needs the full body→world rotation, not just yaw. (The camera path already used the full VIO quaternion; radar didn't.)
+
+**Fix:** plumb the full orientation quaternion (w,x,y,z) and centralise the gate in `is_ground_return()`, which projects each return through the true body→world rotation (new `common/util/sensor_geometry.h`), composing the config-driven sensor mount extrinsic with the drone attitude. **Fail-safe throughout:** never suppresses when attitude is unknown; suppresses only if below the floor after a fail-safe `attitude_uncertainty_rad` margin (bias false-accept). The margin must be ≥ the VIO attitude error, which caps ground-rejection RANGE at `floor/sin(margin)` (~15 m) — so this fixes the P1 safety bug and rejects near-range ground; the #815 far-range arc (21–24 m) is irreducible by altitude gating and stays fail-safe KEPT, decayed by Phase B (see DR-057). Frame convention verified empirically against real Pose data. Permanent instrumentation (`ground_gate_attitude_flips` canary etc.) makes the class un-hideable.
+
+**Found by:** #815 root-cause analysis (2026-07-10) — the original timestamp-skew hypothesis was measured and FALSIFIED (induced error max 0.68 m vs the 2.0 m association radius, 0/1560 samples), which redirected the investigation to the attitude-blind gate.
+
+**Test:** `RadarGroundGateAttitude` (5): the exhaustive ±25° pitch/roll sweep proving a real in-FOV obstacle is NEVER dropped (>1000 attitudes); near-ground rejected / far-ground fail-safe-kept; no-pose fail-safe; the instrumentation canary fires under pitch. `test_frame_contracts` (6, Tier-1 of #817) pins every frame convention as an executable spec. `test_sensor_geometry` (6) locks the projection math incl. the roll×azimuth coupling the flat formula missed.
+
+---
+
 ### Fix #10 — Intermittent Zenoh Test Failures Under Parallel CTest
 
 **Date:** 2026-03-02
