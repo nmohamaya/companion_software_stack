@@ -2903,11 +2903,13 @@ TEST(RadarOrphanClamp, ClampedHitsActuallyBoundSuppression) {
 // obstacles as ground (P1). Airframe reaches ~18° pitch / ~17° roll (measured).
 //
 // Method (rigorous — no convention hand-waving): place a real obstacle in WORLD
-// coordinates, project it into the sensor frame via the inverse of the exact
-// rotation the gate uses (body attitude ∘ mount), feed that (range, az, el) to
-// is_ground_return, and assert. Because the gate applies the forward rotation,
-// it must recover the obstacle's true world altitude for ANY attitude — so a
-// real obstacle above the floor can never be dropped.
+// coordinates and project it into the frames the pipeline actually uses.  Since
+// #816 PR2 the HAL owns the mount: /radar_detections az/el are BODY-frame, so
+// the FOV visibility check happens in the SENSOR frame (can the tilted lidar
+// physically see the ray?) while the angles fed to is_ground_return are
+// BODY-frame (what the HAL emits).  Because the gate applies the body→world
+// rotation, it must recover the obstacle's true world altitude for ANY
+// attitude — so a real obstacle above the floor can never be dropped.
 // ═══════════════════════════════════════════════════════════════════
 
 namespace {
@@ -2915,11 +2917,10 @@ constexpr float kD2R   = 3.14159265358979323846f / 180.0f;
 constexpr float kFovEl = 20.0f * kD2R;  // vertical FOV ±20°
 constexpr float kFovAz = 30.0f * kD2R;  // horizontal FOV ±30°
 
-drone::perception::UKFFusionEngine make_gate_engine(float mount_pitch = -0.087f) {
+drone::perception::UKFFusionEngine make_gate_engine() {
     RadarNoiseConfig cfg;
     cfg.ground_filter_enabled = true;
     cfg.min_object_altitude_m = 0.3f;
-    cfg.mount_pitch_rad       = mount_pitch;
     return drone::perception::UKFFusionEngine(make_test_calib(), cfg, true);
 }
 
@@ -2933,8 +2934,10 @@ void set_attitude(drone::perception::UKFFusionEngine& e, float alt, float roll_d
 }
 
 // Project a world obstacle (due north, horizontal range r, height h, drone at
-// alt with the given attitude + mount) into the sensor frame. Returns
-// {slant, az, el} if within the sensor FOV, else nullopt.
+// alt with the given attitude) into the pipeline's frames.  The FOV check uses
+// the SENSOR frame (can the tilted lidar physically see it?); the returned
+// {slant, az, el} are BODY-frame — the /radar_detections contract since #816
+// PR2 (the HAL compensates the mount before emitting).
 struct SensorReturn {
     float slant, az, el;
 };
@@ -2943,14 +2946,21 @@ std::optional<SensorReturn> project_to_sensor(float h, float r, float alt, float
     const Eigen::Quaternionf body  = drone::util::quat_from_rpy(roll_deg * kD2R, pitch_deg * kD2R,
                                                                 0.0f);
     const Eigen::Quaternionf mount = drone::util::quat_from_rpy(0.0f, mount_pitch, 0.0f);
-    const Eigen::Quaternionf sensor_to_world = body * mount;
     const Eigen::Vector3f    world_off(r, 0.0f, h - alt);  // due north, up by (h-alt)
-    const float              slant    = world_off.norm();
-    const Eigen::Vector3f    ray_body = sensor_to_world.conjugate() * (world_off / slant);
-    const float              el       = std::asin(std::max(-1.0f, std::min(1.0f, ray_body.z())));
-    const float              az       = std::atan2(ray_body.y(), ray_body.x());
-    if (std::fabs(el) > kFovEl || std::fabs(az) > kFovAz) return std::nullopt;
-    return SensorReturn{slant, az, el};
+    const float              slant = world_off.norm();
+    const Eigen::Vector3f    dir_w = world_off / slant;
+
+    // Sensor-frame direction — physical FOV visibility of the tilted lidar.
+    const Eigen::Vector3f ray_sensor = (body * mount).conjugate() * dir_w;
+    const float           el_s       = std::asin(std::max(-1.0f, std::min(1.0f, ray_sensor.z())));
+    const float           az_s       = std::atan2(ray_sensor.y(), ray_sensor.x());
+    if (std::fabs(el_s) > kFovEl || std::fabs(az_s) > kFovAz) return std::nullopt;
+
+    // Body-frame direction — what the HAL emits after mount compensation.
+    const Eigen::Vector3f ray_body = body.conjugate() * dir_w;
+    const float           el_b     = std::asin(std::max(-1.0f, std::min(1.0f, ray_body.z())));
+    const float           az_b     = std::atan2(ray_body.y(), ray_body.x());
+    return SensorReturn{slant, az_b, el_b};
 }
 }  // namespace
 

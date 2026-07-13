@@ -711,16 +711,13 @@ bool UKFFusionEngine::is_ground_return(float range_m, float raw_azimuth_rad, flo
     if (!has_pose_ || !has_altitude_) {
         return false;
     }
-    // Compose the sensor mount rotation with the body→world rotation so the ray
-    // is projected from the true sensor frame, not the (tilted) mount frame.
-    // Pass the RAW sensor azimuth (FLU, +az=left) — sensor_geometry uses FLU,
-    // NOT the UKF's az_sign'd FRD convention.
-    const Eigen::Quaternionf sensor_to_world =
-        body_to_world_q_ * drone::util::quat_from_rpy(radar_cfg_.mount_roll_rad,
-                                                      radar_cfg_.mount_pitch_rad,
-                                                      radar_cfg_.mount_yaw_rad);
+    // Since #816 PR2 the HAL owns the mount rotation and emits BODY-frame
+    // az/el on /radar_detections, so only the drone's body→world attitude
+    // applies here (composing the mount again would double-compensate and
+    // re-break the gate).  Pass the RAW body azimuth (FLU, +az=left) —
+    // sensor_geometry uses FLU, NOT the UKF's az_sign'd FRD convention.
     const float alt = drone::util::return_world_altitude_m(
-        drone_altitude_m_, range_m, raw_azimuth_rad, elevation_rad, sensor_to_world);
+        drone_altitude_m_, range_m, raw_azimuth_rad, elevation_rad, body_to_world_q_);
     // Fail-safe margin: only suppress if below the floor even after allowing
     // attitude_uncertainty_rad of tilt error.  Bias: false-accept.
     const float margin   = range_m * std::sin(std::max(0.0f, radar_cfg_.attitude_uncertainty_rad));
@@ -1755,18 +1752,12 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                 "perception.fusion.radar.ground_filter_enabled", radar_cfg.ground_filter_enabled);
             radar_cfg.min_object_altitude_m = cfg->get<float>(
                 "perception.fusion.radar.min_object_altitude_m", radar_cfg.min_object_altitude_m);
-            // Issue #816 — attitude-aware ground gate: sensor mount extrinsics
-            // (owned under perception.radar, the sensor namespace) + the
-            // fail-safe margin (a fusion-gate property).  Margin clamped [0,
-            // 0.35]: a negative margin would make the gate MORE aggressive
-            // (drop obstacles — the wrong direction); an oversized one disables
-            // ground rejection entirely.
-            radar_cfg.mount_roll_rad  = cfg->get<float>("perception.radar.mount_roll_rad",
-                                                        radar_cfg.mount_roll_rad);
-            radar_cfg.mount_pitch_rad = cfg->get<float>("perception.radar.mount_pitch_rad",
-                                                        radar_cfg.mount_pitch_rad);
-            radar_cfg.mount_yaw_rad   = cfg->get<float>("perception.radar.mount_yaw_rad",
-                                                        radar_cfg.mount_yaw_rad);
+            // Issue #816 — attitude-aware ground gate fail-safe margin.
+            // (Mount extrinsics are HAL-owned since PR2 — /radar_detections
+            // az/el arrive body-frame; fusion must NOT compensate the mount.)
+            // Margin clamped [0, 0.35]: a negative margin would make the gate
+            // MORE aggressive (drop obstacles — the wrong direction); an
+            // oversized one disables ground rejection entirely.
             {
                 const float raw_margin =
                     cfg->get<float>("perception.fusion.radar.attitude_uncertainty_rad",

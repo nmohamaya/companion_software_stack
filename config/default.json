@@ -103,10 +103,12 @@
             "fov_azimuth_rad": 1.047,
             "fov_elevation_rad": 0.698,
             "ground_filter_alt_m": 2.0,
-            "_comment_mount": "#816 — sensor mount extrinsics (sensor→body, rad). The x500_companion lidar is tilted pitch −0.087 (−5°); the attitude-aware ground gate compensates this plus drone attitude so a return's world altitude is correct. Without it, ground at 14–24 m is admitted as ghosts (#815) and real obstacles are dropped under nose-up pitch (#816, P1 safety).",
+            "_comment_mount": "#816 — sensor mount extrinsics (sensor→body, rad), owned by the HAL since PR2: every ray is rotated through the mount so /radar_detections az/el are BODY-frame; downstream consumers need no mount knowledge. The x500_companion lidar is tilted pitch −0.087 (−5°). Without compensation, ground at 14–24 m is admitted as ghosts (#815) and real obstacles are dropped under nose-up pitch (#816, P1 safety).",
             "mount_roll_rad": 0.0,
             "mount_pitch_rad": -0.087,
             "mount_yaw_rad": 0.0,
+            "_comment_attitude_uncertainty": "#816 PR2 — fail-safe margin (rad) for the HAL attitude-aware ground gate; same semantics as perception.fusion.radar.attitude_uncertainty_rad. Clamped [0,0.35].",
+            "attitude_uncertainty_rad": 0.02,
             "noise": {
                 "range_std_m": 0.3,
                 "azimuth_std_rad": 0.026,

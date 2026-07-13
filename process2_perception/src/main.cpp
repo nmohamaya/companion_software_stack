@@ -555,6 +555,13 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 
     uint64_t fusion_count = 0;
 
+    // Issue #816 — periodic emission of the permanent ground-gate diagnostics
+    // (the attitude_flips canary et al.).  The counters are lock-free atomics
+    // updated inside fuse(); the LOG call lives HERE, off the per-detection hot
+    // path, per the observability-on-flight-critical-threads rule.  UKF-only
+    // (camera_only has no radar gate) — resolved once, outside the loop.
+    const auto* ukf_engine = dynamic_cast<const UKFFusionEngine*>(&engine);
+
     // Cached latest drone pose (world frame: North, East, Up)
     drone::ipc::Pose latest_pose{};
     bool             has_pose = false;
@@ -742,6 +749,18 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             } else if (fusion_count % 100 == 0) {
                 DRONE_LOG_INFO("[Fusion] {} cycles, {} fused objects this frame", fusion_count,
                                fused.objects.size());
+            }
+
+            // Issue #816 — surface the permanent ground-gate diagnostics every
+            // ~10 s (300 cycles at 30 Hz) so every scenario run records whether
+            // attitude compensation ENGAGED (flips > 0) — the canary that keeps
+            // this bug class from silently recurring.  Parsed by
+            // tests/lib_scenario_logging.sh `_report_perception`.
+            if (ukf_engine != nullptr && fusion_count % 300 == 0) {
+                DRONE_LOG_INFO("[GroundGate] rejects={} attitude_flips={} max_correction_mm={}",
+                               ukf_engine->ground_gate_rejects(),
+                               ukf_engine->ground_gate_attitude_flips(),
+                               ukf_engine->max_attitude_correction_mm());
             }
 
             // Log IPC latency from the thread that owns receive()

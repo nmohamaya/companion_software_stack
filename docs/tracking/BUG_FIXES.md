@@ -2331,6 +2331,8 @@ Historically masked: pre-#800 the contact gate treated an empty log as PASS (Fix
 
 **Test:** `RadarGroundGateAttitude` (5): the exhaustive ±25° pitch/roll sweep proving a real in-FOV obstacle is NEVER dropped (>1000 attitudes); near-ground rejected / far-ground fail-safe-kept; no-pose fail-safe; the instrumentation canary fires under pitch. `test_frame_contracts` (6, Tier-1 of #817) pins every frame convention as an executable spec. `test_sensor_geometry` (6) locks the projection math incl. the roll×azimuth coupling the flat formula missed.
 
+**PR 2 (HAL completion, same issue):** the HAL's own copy of the flat gate (`gazebo_radar.h` — the "defense-in-depth" layer that shared the identical blind spot) is now attitude-aware via the same `sensor_geometry` helpers, and the HAL **owns the mount rotation**: every ray (and injected false alarm) is rotated sensor→body before publishing, so `/radar_detections` az/el are **BODY-frame by contract** (`ipc_types.h`, `contracts/README.md`) and no downstream consumer needs mount knowledge — the fusion-side interim mount composition from PR 1 is removed (double compensation would re-break the gate). The HAL gate now requires BOTH altitude and attitude to reject (previously altitude alone — the unsafe path). Permanent diagnostics surfaced end-to-end: P2 emits a periodic `[GroundGate] rejects=… attitude_flips=… max_correction_mm=…` line (off the hot path) and every scenario run-report prints it via `_report_perception` — the canary is now visible per-run, not just in unit tests. First-ever HAL ground-filter tests: `GazeboRadarGroundGate` (5, incl. the ±25° pitch sweep at the HAL layer and the no-attitude fail-safe).
+
 ---
 
 ### Fix #10 — Intermittent Zenoh Test Failures Under Parallel CTest

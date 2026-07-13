@@ -711,6 +711,17 @@ static_assert(std::is_trivially_copyable_v<FaultOverrides>,
 // ═══════════════════════════════════════════════════════════
 
 /// Single radar return — range, bearing, Doppler velocity.
+///
+/// FRAME CONTRACT (Issue #816 PR2): azimuth_rad/elevation_rad are BODY-frame
+/// FLU (+az = left, +el = up).  Mount compensation is the PRODUCER's
+/// responsibility: GazeboRadarBackend rotates every ray through
+/// perception.radar.mount_* before publishing; SimulatedRadar synthesises
+/// detections directly in the body frame (no physical mount — identity);
+/// the Cosys backends' conventions are NOT yet audited against this contract
+/// — tracked in #817 (typed frames), which will make conformance
+/// compiler-enforced.  Consumers apply only the vehicle's body→world
+/// attitude.  Executable spec: tests/test_frame_contracts.cpp; helpers:
+/// util/sensor_geometry.h.
 struct RadarDetection {
     uint64_t timestamp_ns{0};
     float    range_m{0.0f};

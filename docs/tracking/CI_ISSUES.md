@@ -708,3 +708,50 @@ Verified locally: dry-run now produces 50/50 metrics passing from the 5-scenario
 - When changing a data format (like baseline JSON), search for all consumers of that format — not just the tool that writes it. `git grep 'metrics' -- '*.sh' '*.yml' '*.py'` would have caught the CI script.
 - The CI workflow's JS renderer already handled missing `metrics` with `results.metrics || {}`, but the Python snippets upstream didn't. Both layers should be defensive.
 - Consider adding a schema version check: if `bl.get('version')` exists, use the new flattening path; otherwise fall back to the legacy `bl['metrics']` path.
+
+---
+
+## CI-013: Guarded test suite placed in the `#else` (non-Gazebo) branch → all build legs red
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-07-13 |
+| **Branch** | `fix/issue-816-hal-attitude-gate` |
+| **PR** | #819 |
+| **Affected file** | `tests/test_gazebo_radar.cpp` (`GazeboRadarGroundGate` suite) |
+| **CI matrix** | ALL build legs (default/asan/tsan/ubsan/coverage) — CI has no Gazebo |
+
+### Symptoms
+
+Every build leg failed to compile with:
+
+```
+tests/test_gazebo_radar.cpp:345:38: error: 'quat_from_rpy' is not a member of 'drone::util'
+tests/test_gazebo_radar.cpp:346:37: error: 'drone::hal::GazeboRadarBackend' has not been declared
+... (repeated for every TEST in the new suite)
+```
+
+Local build was **green** — the classic "CI fails but local passes" split.
+
+### Root Cause
+
+`tests/test_gazebo_radar.cpp` is bracketed `#ifdef HAVE_GAZEBO … #else // !HAVE_GAZEBO … #endif`. The five new `GazeboRadarGroundGate` tests were appended to the **end of the file**, which sits inside the `#else` (no-Gazebo) branch. `GazeboRadarBackend` and the `hal/gazebo_radar.h` include only exist under `HAVE_GAZEBO`, so in the `#else` branch every reference is undeclared.
+
+Locally the machine **has** Gazebo (`HAVE_GAZEBO` defined), so the compiler took the `#ifdef` branch, never compiled the `#else` block, and the mistake was invisible. CI runners have no Gazebo → they compile the `#else` branch → red.
+
+### Fix Applied
+
+**Commit:** `73a6c7b`
+
+Moved the `GazeboRadarGroundGate` suite from the tail of the file into the `#ifdef HAVE_GAZEBO` region (before the `#else`).
+
+### Prevention
+
+- **For any change to an `#ifdef`-guarded file, compile the OTHER configuration before pushing.** For this file that is one command, now part of the routine:
+  ```bash
+  g++ -fsyntax-only -std=c++17 -I common/hal/include -I common/util/include \
+      -I common/ipc/include -isystem /usr/include/eigen3 tests/test_gazebo_radar.cpp
+  ```
+  (No `-DHAVE_GAZEBO` → reproduces the CI compile of the `#else` branch. It passed after the fix.)
+- When appending tests to a file, confirm which preprocessor branch the insertion point is in — "end of file" is not the same as "end of the primary branch". `grep -n '#ifdef\|#else\|#endif'` first.
+- Longer-term: a `--no-gazebo` local build config (or a CI-mirroring lightweight compile check) would catch the whole class; logged as a dev-tooling improvement in IMPROVEMENTS.md.
