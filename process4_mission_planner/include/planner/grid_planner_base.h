@@ -110,6 +110,13 @@ struct GridPlannerConfig {
     // Noise voxels (instance_id == 0) are unconditionally rejected.
     // 0 = disabled (legacy behaviour, voxels write directly to grid).
     int voxel_instance_promotion_observations = 0;
+    // Issue #821 — planner responsiveness diagnostics (Phase 1: observe only).
+    // Enables the no-path shadow-A* probe + re-init/timing counters. The probe
+    // runs one extra (const, side-effect-free) A* on no-path ticks to measure
+    // how often a complete search would have found a path D*Lite's incremental
+    // g-field missed. Cheap (sub-ms at this grid scale, no-path is rare) and
+    // NEVER alters flight behaviour, but gated so production can disable it.
+    bool diagnostics_enabled = true;
 };
 
 // ─────────────────────────────────────────────────────────────

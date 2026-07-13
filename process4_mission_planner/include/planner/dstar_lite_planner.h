@@ -42,6 +42,26 @@ public:
         return astar_fallback_recovered_;
     }
 
+    // Issue #821 — planner responsiveness instrumentation (Phase 1: OBSERVE
+    // ONLY, no behaviour change). Accessed from the planner thread only, so
+    // plain counters (same pattern as the #764 astar counters above).
+    /// Ticks that returned no-path → hover.
+    [[nodiscard]] uint64_t no_path_count() const noexcept { return no_path_count_; }
+    /// ...of those, how many where the shadow-A* probe DID find a path — i.e.
+    /// D*Lite's incremental g(start)=inf was a false negative. High ⇒ an
+    /// A*-fallback-on-no-path fix would eliminate that many hovers.
+    [[nodiscard]] uint64_t no_path_astar_recoverable() const noexcept {
+        return no_path_astar_recoverable_;
+    }
+    /// D*Lite from-scratch re-inits + causes (goal-flip is the snap-goal churn).
+    [[nodiscard]] uint64_t reinit_count() const noexcept { return reinit_count_; }
+    [[nodiscard]] uint64_t reinit_goal_flip() const noexcept { return reinit_goal_flip_; }
+    [[nodiscard]] uint64_t reinit_km() const noexcept { return reinit_km_; }
+    [[nodiscard]] uint64_t reinit_queue() const noexcept { return reinit_queue_; }
+    [[nodiscard]] uint64_t reinit_changes() const noexcept { return reinit_changes_; }
+    /// Peak compute_shortest_path() wall-time (µs) — the ~983 ms re-init spikes.
+    [[nodiscard]] uint64_t max_search_us() const noexcept { return max_search_us_; }
+
     // Test seam (Issue #764): run the A* fallback extraction directly so the
     // guaranteed-correct fallback can be unit-tested without first reproducing
     // D*Lite's greedy-stall state. Sets the start/goal passability anchors that
@@ -74,6 +94,12 @@ protected:
                    std::vector<std::array<float, 3>>& out_world_path) override {
         // ── Check for reinitialisation triggers ──────────────
         bool need_init = !initialized_ || goal != last_goal_;
+        // Issue #821 — attribute WHY we re-init. A from-scratch search is the
+        // ~983 ms cost that collapses the 10 Hz loop; goal-flip is driven by
+        // the snap-goal churn (grid_planner_base snap invalidation as static
+        // cell count drifts), so counting it separately tells us whether
+        // snap-goal hysteresis would be the high-value fix. Diagnostic only.
+        if (initialized_ && goal != last_goal_) ++reinit_goal_flip_;
 
         // Start moved substantially → accumulate km correction
         if (initialized_ && start != last_start_) {
@@ -85,16 +111,19 @@ protected:
         if (initialized_ && U_.size() > 100000) {
             DRONE_LOG_INFO("[D*Lite] Queue size {} > 100k — reinitialising", U_.size());
             need_init = true;
+            ++reinit_queue_;  // #821 diagnostic
         }
 
         // km_ too large → key recycling wastes iterations (drone moved far)
         if (initialized_ && km_ > 10.0f) {
             DRONE_LOG_INFO("[D*Lite] km_={:.1f} > 10 — reinitialising to avoid key churn", km_);
             need_init = true;
+            ++reinit_km_;  // #821 diagnostic
         }
 
         if (need_init) {
             initialize(start, goal);
+            ++reinit_count_;  // #821 diagnostic — total from-scratch searches
         } else {
             // Incremental update: process changed cells
             auto changes = grid_.drain_changes();
@@ -105,6 +134,8 @@ protected:
                     DRONE_LOG_DEBUG("[D*Lite] {} changes > threshold — reinitialising",
                                     changes.size());
                     initialize(start, goal);
+                    ++reinit_count_;    // #821 diagnostic — total from-scratch searches
+                    ++reinit_changes_;  // #821 diagnostic — cause: large change set
                 } else {
                     for (const auto& [cell, is_occupied] : changes) {
                         // Update all neighbours of the changed cell
@@ -129,13 +160,41 @@ protected:
         auto search_ms =
             std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - search_t0)
                 .count();
+        // #821 diagnostic — track the peak search cost. The re-init spikes
+        // (~983 ms observed) are what collapse the loop from 10 Hz to ~1 Hz.
+        const auto search_us = static_cast<uint64_t>(search_ms * 1000.0f);
+        if (search_us > max_search_us_) max_search_us_ = search_us;
 
         if (!ok || g(last_start_) >= kInf) {
-            DRONE_LOG_INFO("[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} "
-                           "queue={} occupied={} search={:.0f}ms",
-                           last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
-                           last_goal_.z, g(last_start_), U_.size(), grid_.occupied_count(),
-                           search_ms);
+            // Issue #821 shadow-A* probe (DIAGNOSTIC ONLY — result discarded,
+            // flight behaviour byte-identical to before). WHY: D*Lite's
+            // incremental g-field can report g(start)=inf even when a path
+            // exists (stale state after a re-init). A complete A* over the same
+            // grid/cost is authoritative for path *existence*. Running it here
+            // and discarding the result measures the false-negative rate — i.e.
+            // exactly how many of these hovers an A*-fallback-on-no-path fix
+            // would remove — WITHOUT changing behaviour yet. HOW: extract_path_
+            // astar is const + uses its own local search structures (verified),
+            // so it cannot perturb D*Lite's g_/U_/km_ state or out_world_path.
+            ++no_path_count_;
+            int probe_pts = 0;
+            if (config_.diagnostics_enabled) {
+                std::vector<std::array<float, 3>> probe;  // throwaway — never used to steer
+                if (extract_path_astar(last_start_, last_goal_, probe) && probe.size() >= 2) {
+                    ++no_path_astar_recoverable_;
+                    probe_pts = static_cast<int>(probe.size());
+                }
+            }
+            // Provenance: static vs dynamic split of the sealing cells (is the
+            // block a real inflated-obstacle edge or residual promoted ghosts?).
+            const auto static_cells = grid_.static_count();
+            const auto occ          = grid_.occupied_count();
+            DRONE_LOG_INFO(
+                "[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} queue={} "
+                "occupied={} static={} dynamic={} shadow_astar_pts={} search={:.0f}ms",
+                last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
+                last_goal_.z, g(last_start_), U_.size(), occ, static_cells,
+                occ >= static_cells ? occ - static_cells : 0, probe_pts, search_ms);
             return false;
         }
 
@@ -636,6 +695,26 @@ private:
     // Issue #764 — A* fallback telemetry (single-threaded planning loop).
     uint64_t astar_fallback_count_     = 0;
     uint64_t astar_fallback_recovered_ = 0;
+
+    // Issue #821 — planner responsiveness instrumentation (Phase 1).
+    // WHY: the return-leg hover was diagnosed four ways from aggregate logs
+    // (no cell positions, no "why did the search fail"). These counters make
+    // the two candidate root causes MEASURABLE before we commit a fix —
+    // (a) no_path_astar_recoverable_ = how often g(start)=inf is a false
+    //     negative a complete A* would rescue, and
+    // (b) reinit_goal_flip_ = the snap-goal churn that forces expensive
+    //     from-scratch searches (max_search_us_ captures the resulting spikes).
+    // HOW: updated on the planner thread inside do_search() (single-writer, so
+    // plain uint64_t like the #764 astar counters); read by the periodic
+    // [PlannerDiag] emit in P4 main.cpp.
+    uint64_t no_path_count_             = 0;
+    uint64_t no_path_astar_recoverable_ = 0;
+    uint64_t reinit_count_              = 0;
+    uint64_t reinit_goal_flip_          = 0;
+    uint64_t reinit_km_                 = 0;
+    uint64_t reinit_queue_              = 0;
+    uint64_t reinit_changes_            = 0;
+    uint64_t max_search_us_             = 0;
 };
 
 }  // namespace drone::planner

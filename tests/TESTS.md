@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2192 (no SDK, 8 Cosys-SDK tests skipped) / 2200 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #816 PR2 (HAL attitude gate + body-frame emission) +5 tests — new `GazeboRadarGroundGate` suite in `test_gazebo_radar.cpp` (now 22): mount rotation to body frame, ±25° pitch sweep keeps a real obstacle, level-flight ground rejected, no-attitude fail-safe, margin false-accept bias. `ctest -N --test-dir build` reports **2192** (no SDK) / **2200** (+SDK) — note: live count re-baselined (previously documented 2189; live base measured 2187, delta −2 from doc drift, live ctest is the SSOT). Previous PR (#816 PR1): +17 attitude-gate tests. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2197 (no SDK, 8 Cosys-SDK tests skipped) / 2205 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #821 Phase 1 (planner responsiveness diagnostics) +3 tests — new `Issue821PlannerDiag` suite in `test_dstar_lite_planner.cpp` (now 112): no-path increments the counter, shadow-A* probe leaves the trajectory byte-identical (observation-only proof), goal-flip counts as a re-init. `ctest -N --test-dir build` reports **2197** (no SDK, live SSOT) / **2205** (+SDK). Previous PR (#816 PR2): +5 `GazeboRadarGroundGate` tests. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -834,7 +834,7 @@ clamp + AABB-aware distance) after empirical sweep showed Cosys scenario 33 pass
 
 ---
 
-### test_dstar_lite_planner.cpp — 109 tests
+### test_dstar_lite_planner.cpp — 112 tests
 
 **What it tests:** D* Lite incremental path planner — occupancy grid basics (including
 Issue #635 static-cell TTL + Issue #636 promotion-state reset + HD-map immunity + radar
@@ -859,6 +859,7 @@ hover-fallback counter (Issue #645), and pure-pursuit look-ahead.
 | `DStarLiteQueueTest` | 3 | Large grid with obstacles completes within timeout, incremental replan after obstacle insertion, planner returns valid cmd while meeting timing budget |
 | `DStarLiteZBandTest` | 4 | Z-band constraint reduces search space, disabled Z-band searches full 3D, different start/goal altitudes compute correct band, km reinit prevents key churn after drone movement |
 | `PathPlannerFactory` | 2 | Factory creates D* Lite, unknown backend throws |
+| `Issue821PlannerDiag` | 3 | No-path result increments the no-path counter; the shadow-A* probe leaves the returned trajectory byte-identical (diagnostics on vs off → identical `valid`/velocity/`target_yaw`/`yaw_rate`); goal-flip counts as a re-init |
 
 **Key files under test:** `planner/dstar_lite_planner.h`, `planner/occupancy_grid_3d.h`, `planner/grid_planner_base.h`, `planner/planner_factory.h`
 

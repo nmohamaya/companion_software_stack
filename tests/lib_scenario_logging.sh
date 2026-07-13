@@ -222,6 +222,9 @@ generate_run_report() {
         # ── Occupancy Grid Peaks ──
         _report_grid_peaks "$mp_log"
 
+        # ── Planner Responsiveness (#821) ──
+        _report_planner "$mp_log"
+
         # ── Perception ──
         _report_perception "$perc_log"
 
@@ -627,6 +630,35 @@ _report_grid_peaks() {
         growth_pct=$(awk "BEGIN{printf \"%.0f\", 100*($max_static - $survey_static)/$survey_static}")
         echo "  - Static grew from ${survey_static} (survey) → ${max_static} (nav) (+${growth_pct}%) — in-flight promotion active"
     fi
+    echo ""
+}
+
+# Issue #821 — planner responsiveness diagnostics. Parses the LAST [PlannerDiag]
+# line (cumulative counters) from the mission-planner log so every scenario run
+# records whether the return-leg hovers were genuinely unavoidable or a D*Lite
+# incremental false-negative that a complete A* would have rescued, plus the
+# re-init churn that collapses the loop rate. Data-first: this is what picks the
+# Phase 2 fix (A*-on-no-path vs snap-goal hysteresis) with evidence, not guesses.
+_report_planner() {
+    local log="$1"
+    local line
+    line=$(grep -a "\[PlannerDiag\]" "$log" 2>/dev/null | tail -1)
+    echo "Planner Responsiveness (#821)"
+    if [[ -z "$line" ]]; then
+        echo "  [PlannerDiag] : (not reported — non-D*Lite backend or diagnostics disabled)"
+        echo ""
+        return
+    fi
+    local no_path recov reinit gflip max_ms
+    no_path=$(echo "$line" | grep -oE "no_path=[0-9]+" | cut -d= -f2)
+    recov=$(echo "$line" | grep -oE "astar_recoverable=[0-9]+" | cut -d= -f2)
+    reinit=$(echo "$line" | grep -oE "reinit=[0-9]+" | cut -d= -f2)
+    gflip=$(echo "$line" | grep -oE "goal_flip=[0-9]+" | cut -d= -f2)
+    max_ms=$(echo "$line" | grep -oE "max_search_ms=[0-9.]+" | cut -d= -f2)
+    echo "  No-path (hover) ticks     : ${no_path:-?}"
+    echo "  ...A*-recoverable         : ${recov:-?}  (a complete A* WOULD have found a path — false negatives; high ⇒ A*-on-no-path fixes them)"
+    echo "  D*Lite re-inits           : ${reinit:-?}  (goal-flip=${gflip:-?} — the snap-goal churn)"
+    echo "  Peak search time          : ${max_ms:-?} ms  (re-init spikes; collapse the 10 Hz loop)"
     echo ""
 }
 

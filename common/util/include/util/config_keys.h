@@ -446,6 +446,11 @@ inline constexpr const char* MIN_SPEED_MPS      = "mission_planner.path_planner.
 inline constexpr const char* SNAP_SEARCH_RADIUS = "mission_planner.path_planner.snap_search_radius";
 inline constexpr const char* Z_BAND_CELLS       = "mission_planner.path_planner.z_band_cells";
 inline constexpr const char* LOOK_AHEAD_M       = "mission_planner.path_planner.look_ahead_m";
+// Issue #821 — planner responsiveness diagnostics (Phase 1). Gates the no-path
+// shadow-A* probe + re-init/timing counters used to root-cause the return-leg
+// hover. Default true; a production build may set false to skip the extra A*.
+inline constexpr const char* DIAGNOSTICS_ENABLED =
+    "mission_planner.path_planner.diagnostics_enabled";
 inline constexpr const char* YAW_TOWARDS_TRAVEL = "mission_planner.path_planner.yaw_towards_travel";
 inline constexpr const char* YAW_SMOOTHING_RATE = "mission_planner.path_planner.yaw_smoothing_rate";
 // Follow velocity direction instead of bee-line-to-waypoint (Issue #612).

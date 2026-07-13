@@ -3427,3 +3427,105 @@ TEST(AStarFallbackTest, PlanSnapCacheSurvivesAltitudeChange) {
         << "stale snap-cache z must not cause a spurious hover after an altitude change";
     EXPECT_GT(cmd2.velocity_x, 0.0f) << "should still move horizontally toward the goal";
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Issue #821 — planner responsiveness INSTRUMENTATION (Phase 1).
+//
+// These lock the two guarantees the diagnostics must hold:
+//   (1) the counters actually count what we claim, and
+//   (2) the shadow-A* probe is OBSERVATION ONLY — flight behaviour is
+//       byte-identical whether diagnostics are on or off.
+// The whole point of Phase 1 is to measure before touching flight logic, so a
+// probe that changed behaviour would defeat it.
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+// Build a scenario with a full-width wall between start and goal so there is
+// GENUINELY no path within the grid (D*Lite AND A* both fail) — deterministic,
+// unlike a boxed goal where the snap can escape laterally.
+drone::ipc::DetectedObjectList full_width_wall_at_x(float wall_x, float extent_m) {
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (float y = -extent_m; y <= extent_m + 0.01f; y += 0.5f) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = wall_x;
+        objects.objects[idx].position_y = y;
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objects.num_objects = idx;
+    return objects;
+}
+}  // namespace
+
+TEST(Issue821PlannerDiag, NoPathIncrementsCounter) {
+    GridPlannerConfig config;
+    config.resolution_m        = 1.0f;
+    config.grid_extent_m       = 5.0f;
+    config.inflation_radius_m  = 1.0f;
+    config.diagnostics_enabled = true;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(full_width_wall_at_x(2.0f, 5.0f), pose);
+
+    Waypoint target{4.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid) << "even when boxed in, the planner must emit a valid (hover) command";
+    EXPECT_TRUE(planner.using_direct_fallback()) << "a full-width wall must produce a hover";
+    EXPECT_GT(planner.no_path_count(), 0u) << "the no-path counter must register the hover";
+    // Genuinely sealed ⇒ a complete A* also finds nothing ⇒ the false-negative
+    // counter stays 0 (this is the "seal is real, keep hovering" case).
+    EXPECT_EQ(planner.no_path_astar_recoverable(), 0u)
+        << "a truly sealed grid is not A*-recoverable";
+}
+
+TEST(Issue821PlannerDiag, ShadowProbeDoesNotAlterBehaviour) {
+    // THE guarantee: identical flight output with diagnostics on vs off.
+    auto run = [](bool diag) {
+        GridPlannerConfig config;
+        config.resolution_m        = 1.0f;
+        config.grid_extent_m       = 5.0f;
+        config.inflation_radius_m  = 1.0f;
+        config.diagnostics_enabled = diag;
+        DStarLitePlanner planner(config);
+        drone::ipc::Pose pose{};
+        pose.translation[2] = 5.0;
+        planner.update_obstacles(full_width_wall_at_x(2.0f, 5.0f), pose);
+        Waypoint target{4.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+        return planner.plan(pose, target);
+    };
+    const auto on  = run(true);   // probe runs
+    const auto off = run(false);  // probe skipped
+
+    // Byte-identical command — the probe observes, never steers.
+    EXPECT_EQ(on.valid, off.valid);
+    EXPECT_FLOAT_EQ(on.velocity_x, off.velocity_x);
+    EXPECT_FLOAT_EQ(on.velocity_y, off.velocity_y);
+    EXPECT_FLOAT_EQ(on.velocity_z, off.velocity_z);
+    EXPECT_FLOAT_EQ(on.target_yaw, off.target_yaw);
+    EXPECT_FLOAT_EQ(on.yaw_rate, off.yaw_rate);
+}
+
+TEST(Issue821PlannerDiag, GoalFlipCountsAsReinit) {
+    // The snap-goal churn root cause: changing the goal forces a from-scratch
+    // re-init. This counter is how Phase 2 will quantify that churn.
+    GridPlannerConfig config;
+    config.resolution_m  = 1.0f;
+    config.grid_extent_m = 20.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 5.0;
+
+    planner.plan(pose, Waypoint{10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false});
+    const auto flips_before = planner.reinit_goal_flip();
+    // Different goal on the next tick ⇒ goal != last_goal_ ⇒ re-init.
+    planner.plan(pose, Waypoint{0.0f, 10.0f, 5.0f, 0.0f, 2.0f, 3.0f, false});
+    EXPECT_GT(planner.reinit_goal_flip(), flips_before)
+        << "a changed goal must register as a goal-flip re-init";
+    EXPECT_GT(planner.reinit_count(), 0u);
+}
