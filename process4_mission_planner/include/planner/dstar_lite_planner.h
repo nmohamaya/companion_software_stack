@@ -47,13 +47,16 @@ public:
     // plain counters (same pattern as the #764 astar counters above).
     /// Ticks that returned no-path → hover.
     [[nodiscard]] uint64_t no_path_count() const noexcept { return no_path_count_; }
-    /// ...of those, how many where the shadow-A* probe DID find a path — i.e.
+    /// ...of those, how many were cases where the shadow-A* probe DID find a path — i.e.
     /// D*Lite's incremental g(start)=inf was a false negative. High ⇒ an
     /// A*-fallback-on-no-path fix would eliminate that many hovers.
     [[nodiscard]] uint64_t no_path_astar_recoverable() const noexcept {
         return no_path_astar_recoverable_;
     }
-    /// D*Lite from-scratch re-inits + causes (goal-flip is the snap-goal churn).
+    /// D*Lite from-scratch re-inits + causes (goal-flip ⇒ snap-goal churn). NB the
+    /// cause counters are diagnostic tallies, not a strict partition of reinit_count():
+    /// the very first (cold-start) init has no cause bucket, and coincident triggers on
+    /// one tick bump more than one cause — so Σ(causes) may differ from reinit_count().
     [[nodiscard]] uint64_t reinit_count() const noexcept { return reinit_count_; }
     [[nodiscard]] uint64_t reinit_goal_flip() const noexcept { return reinit_goal_flip_; }
     [[nodiscard]] uint64_t reinit_km() const noexcept { return reinit_km_; }
