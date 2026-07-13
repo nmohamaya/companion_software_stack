@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-07-13 (Issue #816 PR2 / CI-013 — guarded-test compile gap)
+
+#### Add a no-Gazebo (and no-Cosys) compile check to local CI so `#else`-branch breaks are caught before push
+
+- **P2** (`ci`, `dev-tooling`; `deploy/run_ci_local.sh`, `.github/workflows/ci.yml`) — CI-013: the `GazeboRadarGroundGate` suite compiled green locally (dev machine has `HAVE_GAZEBO`) but red on every CI leg (runners have no Gazebo) because it sat in the file's `#else // !HAVE_GAZEBO` branch. Dev machines with Gazebo/Cosys **never compile the `#else` branches**, so an entire class of `#ifdef`-guard mistakes is invisible locally. **Fix:** add a lightweight "portability" job/target that configures the build WITHOUT the optional deps (no `HAVE_GAZEBO`, no `HAVE_COSYS_AIRSIM`) and at least `-fsyntax-only`-compiles the guarded translation units — mirroring the real CI matrix, which is dep-free. `bash deploy/run_ci_local.sh --job PORTABILITY` (or fold into BUILD). Immediate manual workaround already documented in CI-013. **When to do it:** next CI-tooling window, or the next time a guarded-file break reaches CI. **Cross-ref:** CI-013.
+
 ### 2026-07-07 (ADR staleness audit — noticed while auditing docs/adr/)
 
 #### Process-4 mission-planner `main.cpp` has re-bloated from 366 → 1236 lines, eroding the ADR-008 extraction
