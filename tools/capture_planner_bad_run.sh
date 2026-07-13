@@ -17,6 +17,7 @@
 # Usage:
 #   ./tools/capture_planner_bad_run.sh [max_runs]      # default 10
 #   MAX_RUNS=6 ./tools/capture_planner_bad_run.sh
+#   A positional [max_runs] takes precedence over the MAX_RUNS env var.
 #
 # Stops on the FIRST bad run (exit 0) or after max_runs all-healthy (exit 3).
 # Ctrl-C between runs is safe — the scenario runner cleans up its own processes.
@@ -31,6 +32,11 @@ RESULTS_DIR="${PROJECT_DIR}/drone_logs/scenarios_gazebo/perception_avoidance"
 
 MAX_RUNS="${1:-${MAX_RUNS:-10}}"
 
+if ! [[ "$MAX_RUNS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: max_runs must be a positive integer (got '${MAX_RUNS}')" >&2
+    exit 2
+fi
+
 if [[ ! -x "$RUNNER" ]]; then
     echo "ERROR: scenario runner not found/executable: $RUNNER" >&2
     exit 2
@@ -44,16 +50,25 @@ echo "════════════════════════�
 for ((i = 1; i <= MAX_RUNS; i++)); do
     echo ""
     echo "───── run ${i}/${MAX_RUNS} — launching scenario 18 ─────"
+    # Marker to anchor "which run dir did THIS iteration produce" — guards against
+    # a crashed run (no fresh _PASS/_FAIL dir) leaving us to parse a stale earlier
+    # run's log as if it were this attempt's.
+    marker="$(mktemp)"
     # The runner manages its own PX4/Gazebo/companion lifecycle + cleanup.
     "$RUNNER" "$SCENARIO" >/dev/null 2>&1
     run_rc=$?
 
     # Newest completed run dir (PASS or FAIL — a bad run can still PASS if the
-    # drone eventually gets through the seal).
-    latest="$(ls -dt "${RESULTS_DIR}"/2026-*_PASS "${RESULTS_DIR}"/2026-*_FAIL 2>/dev/null | head -1)"
-    mp="${latest}/mission_planner.log"
-    if [[ ! -f "$mp" ]]; then
-        echo "  run ${i}: no mission_planner.log found (rc=${run_rc}) — skipping"
+    # drone eventually gets through the seal) created AFTER the marker.
+    latest="$(find "${RESULTS_DIR}" -maxdepth 1 -type d \
+                   \( -name '20[0-9][0-9]*_PASS' -o -name '20[0-9][0-9]*_FAIL' \) \
+                   -newer "$marker" -printf '%T@ %p\n' 2>/dev/null \
+                 | sort -rn | head -1 | cut -d' ' -f2-)"
+    rm -f "$marker"
+    mp="${latest:+${latest}/mission_planner.log}"
+    if [[ -z "$latest" || ! -f "$mp" ]]; then
+        echo "  run ${i}: no fresh result dir with a mission_planner.log (rc=${run_rc}, likely a"
+        echo "           crashed/aborted run) — skipping without reusing stale data."
         continue
     fi
 
@@ -76,13 +91,21 @@ for ((i = 1; i <= MAX_RUNS; i++)); do
         grep -hE '\[D\*Lite\] No path:' "$mp" | sed -E 's/^.*\[D\*Lite\] /  /' | head -40
 
         # Discriminator summary: how many no-path ticks were A*-recoverable.
-        total="$(grep -hcE '\[D\*Lite\] No path:' "$mp")"
-        recov="$(grep -hoE 'shadow_astar_pts=[0-9]+' "$mp" | grep -vE '=0$' | wc -l)"
+        # Count shadow_astar_pts only on actual "No path:" lines (not anywhere the
+        # token might appear), and treat >0 as recoverable (the `=0$` exclusion keeps
+        # multi-digit values like =10/=20 since those don't end in `=0`).
+        no_path_lines="$(grep -hE '\[D\*Lite\] No path:' "$mp")"
+        total="$(grep -cE '.' <<<"${no_path_lines:-}")"
+        [[ -z "$no_path_lines" ]] && total=0
+        recov="$(grep -oE 'shadow_astar_pts=[0-9]+' <<<"${no_path_lines:-}" | grep -vcE '=0$')"
         echo ""
         echo "── DISCRIMINATOR ──"
         echo "  no-path ticks logged            : ${total}"
         echo "  ...with shadow_astar_pts > 0    : ${recov}   (A* WOULD have found a path)"
-        if [[ "${total:-0}" -gt 0 && "${recov:-0}" -gt 0 ]]; then
+        if [[ "${total:-0}" -eq 0 ]]; then
+            echo "  ⇒ VERDICT: PlannerDiag reported no_path>0 but no per-tick 'No path:' lines"
+            echo "     were found (log rotation / level?). Inspect ${mp} directly."
+        elif [[ "${recov:-0}" -gt 0 ]]; then
             pct=$(( recov * 100 / total ))
             echo "  A*-recoverable share            : ${pct}%"
             if [[ "$pct" -ge 50 ]]; then
