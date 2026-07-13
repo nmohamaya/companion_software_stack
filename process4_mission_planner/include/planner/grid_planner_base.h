@@ -67,8 +67,12 @@ struct GridPlannerConfig {
                                                // (0 = disabled, use cell-by-cell following)
     bool require_radar_for_promotion = false;  // Require ≥1 radar update for hit-count promotion
                                                // (radar-confirmed path always works regardless)
-    int   max_static_cells   = 0;              // Cap on promoted static cells (0 = unlimited)
-    bool  yaw_towards_travel = true;           // Face sensors toward next waypoint during NAVIGATE
+    int max_static_cells = 0;                  // Cap on promoted static cells (0 = unlimited)
+    // Issue #824 — flood-guard: hard cap (m) on per-object inflation radius. Active by
+    // default (8 m) so even configs that don't set it are protected; a degenerate radar
+    // radius can't inflate one object across the grid. 0 = off (legacy half-extent cap).
+    float max_obstacle_inflation_radius_m = 8.0f;
+    bool  yaw_towards_travel = true;  // Face sensors toward next waypoint during NAVIGATE
     float yaw_smoothing_rate = 0.3f;  // EMA alpha for yaw transitions (0=frozen, 1=instant)
     // When `yaw_towards_velocity` is true (and `yaw_towards_travel` also true),
     // the yaw target follows the smoothed velocity command instead of the
@@ -256,7 +260,7 @@ public:
                 config.require_radar_for_promotion, config.voxel_promotion_hits,
                 config.static_cell_ttl_s, config.voxel_instance_promotion_observations,
                 config.min_obstacle_altitude_m, config.dynamic_confirmation_hits,
-                config.min_promotion_altitude_m) {}
+                config.min_promotion_altitude_m, config.max_obstacle_inflation_radius_m) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

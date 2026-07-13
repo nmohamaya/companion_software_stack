@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2197 (no SDK, 8 Cosys-SDK tests skipped) / 2205 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #821 Phase 1 (planner responsiveness diagnostics) +3 tests — new `Issue821PlannerDiag` suite in `test_dstar_lite_planner.cpp` (now 112): no-path increments the counter, shadow-A* probe leaves the trajectory byte-identical (observation-only proof), goal-flip counts as a re-init. `ctest -N --test-dir build` reports **2197** (no SDK, live SSOT) / **2205** (+SDK). Previous PR (#816 PR2): +5 `GazeboRadarGroundGate` tests. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2199 (no SDK, 8 Cosys-SDK tests skipped) / 2207 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #824 Fix A (occupancy-grid inflation flood-guard) +2 tests — new `Issue824FloodGuard` suite in `test_dstar_lite_planner.cpp` (now 114): a degenerate radar radius clamps to `max_obstacle_inflation_radius_m`, and the guard strictly shrinks the footprint vs the legacy half-extent (one object → >1000 cells pre-fix). `ctest -N --test-dir build` reports **2199** (no SDK, live SSOT) / **2207** (+SDK). Previous PR (#821 Phase 1): +3 `Issue821PlannerDiag` tests. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -834,7 +834,7 @@ clamp + AABB-aware distance) after empirical sweep showed Cosys scenario 33 pass
 
 ---
 
-### test_dstar_lite_planner.cpp — 112 tests
+### test_dstar_lite_planner.cpp — 114 tests
 
 **What it tests:** D* Lite incremental path planner — occupancy grid basics (including
 Issue #635 static-cell TTL + Issue #636 promotion-state reset + HD-map immunity + radar
@@ -860,6 +860,7 @@ hover-fallback counter (Issue #645), and pure-pursuit look-ahead.
 | `DStarLiteZBandTest` | 4 | Z-band constraint reduces search space, disabled Z-band searches full 3D, different start/goal altitudes compute correct band, km reinit prevents key churn after drone movement |
 | `PathPlannerFactory` | 2 | Factory creates D* Lite, unknown backend throws |
 | `Issue821PlannerDiag` | 3 | No-path result increments the no-path counter; the shadow-A* probe leaves the returned trajectory byte-identical (diagnostics on vs off → identical `valid`/velocity/`target_yaw`/`yaw_rate`); goal-flip counts as a re-init |
+| `Issue824FloodGuard` | 2 | Per-object inflation flood-guard: a degenerate radar radius clamps to `max_obstacle_inflation_radius_m` (footprint bounded + `total_radius_clamped()` fires); disabled (0) preserves the legacy half-extent footprint (>1000 cells for one object) and the guard strictly shrinks it, never grows it |
 
 **Key files under test:** `planner/dstar_lite_planner.h`, `planner/occupancy_grid_3d.h`, `planner/grid_planner_base.h`, `planner/planner_factory.h`
 

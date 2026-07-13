@@ -190,14 +190,18 @@ protected:
             }
             // Provenance: static vs dynamic split of the sealing cells (is the
             // block a real inflated-obstacle edge or residual promoted ghosts?).
-            const auto static_cells = grid_.static_count();
-            const auto occ          = grid_.occupied_count();
+            // NB grid_.occupied_count() is the DYNAMIC layer only and static_count()
+            // the STATIC layer — they are disjoint, so total occupied = sum. (PR #822
+            // mislabelled `occupied=`/`dynamic=`: it printed the dynamic count under
+            // `occupied=` and `dynamic − static` under `dynamic=`. Issue #824 fix.)
+            const auto dynamic_cells = grid_.occupied_count();
+            const auto static_cells  = grid_.static_count();
             DRONE_LOG_INFO(
                 "[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} queue={} "
-                "occupied={} static={} dynamic={} shadow_astar_pts={} search={:.0f}ms",
+                "dynamic={} static={} total_occupied={} shadow_astar_pts={} search={:.0f}ms",
                 last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
-                last_goal_.z, g(last_start_), U_.size(), occ, static_cells,
-                occ >= static_cells ? occ - static_cells : 0, probe_pts, search_ms);
+                last_goal_.z, g(last_start_), U_.size(), dynamic_cells, static_cells,
+                dynamic_cells + static_cells, probe_pts, search_ms);
             return false;
         }
 

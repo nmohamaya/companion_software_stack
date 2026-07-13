@@ -1583,3 +1583,28 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** real-hardware VIO attitude error is characterised (raise/lower the margin to match), OR a Mahalanobis/multi-return ground-plane estimator replaces the per-return altitude gate (would reject far ground safely and could close #815's arc), OR the typed-frames epic (#817) lands and lets `body_to_world` become a full rotation safely.
 
 **Date:** 2026-07-10 (Issue #816)
+
+---
+
+## DR-058: Per-object inflation flood-guard caps the radar footprint at a physical obstacle size, not the grid half-extent (Issue #824)
+
+**Question:** A radar-confirmed object inflates the occupancy grid using its back-projected `estimated_radius_m`, clamped only to the grid half-extent (`half_extent_cells_`). A degenerate radius (measured ~46 m, from a camera bbox×range back-projection on a radar-confirmed track) inflated ONE object to ~1686 cells — ~67% of the flight plane — saturating the `max_static_cells=800` cap and sealing the grid (scenario-18 mission stall; a full A* agreed no path, `shadow_astar_pts=0`). Where should the footprint be bounded, and by how much?
+
+**Context / why it matters:** the existing half-extent clamp (Issue #792) is a *hang*-guard — it keeps `ceil(radius/res)` in `int` range so the O(N²) disk loop can't run unbounded — NOT a *flood*-guard. It still lets a single object cover the whole grid. This is the perception→planner inverse of the asymmetric-cost rule: a too-*small* footprint under-reports a real obstacle (dangerous — collision), a too-*large* one over-reports (a ghost seals the grid — mission stall, recoverable). So the guard must bias toward false-accept (keep the obstacle) while still bounding a *degenerate* radius.
+
+**Decision — a config-clamped `max_obstacle_inflation_radius_m` (default 8 m, active by default):**
+
+1. **Cap the radius, not just the cell count.** When `> 0`, clamp `obj_inflation` to `min(half_extent_cells_, ceil(max_radius/res))`. The half-extent min stays for the UB guard. Fail-safe by construction: the clamp can only *shrink* an over-inflated footprint, never grow one.
+2. **8 m default is generous for any single real obstacle.** Scenario obstacles are ~1–3 m; a genuinely large structure (wall/building) is represented by *multiple* detections/cells along its extent, not one huge radius — so an 8 m (16 m-diameter) per-object cap never clips real geometry, while any value below the degenerate ~46 m stops the seal. The reactive `ObstacleAvoider3D` (which consumes the raw `DetectedObjectList`, not this grid) backstops anything the grid under-represents.
+3. **Active by default (`GridPlannerConfig` field = 8 m, not 0).** A safety flood-guard defaulting to "off" would leave un-updated configs exposed; the `OccupancyGrid3D` constructor default stays `0` (legacy) only so existing direct-construction unit tests are unaffected.
+
+**Arguments considered:**
+- *Fix only the UKF source (Fix B), no grid guard* — addresses the root radius but leaves the grid with no backstop if any future estimate slips through (another sensor, a new fusion path). Rejected as sole fix: defense-in-depth — the grid guard is the fail-safe floor. B ships too (separate PR) as the root-cause fix.
+- *Cap at the config `inflation_radius_m` (camera-only value, ~2 m)* — would shrink legitimately-large radar-confirmed obstacles to the camera default, losing the accurate-range benefit radar provides. Rejected: biases false-*reject* for real large obstacles. 8 m preserves radar's accurate sizing up to a sane physical bound.
+- *A hard, non-configurable constant* — rejected per the all-tunables-via-Config rule; platforms with larger real obstacles can raise it.
+
+**Permanent instrumentation** (not throwaway): `total_radius_clamped()` counter, surfaced as `radius_clamped=` in the periodic `[Grid]` line, plus per-object `est_radius=`/`radar_updates=` in the `[Grid]` DEBUG line — so a flood is instantly diagnosable and this bug class cannot silently recur. Also fixed a mislabelled `dynamic=` field in the `[D*Lite] No path` log (PR #822 printed the dynamic count under `occupied=` and `dynamic − static` under `dynamic=`).
+
+**Revisit when:** the UKF source clamp (Fix B, #824) lands and is validated in sim — at that point the grid guard becomes pure defense-in-depth and the default could be reviewed; OR a platform with real obstacles > 8 m radius needs a higher cap.
+
+**Date:** 2026-07-13 (Issue #824, Fix A)

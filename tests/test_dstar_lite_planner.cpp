@@ -143,6 +143,86 @@ TEST(OccupancyGrid3DTest, PromotedCellStillAcceptsDynamicDetections) {
     EXPECT_EQ(grid.static_count(), static_after_promote);
 }
 
+// ─── Issue #824 — per-object inflation flood-guard ───────────────────────────
+// A radar-confirmed object inflates using its back-projected estimated_radius_m,
+// previously clamped only to the grid half-extent (a #792 hang-guard). A
+// degenerate ~46 m radius could inflate ONE object across the whole grid and seal
+// it (observed: ~1686 cells → mission stall). Fix A caps the per-object footprint
+// at max_obstacle_inflation_radius_m.
+namespace {
+// Build a grid with a given flood-guard cap; all other params are sensible
+// defaults. resolution=1 m, extent=50 m → half_extent = 50 cells (legacy cap).
+OccupancyGrid3D make_flood_grid(float max_obstacle_inflation_radius_m) {
+    return OccupancyGrid3D(/*resolution=*/1.0f, /*extent=*/50.0f, /*inflation=*/1.5f,
+                           /*cell_ttl_s=*/3.0f, /*min_confidence=*/0.3f, /*promotion_hits=*/0,
+                           /*radar_promotion_hits=*/1u, /*min_promotion_depth_confidence=*/0.3f,
+                           /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                           /*prediction_dt_s=*/2.0f, /*require_radar_for_promotion=*/false,
+                           /*voxel_promotion_hits=*/3, /*static_cell_ttl_s=*/30.0f,
+                           /*voxel_instance_promotion_observations=*/0,
+                           /*min_obstacle_altitude_m=*/0.0f, /*dynamic_confirmation_hits=*/1,
+                           /*min_promotion_altitude_m=*/0.0f, max_obstacle_inflation_radius_m);
+}
+
+// One radar-confirmed object with a degenerate 20 m back-projected radius, placed
+// at (30,0) — far enough that its inflated disk does not cover the drone at the
+// origin (an object whose footprint overlaps the drone cell is skipped entirely,
+// which would confound the count). The real bug used ~46 m; 20 m keeps the test
+// geometry clean while still exceeding any sane cap.
+drone::ipc::DetectedObjectList degenerate_radar_object() {
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 30.0f;
+    objects.objects[0].position_y         = 0.0f;
+    objects.objects[0].position_z         = 2.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].radar_update_count = 5;      // radar-confirmed → uses estimated_radius_m
+    objects.objects[0].estimated_radius_m = 20.0f;  // degenerate, floods the grid pre-fix
+    return objects;
+}
+}  // namespace
+
+// Total obstacle footprint across both layers. A radar-confirmed object promotes
+// straight to the STATIC layer, so the flood shows up in static_count(), not
+// occupied_count() (the dynamic layer). Check the sum to be layer-agnostic.
+static size_t total_footprint(const OccupancyGrid3D& g) {
+    return g.occupied_count() + g.static_count();
+}
+
+TEST(Issue824FloodGuard, DegenerateRadiusClampedToMax) {
+    // With the guard active (5 m cap), a 20 m radar radius must NOT flood the grid.
+    OccupancyGrid3D  grid    = make_flood_grid(/*max_obstacle_inflation_radius_m=*/5.0f);
+    auto             objects = degenerate_radar_object();
+    drone::ipc::Pose pose{};
+    grid.update_from_objects(objects, pose);
+
+    // Capped at 5 m on a 1 m grid ≈ a disk of radius ~5 cells (~80 cells), NOT the
+    // ~1300-cell disk a 20 m radius would produce. Bound generously.
+    EXPECT_GT(total_footprint(grid), 0u);
+    EXPECT_LT(total_footprint(grid), 300u);
+    // The guard must record that it bounded this object.
+    EXPECT_GT(grid.total_radius_clamped(), 0u);
+}
+
+TEST(Issue824FloodGuard, DisabledPreservesLegacyAndClampShrinksFootprint) {
+    auto             objects = degenerate_radar_object();
+    drone::ipc::Pose pose{};
+
+    // Guard disabled (0) → legacy half-extent cap → large flooded footprint (the bug).
+    OccupancyGrid3D legacy = make_flood_grid(/*max_obstacle_inflation_radius_m=*/0.0f);
+    legacy.update_from_objects(objects, pose);
+    EXPECT_EQ(legacy.total_radius_clamped(), 0u);  // guard off → never counts
+    EXPECT_GT(total_footprint(legacy), 1000u);     // the flood: one object → >1000 cells
+
+    // Guard active → strictly smaller footprint than legacy (fail-safe: only shrinks).
+    OccupancyGrid3D guarded = make_flood_grid(/*max_obstacle_inflation_radius_m=*/5.0f);
+    guarded.update_from_objects(objects, pose);
+
+    EXPECT_LT(total_footprint(guarded), total_footprint(legacy));
+    EXPECT_GT(guarded.total_radius_clamped(), 0u);
+}
+
 TEST(OccupancyGrid3DTest, AdjacentDetectionStillInserted) {
     // Parallax causes detections 1 cell away from the promoted cell.
     // These detections are still inserted as dynamic cells — the
