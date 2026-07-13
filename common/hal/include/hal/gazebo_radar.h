@@ -84,11 +84,16 @@ public:
         const float mp    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_PITCH_RAD, -0.087f);
         const float my    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_YAW_RAD, 0.0f);
         sensor_to_body_q_ = drone::util::quat_from_rpy(mr, mp, my);
-        // Widen the post-noise angle clamps by the mount magnitude: body-frame
-        // angles are shifted by the mount, so clamping to the raw sensor FOV
-        // would clip legitimate returns near the tilted edge.
-        clamp_az_rad_ = fov_azimuth_rad_ / 2.0f + std::fabs(my) + std::fabs(mr);
-        clamp_el_rad_ = fov_elevation_rad_ / 2.0f + std::fabs(mp) + std::fabs(mr);
+        // Widen the post-noise angle clamps by the mount's TOTAL rotation
+        // angle (PR #819 review): a general 3D mount couples roll/pitch/yaw
+        // into BOTH body az and el (e.g. a pitch mount shifts off-boresight
+        // azimuths via atan2), so per-axis sums under-cover.  The rotation
+        // angle is a conservative upper bound on any bearing shift; clamping
+        // wider than the FOV is harmless (the clamp only guards against noise
+        // pushing angles unphysically far).
+        const float mount_angle_rad = Eigen::AngleAxisf(sensor_to_body_q_).angle();
+        clamp_az_rad_               = fov_azimuth_rad_ / 2.0f + mount_angle_rad;
+        clamp_el_rad_               = fov_elevation_rad_ / 2.0f + mount_angle_rad;
         // Fail-safe margin for the attitude-aware ground gate (same semantics
         // as the fusion gate's key): reject as ground only if below the floor
         // even after allowing this much attitude error.  Clamped [0, 0.35] —
@@ -275,20 +280,25 @@ private:
 
         // Get current body velocity + attitude snapshot (under lock).
         // Issue #816 PR2: one attitude per scan — every ray of this scan is
-        // projected with the same body→world rotation.
+        // projected with the same body→world rotation.  has_attitude_ is read
+        // INSIDE the same critical section as the quaternion (PR #819 review):
+        // reading it after unlock could pair a stale quaternion with a newer
+        // `true` flag — an inconsistent snapshot that changes reject/keep
+        // decisions for the whole scan.
         float vx = 0.0f, vy = 0.0f, vz = 0.0f;
         float qw = 1.0f, qx = 0.0f, qy = 0.0f, qz = 0.0f;
+        bool  has_att = false;
         {
             std::lock_guard<std::mutex> lock(odom_mutex_);
-            vx = body_vx_;
-            vy = body_vy_;
-            vz = body_vz_;
-            qw = att_w_;
-            qx = att_x_;
-            qy = att_y_;
-            qz = att_z_;
+            vx      = body_vx_;
+            vy      = body_vy_;
+            vz      = body_vz_;
+            qw      = att_w_;
+            qx      = att_x_;
+            qy      = att_y_;
+            qz      = att_z_;
+            has_att = has_attitude_.load(std::memory_order_acquire);
         }
-        const bool               has_att       = has_attitude_.load(std::memory_order_acquire);
         const Eigen::Quaternionf body_to_world = drone::util::quat_from_wxyz(qw, qx, qy, qz);
 
         const int total_rays    = h_count * std::max(v_count, 1);
@@ -360,18 +370,22 @@ private:
             fa.timestamp_ns = list.timestamp_ns;
             fa.range_m      = uniform_dist_(rng_) * max_range_m_;
             // False alarms are receiver artifacts in the SENSOR frame — convert
-            // to body like real rays so the wire contract stays uniform (#816).
+            // to body like real rays so the wire contract stays uniform (#816),
+            // and clamp to the same widened body-frame bounds as real rays
+            // (PR #819 review — downstream consumers assume those limits).
             const float fa_az_s = uniform_dist_(rng_) * fov_azimuth_rad_ - fov_azimuth_rad_ / 2.0f;
             const float fa_el_s = uniform_dist_(rng_) * fov_elevation_rad_ -
                                   fov_elevation_rad_ / 2.0f;
             std::tie(fa.azimuth_rad, fa.elevation_rad) = sensor_to_body_angles(fa_az_s, fa_el_s,
                                                                                sensor_to_body_q_);
-            fa.radial_velocity_mps                     = velocity_noise_(rng_);
-            fa.rcs_dbsm                                = -10.0f;
-            fa.snr_db                                  = 3.0f;
-            fa.confidence                              = 0.1f;
-            fa.track_id                                = next_tid++;
-            list.detections[list.num_detections++]     = fa;
+            fa.azimuth_rad         = std::clamp(fa.azimuth_rad, -clamp_az_rad_, clamp_az_rad_);
+            fa.elevation_rad       = std::clamp(fa.elevation_rad, -clamp_el_rad_, clamp_el_rad_);
+            fa.radial_velocity_mps = velocity_noise_(rng_);
+            fa.rcs_dbsm            = -10.0f;
+            fa.snr_db              = 3.0f;
+            fa.confidence          = 0.1f;
+            fa.track_id            = next_tid++;
+            list.detections[list.num_detections++] = fa;
         }
 
         next_track_id_ = next_tid;
@@ -409,16 +423,33 @@ private:
             has_altitude_.store(true, std::memory_order_release);
 
             // Issue #816 PR2 — body→world attitude for the attitude-aware
-            // ground gate.  Multi-field → mutex (same rule as velocities);
-            // published flag stays a lock-free atomic for the scan hot path.
+            // ground gate.  Multi-field → mutex (same rule as velocities).
+            // PR #819 review hardening: VALIDATE at write time (finite, non-
+            // degenerate norm) and CLEAR the flag when orientation is absent
+            // or invalid — a suppression gate must treat "stale/garbage
+            // attitude" exactly like "no attitude" (never reject), not run on
+            // a latched flag with an identity fallback quaternion.
+            bool valid = false;
             if (msg.pose().has_orientation()) {
-                const auto&                 o = msg.pose().orientation();
+                const auto& o  = msg.pose().orientation();
+                const auto  w  = static_cast<float>(o.w());
+                const auto  x  = static_cast<float>(o.x());
+                const auto  y  = static_cast<float>(o.y());
+                const auto  z  = static_cast<float>(o.z());
+                const float n2 = w * w + x * x + y * y + z * z;
+                if (std::isfinite(n2) && n2 > 1e-6f) {
+                    std::lock_guard<std::mutex> lock(odom_mutex_);
+                    att_w_ = w;
+                    att_x_ = x;
+                    att_y_ = y;
+                    att_z_ = z;
+                    has_attitude_.store(true, std::memory_order_release);
+                    valid = true;
+                }
+            }
+            if (!valid) {
                 std::lock_guard<std::mutex> lock(odom_mutex_);
-                att_w_ = static_cast<float>(o.w());
-                att_x_ = static_cast<float>(o.x());
-                att_y_ = static_cast<float>(o.y());
-                att_z_ = static_cast<float>(o.z());
-                has_attitude_.store(true, std::memory_order_release);
+                has_attitude_.store(false, std::memory_order_release);
             }
         }
 

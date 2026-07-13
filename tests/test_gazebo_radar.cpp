@@ -293,39 +293,6 @@ TEST(GazeboRadarTest, FactoryStillCreatesSimulated) {
     EXPECT_EQ(radar->name(), "SimulatedRadar");
 }
 
-#else  // !HAVE_GAZEBO
-
-// ═══════════════════════════════════════════════════════════
-// Fallback tests — verify factory falls back to simulated
-// ═══════════════════════════════════════════════════════════
-
-TEST(GazeboRadarFallbackTest, FactoryCreatesSimulatedBackend) {
-    auto          path = create_temp_config(R"({
-        "perception": {
-            "radar": {
-                "backend": "simulated"
-            }
-        }
-    })");
-    drone::Config cfg;
-    ASSERT_TRUE(cfg.load(path));
-    auto radar = drone::hal::create_radar(cfg, "perception.radar");
-    ASSERT_NE(radar, nullptr);
-    EXPECT_EQ(radar->name(), "SimulatedRadar");
-}
-
-TEST(GazeboRadarFallbackTest, GazeboBackendThrowsWithoutLib) {
-    auto          path = create_temp_config(R"({
-        "perception": {
-            "radar": {
-                "backend": "gazebo"
-            }
-        }
-    })");
-    drone::Config cfg;
-    ASSERT_TRUE(cfg.load(path));
-    EXPECT_THROW(drone::hal::create_radar(cfg, "perception.radar"), std::runtime_error);
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // Issue #816 PR2 — HAL attitude-aware ground gate + mount compensation.
@@ -410,6 +377,40 @@ TEST(GazeboRadarGroundGate, MarginBiasesFalseAccept) {
     EXPECT_FALSE(drone::hal::GazeboRadarBackend::ground_gate_should_reject(
         true, true, alt, slant, 0.0f, el_b, Eigen::Quaternionf::Identity(), floor_m, 0.02f))
         << "a floor-height return is within the margin — keep (false-accept bias)";
+}
+
+#else  // !HAVE_GAZEBO
+
+// ═══════════════════════════════════════════════════════════
+// Fallback tests — verify factory falls back to simulated
+// ═══════════════════════════════════════════════════════════
+
+TEST(GazeboRadarFallbackTest, FactoryCreatesSimulatedBackend) {
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "radar": {
+                "backend": "simulated"
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    auto radar = drone::hal::create_radar(cfg, "perception.radar");
+    ASSERT_NE(radar, nullptr);
+    EXPECT_EQ(radar->name(), "SimulatedRadar");
+}
+
+TEST(GazeboRadarFallbackTest, GazeboBackendThrowsWithoutLib) {
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "radar": {
+                "backend": "gazebo"
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    EXPECT_THROW(drone::hal::create_radar(cfg, "perception.radar"), std::runtime_error);
 }
 
 #endif  // HAVE_GAZEBO
