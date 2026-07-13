@@ -4,6 +4,7 @@
 // Sends FC commands (arm, takeoff, mode) to comms via FCCommand.
 
 #include "ipc/ipc_types.h"
+#include "planner/dstar_lite_planner.h"  // #821 — DStarLitePlanner* for the diag counters
 #include "planner/fault_manager.h"
 #include "planner/fault_response_executor.h"
 #include "planner/gcs_command_handler.h"
@@ -381,6 +382,12 @@ int main(int argc, char* argv[]) {
         drone::cfg_key::mission_planner::path_planner::Z_BAND_CELLS, planner_cfg.z_band_cells);
     planner_cfg.look_ahead_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::LOOK_AHEAD_M, planner_cfg.look_ahead_m);
+    // Issue #821 — enable the planner responsiveness diagnostics (no-path
+    // shadow-A* probe + re-init/timing counters). Default true so every
+    // scenario run records the data that will pick the Phase 2 fix.
+    planner_cfg.diagnostics_enabled =
+        ctx.cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::DIAGNOSTICS_ENABLED,
+                          planner_cfg.diagnostics_enabled);
     planner_cfg.yaw_towards_travel =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::YAW_TOWARDS_TRAVEL,
                           planner_cfg.yaw_towards_travel);
@@ -405,6 +412,11 @@ int main(int argc, char* argv[]) {
     auto path_planner = std::move(planner_result).value();
     DRONE_LOG_INFO("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
+    // Issue #821 — the concrete D*Lite planner exposes the responsiveness
+    // diagnostic counters (no-path shadow-A* hit-rate, re-init causes, peak
+    // search time). Null for a non-D*Lite backend (e.g. A*/RRT), in which case
+    // the periodic [PlannerDiag] emit below is simply skipped.
+    auto* dstar = dynamic_cast<drone::planner::DStarLitePlanner*>(path_planner.get());
 
     // ── HD-map static obstacles ─────────────────────────────
     StaticObstacleLayer obstacle_layer;
@@ -1192,6 +1204,23 @@ int main(int argc, char* argv[]) {
         ++health_tick;
         if (health_tick % static_cast<uint32_t>(std::max(1, 1000 / loop_sleep_ms)) == 0) {
             health_publisher.publish_snapshot();
+        }
+
+        // Issue #821 — emit the planner responsiveness diagnostics every ~5 s
+        // (cumulative counters). WHY here, not in do_search(): the counters are
+        // updated on the hot planning path but must be LOGGED off it — one line
+        // per ~50 ticks, parsed by tests/lib_scenario_logging.sh `_report_
+        // planner`, so every scenario run records: how many hovers were actually
+        // rescuable by a complete A* (no_path_astar_recoverable / no_path), how
+        // much re-init churn (goal-flip = snap-goal), and the peak search spike.
+        if (dstar != nullptr &&
+            health_tick % static_cast<uint32_t>(std::max(1, 5000 / loop_sleep_ms)) == 0) {
+            DRONE_LOG_INFO("[PlannerDiag] no_path={} astar_recoverable={} reinit={} "
+                           "(goal_flip={} km={} queue={} changes={}) max_search_ms={:.1f}",
+                           dstar->no_path_count(), dstar->no_path_astar_recoverable(),
+                           dstar->reinit_count(), dstar->reinit_goal_flip(), dstar->reinit_km(),
+                           dstar->reinit_queue(), dstar->reinit_changes(),
+                           static_cast<double>(dstar->max_search_us()) / 1000.0);
         }
 
         if (diag.has_errors() || diag.has_warnings()) {

@@ -222,6 +222,9 @@ generate_run_report() {
         # ── Occupancy Grid Peaks ──
         _report_grid_peaks "$mp_log"
 
+        # ── Planner Responsiveness (#821) ──
+        _report_planner "$mp_log"
+
         # ── Perception ──
         _report_perception "$perc_log"
 
@@ -630,6 +633,35 @@ _report_grid_peaks() {
     echo ""
 }
 
+# Issue #821 — planner responsiveness diagnostics. Parses the LAST [PlannerDiag]
+# line (cumulative counters) from the mission-planner log so every scenario run
+# records whether the return-leg hovers were genuinely unavoidable or a D*Lite
+# incremental false-negative that a complete A* would have rescued, plus the
+# re-init churn that collapses the loop rate. Data-first: this is what picks the
+# Phase 2 fix (A*-on-no-path vs snap-goal hysteresis) with evidence, not guesses.
+_report_planner() {
+    local log="$1"
+    local line
+    line=$(grep -a "\[PlannerDiag\]" "$log" 2>/dev/null | tail -1)
+    echo "Planner Responsiveness (#821)"
+    if [[ -z "$line" ]]; then
+        echo "  [PlannerDiag] : (not reported — non-D*Lite backend or diagnostics disabled)"
+        echo ""
+        return
+    fi
+    local no_path recov reinit gflip max_ms
+    no_path=$(echo "$line" | grep -oE "no_path=[0-9]+" | cut -d= -f2)
+    recov=$(echo "$line" | grep -oE "astar_recoverable=[0-9]+" | cut -d= -f2)
+    reinit=$(echo "$line" | grep -oE "reinit=[0-9]+" | cut -d= -f2)
+    gflip=$(echo "$line" | grep -oE "goal_flip=[0-9]+" | cut -d= -f2)
+    max_ms=$(echo "$line" | grep -oE "max_search_ms=[0-9.]+" | cut -d= -f2)
+    echo "  No-path (hover) ticks     : ${no_path:-?}"
+    echo "  ...A*-recoverable         : ${recov:-?}  (a complete A* WOULD have found a path — false negatives; high ⇒ A*-on-no-path fixes them)"
+    echo "  D*Lite re-inits           : ${reinit:-?}  (goal-flip=${gflip:-?}; a high goal-flip share ⇒ snap-goal churn)"
+    echo "  Peak search time          : ${max_ms:-?} ms  (large spikes ⇒ re-inits collapsing the 10 Hz loop)"
+    echo ""
+}
+
 _report_perception() {
     local log="$1"
     echo "Perception (Radar-Primary)"
@@ -809,7 +841,11 @@ _report_ipc_latency() {
     echo "IPC Latency"
 
     local latency_lines
-    latency_lines=$(grep -ah '\[Latency\]' "$run_dir"/*.log 2>/dev/null | sort -t'—' -k2 || true)
+    # Plain lexicographic sort groups the lines by their leading topic path.
+    # (Do NOT use `sort -t'—'`: the em-dash is a 3-byte char and GNU sort
+    #  rejects a multi-byte delimiter with "multi-character tab", which the
+    #  `|| true` then silently swallowed → the block wrongly reported "no data".)
+    latency_lines=$(grep -ah '\[Latency\]' "$run_dir"/*.log 2>/dev/null | sort || true)
 
     if [[ -z "$latency_lines" ]]; then
         echo "  (no latency data found in logs)"

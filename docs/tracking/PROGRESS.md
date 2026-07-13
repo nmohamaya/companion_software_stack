@@ -4326,4 +4326,20 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #118 (Issue #816 PR 2 — HAL attitude gate + body-frame contract). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #119 — Planner responsiveness diagnostics: `[PlannerDiag]` observability surface (Issue #821 Phase 1)
+
+**Date:** 2026-07-13  
+**Category:** Mission Planner / Observability (Issue #821 Phase 1 — instrument before remediating)  
+**Files Modified:**
+- `process4_mission_planner/include/planner/dstar_lite_planner.h` — eight lock-free `uint64_t` counters + `[[nodiscard]] ... noexcept` accessors (`no_path_count`, `no_path_astar_recoverable`, `reinit_count`, `reinit_goal_flip`, `reinit_km`, `reinit_queue`, `reinit_changes`, `max_search_us`). On a no-path/hover result the planner runs a **shadow-A\*** probe (`extract_path_astar`, already `const` + side-effect-free) whose result is **discarded** — it only records whether a full A\* *would* have found a path, measuring D\*Lite's incremental-`g(start)=∞` false-negative rate without touching flight behaviour. No-path branch also logs occupied-cell provenance (static vs dynamic). Re-init triggers (goal-flip / km / queue / changes>500) are counted at their sites; per-search wall-time tracks the peak.
+- `process4_mission_planner/include/planner/grid_planner_base.h` — `GridPlannerConfig::diagnostics_enabled` (default true) gates the shadow probe so production flight can disable the extra work.
+- `process4_mission_planner/src/main.cpp` — `dynamic_cast` to `DStarLitePlanner*`; periodic `[PlannerDiag] no_path=… astar_recoverable=… reinit=… (goal_flip=… km=… queue=… changes=…) max_search_ms=…` emit (~5 s cadence, off the per-tick hot path).
+- `common/util/include/util/config_keys.h`, `config/default.json` — `mission_planner.path_planner.diagnostics_enabled` key + default.
+- `tests/lib_scenario_logging.sh` — `_report_planner` run-report block (permanent per-run surfacing, mirrors `_report_perception`).
+- `tests/test_dstar_lite_planner.cpp` — +3: no-path increments the counter; **shadow probe leaves the returned trajectory byte-identical** (diagnostics on vs off produce identical `valid`/velocity/`target_yaw`/`yaw_rate`); goal-flip counts as a re-init.
+
+**What/Why:** The scenario-18 "hesitant to return" symptom had been diagnosed four different ways from aggregate logs alone (camera ghosts → real-obstacle inflation → greedy-stall → genuine no-path), each overturning the last, because the logs give counts with no cell provenance and no "why did the search fail". Per the observability-before-remediation rule, Phase 1 ships **observation only, zero behaviour change** (proven by the byte-identical test) to answer each open question with data before committing to a fix. Phase 2 (a separate small PR) is chosen deterministically by the `[PlannerDiag]` numbers: shadow-A\* hit-rate → A\*-fallback-on-no-path; re-init churn dominating → snap-goal hysteresis. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

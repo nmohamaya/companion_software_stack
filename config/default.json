@@ -238,7 +238,9 @@
             "snap_search_radius": 8,
             "yaw_towards_travel": true,
             "yaw_smoothing_rate": 0.3,
-            "snap_approach_bias": 0.5
+            "snap_approach_bias": 0.5,
+            "_comment_diagnostics": "#821 — planner responsiveness diagnostics: on a no-path (hover) result, run a complete A* over the same grid and count how often it WOULD have found a path (a D*Lite incremental false-negative). Off-hot-path, sub-ms, never alters flight behaviour. Set false in a production build to skip the extra A*.",
+            "diagnostics_enabled": true
         },
         "occupancy_grid": {
             "resolution_m": 0.5,
