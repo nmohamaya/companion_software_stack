@@ -78,6 +78,23 @@
                 "process_noise_factor": 0.05,
                 "measurement_noise_range": 0.1,
                 "measurement_noise_bearing": 0.05
+            },
+            "_comment_radar": "Issue #826 — switched radar.backend cosys_airsim → cosys_echo. cosys_airsim is the LiDAR-EMULATION CosysRadarBackend (polls getLidarData: 8192 dense pts → 356-463 clusters/scan → ~32 radar-only tracks vs 9 real obstacles, 17 in free space → grid sealed, drone can't round the block). cosys_echo is the proper Cosys-Lab Echo sensor (type 7, physical FMCW-style radar with beam pattern + multipath), which the lidar-emulation was a workaround for (#702/#705 ground-clutter root cause). Scenario 33 already made this switch; scenario 30 was left behind. Echo sensor must be declared in config/cosys_settings.json (deployed to ~/Documents/AirSim/settings.json). Revert to cosys_airsim_groundtruth for the per-object oracle, or cosys_airsim for the lidar-emulation code path.",
+            "radar": {
+                "backend": "cosys_echo",
+                "echo_name": "echo",
+                "vehicle_name": "Drone0",
+                "max_range_m": 50.0,
+                "min_range_m": 0.5,
+                "fov_azimuth_rad": 1.0472,
+                "fov_elevation_rad": 0.2618,
+                "update_rate_hz": 20,
+                "cluster_range_m": 1.0,
+                "cluster_az_rad": 0.0873,
+                "cluster_el_rad": 0.0873,
+                "_comment_substrings": "Issue #826 — Echo detects ONLY these scene objects and EXCLUDES ground/floor/sky at the source (the anti-clutter mechanism the LiDAR emulation lacked). Substrings match scenario 30's assets (Pillar_50x500, Wall_400x400, SM_Chair, SM_Couch, SM_Bush, SK_Mannequin).",
+                "include_substrings": "Pillar,Wall,Chair,Couch,Bush,Mannequin",
+                "exclude_substrings": "Ground,Sky,SkyDome,Floor"
             }
         },
         "slam": {
