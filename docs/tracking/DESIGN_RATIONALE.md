@@ -1583,3 +1583,30 @@ no userspace trace — leaves every recurrence a shrug.
 **Revisit when:** real-hardware VIO attitude error is characterised (raise/lower the margin to match), OR a Mahalanobis/multi-return ground-plane estimator replaces the per-return altitude gate (would reject far ground safely and could close #815's arc), OR the typed-frames epic (#817) lands and lets `body_to_world` become a full rotation safely.
 
 **Date:** 2026-07-10 (Issue #816)
+
+---
+
+## DR-059: Gate the emitted object velocity on the UKF's own velocity covariance (Issue #826)
+
+**Question:** On the Cosys-AirSim LiDAR scenario, the fusion engine emitted **spurious velocities** for jittery / re-associated LiDAR clusters on a *static* scene (~90% of accepted objects carried > 0.5 m/s). Those velocities drove the planner's velocity-based prediction inflation (Issue #256) — each a 2 s swath — flooding the occupancy grid (`dynamic=8013`, `static`-cap saturated, **932 no-path** ticks) and sealing it; the drone couldn't complete the loop. Where should the noise be killed, and using what signal?
+
+**Context / why it matters:** the flood is *velocity*-driven, and the velocity is *unreliable at the source* (a static cluster isn't really moving; the velocity is LiDAR-association jitter). Two candidate fix sites: (a) a **grid-side backstop** (cap speculative prediction cells / dynamic cells), or (b) the **fusion source** (stop emitting the bad velocity). The user's decisive point: a backstop would *cap and mask* the flood, so we could no longer tell whether the root fix worked — the telemetry would be clamped either way. Fixing the source keeps `predictions`/`dynamic` as an honest measure. Critically, the *grid could not* gate cleanly: `DetectedObject` carries a raw `velocity` but no reliability signal. The UKF, however, *does* know — its state covariance `P` has a velocity block.
+
+**Decision — gate the emitted velocity on `P`'s velocity block:**
+
+1. **Add `ObjectUKF::velocity_covariance()` = `P_.block<3,3>(3,3)`** (state = `[x,y,z,vx,vy,vz]`). At each of the three fusion emit sites, route the velocity through `gated_velocity()`: if `max diagonal of velocity_covariance > velocity_reliability_max_cov`, emit **zero** velocity instead of the raw estimate.
+2. **`P` is initialised to `10·I`**, so a fresh / poorly-observed track (cov = 10) is *always* gated until it converges. A genuinely moving, well-tracked obstacle converges well below the `2.0 (m/s)²` default and predicts normally. This is the load-bearing property: the gate keys off *observation-driven convergence*, not a heuristic about the sensor.
+3. **Config-clamped, fail-safe.** `velocity_reliability_max_cov` (default 2.0, `0` disables) is `>= 0`. Bias: **drop an unreliable velocity** (a stationary/over-cautious obstacle is cheap; a phantom 2 s prediction swath sealing the grid is not). Zeroing velocity is *more* correct than propagating noise for every consumer, not just the grid.
+
+**Arguments considered:**
+- *Grid-side backstop only (cap prediction/dynamic cells)* — resolves the seal but **masks** whether the perception noise is actually fixed, and treats the symptom. Rejected as the primary fix per the observability-first argument; a cap can still be added later as defence-in-depth, but only once the source is measured clean.
+- *Raise the prediction speed threshold (0.5 → higher)* — a blunt planner-side knob that also suppresses real slow movers, and still trusts a noisy velocity below the new threshold. Rejected: not reliability-aware.
+- *Gate on track age / `radar_update_count`* — a coarser maturity proxy. Covariance subsumes it (a fresh track *has* high covariance) and directly measures reliability regardless of the maturation mechanism (re-association vs jitter). Covariance chosen; age remains available if a second signal is ever needed.
+
+**Scope / boundary (honest):** this fixes **Driver 2** (spurious-velocity prediction inflation — the dominant contributor). **Driver 1** (CosysRadar/LiDAR *over-clustering*: 268–463 clusters → ~53 objects vs 9 real) is a separate root, deferred until Driver-2 telemetry is measured — with **no backstop**, the next Cosys run's `predictions`/`dynamic` will show exactly how much of the flood Driver 2 accounted for and whether clustering must also be tightened.
+
+**Permanent instrumentation:** `[VelGate] gated=… emitted=…` (~10 s cadence, alongside the #816 `[GroundGate]` canary) so a scenario run records how many spurious velocities were zeroed — the canary that keeps this from silently regressing.
+
+**Revisit when:** Driver-2 telemetry is in — if the flood persists, tighten CosysRadar clustering (Driver 1); if real moving-obstacle scenarios (e.g. dynamic Cosys) show *under*-prediction, raise `velocity_reliability_max_cov` or add a converged-velocity fast-path.
+
+**Date:** 2026-07-14 (Issue #826)

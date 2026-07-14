@@ -94,9 +94,28 @@ struct RadarNoiseConfig {
     // false-accept (keep the obstacle).  Clamped [0, 0.35] at config load.
     float attitude_uncertainty_rad = 0.02f;
 
+    // Issue #826 — velocity-reliability gate. A fused object's velocity is emitted
+    // only if the UKF is confident about it: max diagonal of the velocity covariance
+    // block ≤ this threshold ((m/s)²). An immature or jittery track (e.g. a re-
+    // associated LiDAR cluster on a static scene) keeps a high velocity covariance,
+    // so its spurious velocity is zeroed instead of driving the planner's speculative
+    // prediction inflation (which floods and seals the grid — Cosys scenario 30).
+    // P is initialised to 10·I, so a fresh track (cov=10) is always gated until it
+    // converges. 0 = disabled (emit raw velocity, legacy). Real moving obstacles
+    // converge well below this and predict normally. Bias: drop unreliable velocity
+    // (over-caution is cheap; a phantom prediction swath sealing the grid is not).
+    float velocity_reliability_max_cov = 2.0f;
+
     /// Apply sign convention to raw azimuth. Inlined for hot-path use.
     [[nodiscard]] float az_sign(float raw_azimuth_rad) const {
         return negate_azimuth ? -raw_azimuth_rad : raw_azimuth_rad;
+    }
+
+    /// Issue #826 — return the UKF velocity if the estimate is reliable, else zero.
+    /// `max_vel_var` is the max diagonal of the velocity covariance block. Disabled
+    /// (returns the raw velocity) when the threshold is 0.
+    [[nodiscard]] bool velocity_reliable(float max_vel_var) const {
+        return velocity_reliability_max_cov <= 0.0f || max_vel_var <= velocity_reliability_max_cov;
     }
 };
 
@@ -156,6 +175,13 @@ public:
 
     /// Get position covariance (upper-left 3×3 of P).
     [[nodiscard]] Eigen::Matrix3f position_covariance() const;
+
+    /// Get velocity covariance (lower-right 3×3 of P, state indices 3..5).
+    /// Issue #826 — the reliability signal for the emitted velocity: an immature
+    /// or noisy track (e.g. a jittery LiDAR cluster) keeps a high velocity
+    /// covariance, so gating the emitted velocity on this stops noise from driving
+    /// the planner's speculative prediction inflation.
+    [[nodiscard]] Eigen::Matrix3f velocity_covariance() const;
 
     /// Access radar noise matrix for gating computations.
     [[nodiscard]] const RadarMeasMat& radar_noise() const { return R_radar_; }
@@ -306,6 +332,15 @@ public:
         return max_attitude_correction_mm_.load(std::memory_order_relaxed);
     }
 
+    /// Issue #826 — velocity-reliability gate telemetry. `gated` = velocities
+    /// zeroed as unreliable; `emitted` = total considered. A persistently high
+    /// gated fraction on a static scene means the fix is doing its job (killing
+    /// the spurious LiDAR-cluster velocities that drove prediction inflation).
+    [[nodiscard]] uint64_t velocity_gated_count() const noexcept { return velocity_gated_count_; }
+    [[nodiscard]] uint64_t velocity_emitted_count() const noexcept {
+        return velocity_emitted_count_;
+    }
+
     /// Issue #816 — attitude-aware ground gate.  Returns true if a radar return
     /// at (range, RAW sensor azimuth, elevation) should be suppressed as a
     /// ground return, given the current pose (`set_drone_pose`) + altitude.
@@ -333,6 +368,18 @@ private:
     float drone_up_{0.0f};
     float drone_yaw_{0.0f};  // derived from the quaternion (yaw-only consumers)
     bool  has_pose_{false};
+
+    // Issue #826 — velocity-reliability gate telemetry. fuse() runs on the single
+    // fusion thread, so plain counters (no atomics). Surfaced periodically so the
+    // scenario run-report can confirm how many spurious velocities were zeroed.
+    uint64_t velocity_gated_count_{0};    // velocities zeroed as unreliable
+    uint64_t velocity_emitted_count_{0};  // total velocities considered
+
+    /// Issue #826 — the fused object's velocity, zeroed when the UKF's velocity
+    /// covariance says the estimate is unreliable (immature / jittery track). This
+    /// is the root fix for the Cosys LiDAR-cluster prediction-inflation flood:
+    /// stop noisy velocities at the source so they never reach the planner grid.
+    [[nodiscard]] Eigen::Vector3f gated_velocity(const ObjectUKF& ukf);
     // Issue #816 — full body→world orientation.  Stored as a quaternion so the
     // ground gate can compute a return's true world altitude under any attitude
     // (not just yaw).  Identity until the first pose arrives.

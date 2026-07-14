@@ -180,6 +180,8 @@
                 "_comment_attitude_uncertainty": "#816 — fail-safe margin (rad) on the attitude-aware ground gate: reject a return as ground only if (world_alt + range·sin(attitude_uncertainty_rad)) < min_object_altitude_m. Must be >= the VIO attitude error, else a floor-height real obstacle is dropped under attitude error. This caps ground-rejection range at floor/sin(margin) (~15 m at 0.02): near ground is rejected, far ground is fail-safe KEPT and left to Phase-B static-cell decay + the reactive avoider. Biases false-accept per the perception-suppression-gate rule. Clamped [0, 0.35].",
                 "attitude_uncertainty_rad": 0.02,
                 "altitude_gate_m": 2.0,
+                "_comment_velocity_reliability": "Issue #826 — velocity-reliability gate: a fused object's velocity is emitted only if its UKF velocity covariance (max diagonal, (m/s)^2) is <= this; otherwise it is ZEROED. Stops spurious velocities from jittery/immature tracks (e.g. LiDAR clusters on a static scene) from driving the planner's speculative prediction inflation, which floods and seals the grid (Cosys scenario 30: dynamic 8013, static-cap 500, 932 no-path). P inits to 10*I so fresh tracks are always gated until converged; real movers converge well below 2.0 and predict normally. 0 = disabled (legacy raw velocity). DR-NNN.",
+                "velocity_reliability_max_cov": 2.0,
                 "orphan_proximity_m": 5.0,
                 "max_orphan_range_m": 25.0,
                 "promotion_hits": 6,

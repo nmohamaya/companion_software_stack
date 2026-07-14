@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2197 (no SDK, 8 Cosys-SDK tests skipped) / 2205 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #821 Phase 1 (planner responsiveness diagnostics) +3 tests — new `Issue821PlannerDiag` suite in `test_dstar_lite_planner.cpp` (now 112): no-path increments the counter, shadow-A* probe leaves the trajectory byte-identical (observation-only proof), goal-flip counts as a re-init. `ctest -N --test-dir build` reports **2197** (no SDK, live SSOT) / **2205** (+SDK). Previous PR (#816 PR2): +5 `GazeboRadarGroundGate` tests. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2200 (no SDK, 8 Cosys-SDK tests skipped) / 2208 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #826 (velocity-reliability gate) +3 tests — new `Issue826VelocityGate` suite in `test_fusion_engine.cpp`: gate logic, a fresh track's velocity is zeroed (cov=10·I ≫ 2.0 threshold), disabled passes raw velocity. `ctest -N --test-dir build` reports **2200** (no SDK, live SSOT) / **2208** (+SDK). Previous PR (#821 Phase 1): +3 `Issue821PlannerDiag` tests. (Note: PR #825 / Issue #824 Fix A adds +2 `Issue824FloodGuard` on a separate branch — not yet reflected here.) For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -555,7 +555,7 @@ solver. These are shared infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 90 tests
+### test_fusion_engine.cpp — 93 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
 IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237),
