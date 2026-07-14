@@ -44,7 +44,14 @@ class CosysRpcClient {
 public:
     /// @param host  Cosys-AirSim RPC host (e.g. "127.0.0.1")
     /// @param port  Cosys-AirSim RPC port (e.g. 41451)
-    CosysRpcClient(const std::string& host, uint16_t port) : host_(host), port_(port) {}
+    /// @param rpc_timeout_sec  Per-call RPC timeout (Issue #826). The AirSim client
+    ///        defaults to 60 s — far too long for a real-time sensor poll: a single
+    ///        stalled getEchoData/getImages holds the shared rpc_mtx_ for 60 s and
+    ///        freezes EVERY Cosys sensor (observed as a full-stack hang → force-quit).
+    ///        5 s bounds a stall to a brief hiccup; the connect() retry loop still
+    ///        rides out UE5 startup (each attempt just fails faster and retries).
+    CosysRpcClient(const std::string& host, uint16_t port, float rpc_timeout_sec = 5.0f)
+        : host_(host), port_(port), rpc_timeout_sec_(rpc_timeout_sec) {}
 
     ~CosysRpcClient() noexcept { disconnect(); }
 
@@ -60,7 +67,8 @@ public:
         std::lock_guard<std::mutex> lock(rpc_mtx_);
         DRONE_LOG_INFO("[CosysRpcClient] Connecting to {}:{} ...", host_, port_);
         try {
-            rpc_client_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(host_, port_);
+            rpc_client_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(host_, port_,
+                                                                                rpc_timeout_sec_);
             rpc_client_->confirmConnection();
             rpc_client_->enableApiControl(true);
             connected_.store(true, std::memory_order_release);
@@ -133,9 +141,11 @@ public:
     }
 
 private:
-    std::string       host_{"127.0.0.1"};  ///< AirSim RPC host (default matches config)
-    uint16_t          port_{41451};        ///< AirSim RPC port (default matches config)
-    std::atomic<bool> connected_{false};   ///< Lock-free health check (fast path)
+    std::string host_{"127.0.0.1"};       ///< AirSim RPC host (default matches config)
+    uint16_t    port_{41451};             ///< AirSim RPC port (default matches config)
+    float       rpc_timeout_sec_{5.0f};   ///< Per-call RPC timeout (#826); 60 s AirSim
+                                          ///< default froze the stack on a stalled poll.
+    std::atomic<bool> connected_{false};  ///< Lock-free health check (fast path)
 
     /// Mutex serialises connect/disconnect/with_client to prevent TOCTOU races.
     /// Not used for is_connected() (atomic, lock-free) — only for operations

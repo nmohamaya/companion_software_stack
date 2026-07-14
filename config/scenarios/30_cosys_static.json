@@ -92,8 +92,7 @@
                 "cluster_range_m": 1.0,
                 "cluster_az_rad": 0.0873,
                 "cluster_el_rad": 0.0873,
-                "_comment_substrings": "Issue #826 — Echo detects ONLY these scene objects and EXCLUDES ground/floor/sky at the source (the anti-clutter mechanism the LiDAR emulation lacked). Substrings match scenario 30's assets (Pillar_50x500, Wall_400x400, SM_Chair, SM_Couch, SM_Bush, SK_Mannequin).",
-                "include_substrings": "Pillar,Wall,Chair,Couch,Bush,Mannequin",
+                "_comment_substrings": "Issue #826 — BLOCKLIST mode: emit every in-FOV Echo bin EXCEPT ground/floor/sky. No include allowlist: is_excluded's allowlist match is case-sensitive substring, and the Echo groundtruth annotation labels are not the asset names we'd guess (a wrong allowlist skipped ALL 9 real objects → 0 emitted). The Echo already narrows to ~9 in-FOV bins (the real scene objects), so excluding Ground/Floor/Sky is sufficient and label-agnostic.",
                 "exclude_substrings": "Ground,Sky,SkyDome,Floor"
             }
         },
