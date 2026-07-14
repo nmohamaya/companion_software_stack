@@ -104,7 +104,8 @@ public:
                              int   voxel_instance_promotion_observations = 0,
                              float min_obstacle_altitude_m               = 0.0f,
                              int   dynamic_confirmation_hits             = 1,
-                             float min_promotion_altitude_m              = 0.0f)
+                             float min_promotion_altitude_m              = 0.0f,
+                             float max_obstacle_inflation_radius_m       = 0.0f)  // #824 (0 = off)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -132,7 +133,8 @@ public:
         , voxel_instance_promotion_observations_(voxel_instance_promotion_observations)
         , min_obstacle_altitude_m_(min_obstacle_altitude_m)
         , dynamic_confirmation_hits_(dynamic_confirmation_hits)
-        , min_promotion_altitude_m_(min_promotion_altitude_m) {}
+        , min_promotion_altitude_m_(min_promotion_altitude_m)
+        , max_obstacle_inflation_radius_m_(max_obstacle_inflation_radius_m) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -163,6 +165,7 @@ public:
         total_cross_veto_deferred_  = 0;  // Issue #698 Fix #1 (Phase 3)
         total_fov_silence_promoted_ = 0;
         total_age_cap_evicted_      = 0;
+        total_radius_clamped_       = 0;  // Issue #824
         promoted_count_             = 0;
         hit_count_.clear();
         instances_.clear();
@@ -743,16 +746,44 @@ public:
             const bool has_radar_size = obj.radar_update_count > 0 &&
                                         std::isfinite(obj.estimated_radius_m) &&
                                         obj.estimated_radius_m > 0.0f;
+            // Issue #824 — FLOOD-GUARD: bound the radar footprint to a physically-
+            // sane obstacle size, not the grid half-extent. The half-extent clamp
+            // below is only a #792 *hang*-guard (keeps ceil()/res in int range); it
+            // still lets a degenerate estimated_radius_m (~46 m observed) inflate one
+            // object across the whole grid and seal it. When max_obstacle_inflation_
+            // radius_m_ > 0, cap the radius there first (still ≤ half-extent for the
+            // UB guard). Fail-safe: this can only *shrink* an over-inflated footprint,
+            // never grow one, and a real larger obstacle is covered by multiple
+            // detections + the reactive ObstacleAvoider3D. See DR-058.
+            // Clamp the float to the half-extent BEFORE the int cast (mirrors the
+            // obj_inflation UB-guard below): a finite-but-absurd config value would
+            // otherwise make ceil()/res exceed INT_MAX and the cast itself is UB.
+            // Unreachable in production (config clamped [0,50]) but keeps a direct
+            // OccupancyGrid3D(...) construction safe.
+            const int radar_inflation_cap =
+                max_obstacle_inflation_radius_m_ > 0.0f
+                    ? std::max(1, static_cast<int>(std::min(
+                                      std::ceil(max_obstacle_inflation_radius_m_ / resolution_),
+                                      static_cast<float>(half_extent_cells_))))
+                    : half_extent_cells_;
             // Clamp in float BEFORE the int cast: a finite-but-absurd radius
             // (e.g. 1e30) would make ceil()/res exceed INT_MAX and the int cast
-            // itself is UB. Clamping the float to the grid half-extent first means
-            // the cast always sees a small in-range value.
+            // itself is UB. Clamping the float to the cap first means the cast
+            // always sees a small in-range value.
             const int obj_inflation =
                 has_radar_size
                     ? static_cast<int>(std::clamp(
                           std::ceil((obj.estimated_radius_m + resolution_ * 0.5f) / resolution_),
-                          1.0f, static_cast<float>(std::max(1, half_extent_cells_))))
+                          1.0f, static_cast<float>(std::max(1, radar_inflation_cap))))
                     : inflation_cells_;
+            // #824 — count when the flood-guard actually bounded a footprint (the raw
+            // radius wanted more cells than the cap). Surfaced in the [Grid] summary as
+            // `radius_clamped=` so the run-report can prove the guard is doing work.
+            if (has_radar_size && max_obstacle_inflation_radius_m_ > 0.0f &&
+                std::ceil((obj.estimated_radius_m + resolution_ * 0.5f) / resolution_) >
+                    static_cast<float>(radar_inflation_cap)) {
+                ++total_radius_clamped_;
+            }
 
             // Per-object promotion eligibility (invariant across inflated cells).
             //
@@ -914,17 +945,22 @@ public:
                 "[Grid] {} objs (accepted={}, suppressed={}, ground_rejected={}, nan_rejected={}, "
                 "takeoff_suppressed={}, excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
-                "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={}",
+                "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={} radius_clamped={}",
                 objects.num_objects, accepted, suppressed, ground_rejected, nan_rejected,
                 takeoff_suppressed, excluded_cells, occupied_.size(), static_occupied_.size(),
                 promoted_count_, hd_map_static_count_, max_static_cells_,
                 total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
-                total_cross_veto_deferred_, total_fov_silence_promoted_, total_age_cap_evicted_);
+                total_cross_veto_deferred_, total_fov_silence_promoted_, total_age_cap_evicted_,
+                total_radius_clamped_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
-                    DRONE_LOG_DEBUG("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
-                                    obj.position_x, obj.position_y, obj.position_z, obj.confidence);
+                    // #824 — include the back-projected radius + radar-update count so a
+                    // flood is instantly diagnosable (a degenerate radius stands out).
+                    DRONE_LOG_DEBUG("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f} "
+                                    "est_radius={:.1f}m radar_updates={}",
+                                    i, obj.position_x, obj.position_y, obj.position_z,
+                                    obj.confidence, obj.estimated_radius_m, obj.radar_update_count);
                 }
             }
         }
@@ -995,6 +1031,9 @@ public:
         return total_fov_silence_promoted_;
     }
     [[nodiscard]] uint64_t total_age_cap_evicted() const { return total_age_cap_evicted_; }
+    /// Issue #824 — count of objects whose inflation footprint the flood-guard
+    /// bounded (raw radar radius exceeded `max_obstacle_inflation_radius_m`).
+    [[nodiscard]] uint64_t total_radius_clamped() const { return total_radius_clamped_; }
     /// Backwards-compatible aggregate of the two single-modality escape
     /// hatches (FOV silence + age-cap eviction).  Used by the periodic
     /// `[Grid]` diagnostic line and any consumer that doesn't care which
@@ -1338,6 +1377,7 @@ private:
     uint64_t total_cross_veto_deferred_{0};
     uint64_t total_fov_silence_promoted_{0};
     uint64_t total_age_cap_evicted_{0};
+    uint64_t total_radius_clamped_{0};  // #824 — objects whose inflation the flood-guard bounded
     // PR #661 P2 review: pause flags are written by the FSM tick thread
     // (mission_state_tick) and read by the planner thread inside
     // update_from_objects().  Atomic with acquire/release ordering closes
@@ -1384,6 +1424,10 @@ private:
     // Issue #789 — suppress STATIC promotion while the drone is below this altitude
     // (takeoff window); 0 = off. Dynamic ingestion + reactive avoider unaffected.
     float min_promotion_altitude_m_{0.0f};
+    // Issue #824 — flood-guard: hard cap (m) on per-object inflation radius. When
+    // >0, the radar back-projected footprint is clamped to this instead of the grid
+    // half-extent, so a degenerate estimated_radius_m can't seal the grid. 0 = off.
+    float max_obstacle_inflation_radius_m_{0.0f};
     // Per-instance observation tracking for the Phase 3 gate.  Keyed by the
     // stable instance_id from Phase 2's tracker.  Each entry counts the
     // number of distinct insert_voxels() batches that have referenced this

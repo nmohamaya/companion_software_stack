@@ -254,6 +254,8 @@
             "_comment_789": "Takeoff promotion guard (#789), DISABLED by default (0 = off). When >0, STATIC promotion is suppressed while the drone is below this altitude (climbing off the pad), so the ground/landing-pad it sees while low don't flood the static layer (saturating max_static_cells). Dynamic ingestion + reactive ObstacleAvoider3D stay active, so it's fail-safe. Sensor-driven no-HD-map scenarios (e.g. 18) opt into a positive value (~2m).",
             "min_promotion_depth_confidence": 0.5,
             "max_static_cells": 0,
+            "_comment_824": "Issue #824 flood-guard: per-object inflation radius (m) is hard-capped at this before it reaches the grid, so a degenerate radar back-projected radius (observed ~46 m) can't inflate one object across the whole grid and seal it. 8 m is generous for any single real obstacle (larger geometry is represented by multiple detections); the reactive ObstacleAvoider3D backstops. 0 = off (legacy half-extent cap). DR-058.",
+            "max_obstacle_inflation_radius_m": 8.0,
             "require_radar_for_promotion": false,
             "prediction_enabled": true,
             "prediction_dt_s": 2.0,

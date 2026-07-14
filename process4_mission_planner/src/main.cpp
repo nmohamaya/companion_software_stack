@@ -345,6 +345,16 @@ int main(int argc, char* argv[]) {
         ctx.cfg, drone::cfg_key::mission_planner::occupancy_grid::MIN_PROMOTION_ALTITUDE_M,
         planner_cfg.min_promotion_altitude_m, 0.0f, 5.0f,
         "occupancy_grid.min_promotion_altitude_m");
+    // Issue #824 — flood-guard cap on per-object inflation radius. Clamp [0,50]:
+    // 0 disables (legacy half-extent cap); 50 m is a sane physical ceiling (a real
+    // obstacle can't be larger, and the grid half-extent bounds it further at the
+    // clamp site). Biased toward false-accept — 8 m still covers any single real
+    // obstacle, so a typo can't shrink real geometry to nothing, while any value
+    // < the degenerate ~46 m stops the grid-seal flood.
+    planner_cfg.max_obstacle_inflation_radius_m = validate_and_clamp<float>(
+        ctx.cfg, drone::cfg_key::mission_planner::occupancy_grid::MAX_OBSTACLE_INFLATION_RADIUS_M,
+        planner_cfg.max_obstacle_inflation_radius_m, 0.0f, 50.0f,
+        "occupancy_grid.max_obstacle_inflation_radius_m");
     // dynamic_confirmation_hits: observations before a camera cell becomes a
     // planning obstacle (1 = off). Safety clamp (same hazard as the instance-
     // promotion gate above): a huge value means camera obstacles NEVER reach the

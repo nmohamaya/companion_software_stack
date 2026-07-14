@@ -4342,4 +4342,20 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #120 — Occupancy-grid flood-guard: cap per-object inflation radius (Issue #824 Fix A)
+
+**Date:** 2026-07-13  
+**Category:** Mission Planner / Perception→Grid / Safety (Issue #824 Fix A — the grid-side backstop)  
+**Files Modified:**
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — `max_obstacle_inflation_radius_m` clamps a radar-confirmed object's inflation to a physically-sane footprint instead of the grid half-extent (the #792 hang-guard). Adds the `total_radius_clamped()` counter (surfaced as `radius_clamped=` in the periodic `[Grid]` line) and per-object `est_radius=`/`radar_updates=` in the `[Grid]` DEBUG line.
+- `process4_mission_planner/include/planner/grid_planner_base.h` — `GridPlannerConfig::max_obstacle_inflation_radius_m` (default 8 m, **active by default** so un-updated configs are protected); passed through to the grid.
+- `common/util/include/util/config_keys.h`, `config/default.json` — `mission_planner.occupancy_grid.max_obstacle_inflation_radius_m` key + default (8.0).
+- `process4_mission_planner/src/main.cpp` — config read via `validate_and_clamp` ([0,50], biased false-accept).
+- `process4_mission_planner/include/planner/dstar_lite_planner.h` — fixed the mislabelled `dynamic=` field in the `[D*Lite] No path` log (PR #822 printed the dynamic count under `occupied=` and `dynamic − static` under `dynamic=`).
+- `tests/test_dstar_lite_planner.cpp` — +2 (`Issue824FloodGuard`): a degenerate radar radius clamps to the cap; the guard strictly shrinks the footprint vs the legacy half-extent (one object → >1000 cells pre-fix), and never grows it.
+
+**What/Why:** A captured scenario-18 bad run (via `tools/capture_planner_bad_run.sh`) showed a single radar-confirmed object with a degenerate ~46 m back-projected radius inflating to ~1686 cells and saturating the `max_static_cells=800` cap, genuinely sealing the planning grid — the drone stalled and the mission FAILED (`shadow_astar_pts=0`: a full A\* also found no path, so this is **not** a planner bug — #821's A\*-fallback idea was correctly rejected by the data). Fix A is the grid-side **flood-guard**: cap the per-object inflation radius, fail-safe (can only shrink an over-inflated footprint; a real larger obstacle is covered by multiple detections + the reactive `ObstacleAvoider3D`). Fix B (validate `estimated_radius_m` at the UKF source) lands as a separate PR — defense-in-depth. See DR-058; root-cause analysis in BUG_FIXES Fix #824. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #120 (Issue #824 Fix A — occupancy-grid inflation flood-guard). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

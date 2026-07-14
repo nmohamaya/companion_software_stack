@@ -490,6 +490,13 @@ inline constexpr const char* RADAR_PROMOTION_HITS =
 inline constexpr const char* MIN_PROMOTION_DEPTH_CONFIDENCE =
     "mission_planner.occupancy_grid.min_promotion_depth_confidence";
 inline constexpr const char* MAX_STATIC_CELLS = "mission_planner.occupancy_grid.max_static_cells";
+// Issue #824 — flood-guard: hard cap on per-object inflation radius (metres). A
+// radar-confirmed object inflates using its back-projected estimated_radius_m,
+// previously clamped only to the grid half-extent (a #792 *hang*-guard). A
+// degenerate ~46 m radius could inflate one object to ~1686 cells and seal the
+// grid. This bounds the footprint to a physically-sane obstacle size (0 = off).
+inline constexpr const char* MAX_OBSTACLE_INFLATION_RADIUS_M =
+    "mission_planner.occupancy_grid.max_obstacle_inflation_radius_m";
 inline constexpr const char* REQUIRE_RADAR_FOR_PROMOTION =
     "mission_planner.occupancy_grid.require_radar_for_promotion";
 inline constexpr const char* PREDICTION_ENABLED =

@@ -3386,3 +3386,23 @@ the first commit. Bug C — CI ThreadSanitizer leg on PR #782.
 3. Rate-limit / debounce floors must be recorded on the *dominant* outcome
    path, not just the success path — for a stuck-thread tool the dominant
    path is timeout.
+
+---
+
+### Fix #824 — Radar over-inflation floods the occupancy grid and seals the planning grid (Issue #824)
+
+**Date:** 2026-07-13
+**Severity:** High — denial-of-navigation (mission stall). Not loss-of-vehicle (the drone hovers safely), but a single ghost/degenerate detection can seal the entire planning grid.
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `grid_planner_base.h`, `common/util/include/util/config_keys.h`, `config/default.json`, `process4_mission_planner/src/main.cpp` (Fix A). Fix B (UKF source) in a follow-up PR.
+
+**Root cause.** A radar-confirmed obstacle inflates the occupancy grid using its back-projected `estimated_radius_m` (`ukf_fusion_engine.cpp:1485`, `= bbox_w · range / (2·fx)` — which explodes for a wide bbox at long range), clamped only to the grid half-extent (`occupancy_grid_3d.h`, Issue #792). That half-extent clamp is a *hang*-guard (keeps `ceil(radius/res)` in `int` range), **not** a *flood*-guard: there was no physically-sane upper bound on obstacle radius. A single object with a degenerate ~46 m radius inflated to ~1686 cells (~67% of the 2 m-resolution flight plane) and, being radar-confirmed, promoted to the `max_static_cells=800` cap — permanently sealing the grid.
+
+**Symptom & how it was found.** Scenario-18 (`perception_avoidance`) intermittently FAILED on "Mission complete" (drone stalls, no collision, no emergency-land). Found by capturing a bad run with `tools/capture_planner_bad_run.sh` (built on the PR #822 `[PlannerDiag]` instrumentation): `no_path=22`, and **`shadow_astar_pts=0` on all 60 no-path ticks** — a full A\* also finds no path, proving the seal is REAL (not D\*Lite incremental staleness). This correctly *rejected* the Issue-#821 A\*-fallback hypothesis before it was implemented. The `[Grid]` telemetry showed `static` pinned at 800 and `occupied` (dynamic) peaking at 1686 from only ~5 UKF tracks / 1–15 fused objects (scenario has 4 real obstacles) → a few objects with enormous footprints, not a detection-count flood.
+
+**Fix A (this PR) — grid-side flood-guard (fail-safe backstop).** `max_obstacle_inflation_radius_m` (config, default 8 m, active by default) caps the per-object inflation footprint. Fail-safe by construction: it can only *shrink* an over-inflated footprint, never grow one; a genuinely large obstacle is covered by multiple detections + the reactive `ObstacleAvoider3D` (which consumes the raw `DetectedObjectList`, not this grid). Regression test `Issue824FloodGuard` asserts a degenerate radius clamps (one object: >1000 cells → <300). See DR-058.
+
+**Fix B (follow-up PR) — UKF source clamp (root cause).** Validate/clamp `estimated_radius_m` at `ukf_fusion_engine.cpp` so a track cannot emit an absurd radius (ties into Epic #237 size estimation + #799 radar-ghost suppression). Defense-in-depth with Fix A.
+
+**Also fixed:** the mislabelled `dynamic=` field in the `[D*Lite] No path` log (PR #822 printed the dynamic count under `occupied=` and `dynamic − static` under `dynamic=`).
+
+**Found by:** capture-harness bad-run + `[PlannerDiag]`/`[Grid]` instrumentation (observability-before-remediation). **Prevention:** the `radius_clamped=` counter in the `[Grid]` run-report surfaces the guard firing so this bug class cannot silently recur.
