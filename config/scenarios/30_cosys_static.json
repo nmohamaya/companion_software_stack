@@ -148,14 +148,14 @@
                 "path_aware_bypass_hysteresis_m": 0.5,
                 "log_corrections": true
             },
+            "_comment_grid_826": "Issue #826 — finer grid + smaller inflation now that the echo radar (cosys_echo) reports ~9 real objects instead of the LiDAR emulation's thousands of ghost cells. The old 2.0 m / 2.5 m combo (a LiDAR-flood-era holdover to keep D*Lite tractable) closed EVERY gap < 5.7 m and, worse, inflation (2.5 m) EXCEEDED acceptance_radius_m (2.0 m) — so waypoints placed near obstacles (which this scenario does deliberately) fell INSIDE the inflated obstacle and became unreachable → 'the side of the block looks empty but is treated as blocked'. resolution 2.0→1.0 (representable gaps; tractable with ~9 objects), inflation 2.5→1.2 (drone radius ~0.35 m + margin, and < acceptance_radius so goals stay reachable), max_static_cells 500→1500 (finer grid = more cells per obstacle; the echo no longer floods).",
             "occupancy_grid": {
-                "_comment": "Scenario 30 grid tuning post-#513 color_contour switch: previous run hit max_static_cells=1000 cap with 8725 total occupied cells — D*Lite saw walls everywhere and couldn't find a path. Raised promotion_hits 5→10 so a cell needs more confident observations before sticking; reduced max_static_cells 1000→500 so the grid stays tractable for D*Lite search. inflation_radius_m kept at 2.5 (drone footprint + margin).",
-                "resolution_m": 2.0,
-                "inflation_radius_m": 2.5,
+                "resolution_m": 1.0,
+                "inflation_radius_m": 1.2,
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
                 "promotion_hits": 10,
-                "max_static_cells": 500
+                "max_static_cells": 1500
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via radar+camera+depth fusion — the RPC-spawned scene objects are the world.",
