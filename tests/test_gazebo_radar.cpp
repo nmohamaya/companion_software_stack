@@ -321,6 +321,21 @@ TEST(GazeboRadarGroundGate, MountCompensationTiltsRayIntoBodyFrame) {
     EXPECT_NEAR(el_i, -0.2f, 1e-5f);
 }
 
+TEST(GazeboRadarGroundGate, MountAngleClampGuardsTypos) {
+    // Issue #816 PR #819 review (Minor 3): mount extrinsics are unvalidated
+    // config; a "-8.7" typo for "-0.087" would mis-project every ray by ~500°.
+    // In-range values (incl. the physical extremes ±π) pass through untouched.
+    EXPECT_FLOAT_EQ(drone::hal::GazeboRadarBackend::clamp_mount_angle_rad(-0.087f), -0.087f);
+    EXPECT_FLOAT_EQ(drone::hal::GazeboRadarBackend::clamp_mount_angle_rad(0.0f), 0.0f);
+    constexpr float kPi = 3.14159265358979323846f;
+    EXPECT_FLOAT_EQ(drone::hal::GazeboRadarBackend::clamp_mount_angle_rad(kPi), kPi);
+    EXPECT_FLOAT_EQ(drone::hal::GazeboRadarBackend::clamp_mount_angle_rad(-kPi), -kPi);
+    // Out-of-range typos clamp to the ±π bound (the WARN, tested via log at
+    // construction, is the operator-facing half of the guard).
+    EXPECT_FLOAT_EQ(drone::hal::GazeboRadarBackend::clamp_mount_angle_rad(-8.7f), -kPi);
+    EXPECT_FLOAT_EQ(drone::hal::GazeboRadarBackend::clamp_mount_angle_rad(100.0f), kPi);
+}
+
 TEST(GazeboRadarGroundGate, RealObstacleKeptAcrossPitchSweep) {
     // THE safety property at the HAL layer: a real 1.7 m obstacle at 15 m,
     // pitch swept ±25° (beyond the airframe envelope) — the gate must NEVER
