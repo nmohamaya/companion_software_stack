@@ -755,11 +755,16 @@ public:
             // UB guard). Fail-safe: this can only *shrink* an over-inflated footprint,
             // never grow one, and a real larger obstacle is covered by multiple
             // detections + the reactive ObstacleAvoider3D. See DR-058.
+            // Clamp the float to the half-extent BEFORE the int cast (mirrors the
+            // obj_inflation UB-guard below): a finite-but-absurd config value would
+            // otherwise make ceil()/res exceed INT_MAX and the cast itself is UB.
+            // Unreachable in production (config clamped [0,50]) but keeps a direct
+            // OccupancyGrid3D(...) construction safe.
             const int radar_inflation_cap =
                 max_obstacle_inflation_radius_m_ > 0.0f
-                    ? std::min(half_extent_cells_,
-                               std::max(1, static_cast<int>(std::ceil(
-                                               max_obstacle_inflation_radius_m_ / resolution_))))
+                    ? std::max(1, static_cast<int>(std::min(
+                                      std::ceil(max_obstacle_inflation_radius_m_ / resolution_),
+                                      static_cast<float>(half_extent_cells_))))
                     : half_extent_cells_;
             // Clamp in float BEFORE the int cast: a finite-but-absurd radius
             // (e.g. 1e30) would make ceil()/res exceed INT_MAX and the int cast
