@@ -16,6 +16,12 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-07-14 (noticed verifying #816 follow-ups — cmake version bump silently broke the test suite)
+
+#### `deploy/build.sh` should auto-reconfigure (`--fresh`) when the configured cmake version no longer matches the cmake on PATH
+
+- **P2** (`build`, `dev-tooling`; `deploy/build.sh`, `deploy/run_ci_local.sh`) — a local `build/` dir configured by **cmake 4.3** silently broke after cmake was upgraded to **4.4**: the stale generated `build.make` `gtest_discover_tests` POST-BUILD commands still `-P /usr/share/cmake-4.3/Modules/GoogleTestAddTests.cmake`, which no longer exists (it moved to `cmake-4.4/`), so **every** test target failed at discovery — and because the failing command is part of the link rule, `make` *deletes the just-linked test binary*, making it look like the build produced nothing. A plain `cmake .` reconfigure does **not** fix it (it updates `CMAKE_ROOT` in the cache but doesn't rewrite the already-generated `build.make` files). Only `cmake --fresh` / `rm -rf build/*` regenerates them. **Fix:** have `deploy/build.sh` compare the cmake version recorded in `build/CMakeCache.txt` (`CMAKE_CACHE_MAJOR/MINOR_VERSION`) against `cmake --version` and auto-run `cmake --fresh` (or warn loudly) on mismatch, so a toolchain bump can't leave a half-broken build dir. **When to do it:** next build-tooling window, or the next time someone's suite mysteriously "produces no binaries" after a system update. **Cross-ref:** noticed during #816 PR #819 review follow-ups (repaired locally by sed-fixing the 73 stale `build.make` paths).
+
 ### 2026-07-13 (Issue #816 PR2 / CI-013 — guarded-test compile gap)
 
 #### Add a no-Gazebo (and no-Cosys) compile check to local CI so `#else`-branch breaks are caught before push
