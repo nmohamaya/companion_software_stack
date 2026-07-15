@@ -4342,4 +4342,18 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #121 — Velocity-reliability gate at the fusion source (Issue #826, Cosys LiDAR flood)
+
+**Date:** 2026-07-14  
+**Category:** Perception / Fusion / Safety (Issue #826 — perception root fix, no backstop)  
+**Files Modified:**
+- `process2_perception/include/perception/ukf_fusion_engine.h` / `.cpp` — added `ObjectUKF::velocity_covariance()` (= `P` velocity block); `RadarNoiseConfig::velocity_reliability_max_cov` + `velocity_reliable()` helper; `UKFFusionEngine::gated_velocity()` routes all three fusion velocity-emit sites so an unreliable velocity is zeroed at the source; `[VelGate] gated=/emitted=` telemetry accessors.
+- `process2_perception/src/main.cpp` — periodic `[VelGate]` canary (~10 s, beside the #816 `[GroundGate]` line).
+- `config/default.json` — `perception.fusion.radar.velocity_reliability_max_cov` (default 2.0; 0 disables).
+- `tests/test_fusion_engine.cpp` — +3 (`Issue826VelocityGate`): gate logic, a fresh track's velocity is zeroed (cov=50·I ≫ 2.0), disabled passes raw velocity.
+
+**What/Why:** On the Cosys-AirSim LiDAR scenario the drone took off but moved erratically, never rounded the obstacle course, and hovered/landed near start (user-observed). Telemetry: `dynamic=8013`, `static`-cap saturated, **932 no-path** ticks — the grid was *sealed*. Root: ~90% of the "static" LiDAR clusters carried spurious velocities (> 0.5 m/s) from cluster-association jitter, and the planner's velocity-prediction inflation (#256) sprayed a 2 s swath per object, flooding the grid. The #824 radius flood-guard fired but couldn't help — this is a *velocity/count* flood, not a *radius* one. The grid can't gate (its `DetectedObject` has no reliability signal), but the UKF knows its own velocity covariance — so the fix zeroes the velocity at the fusion source when the estimate is unreliable (`P` inits to 50·I → fresh tracks always gated until converged; real movers converge < 2.0 and predict normally). **No grid backstop** — deliberately, so the next Cosys run's `predictions`/`dynamic` telemetry directly measures whether the root fix worked (a backstop would mask it). Fixes **Driver 2** (dominant); **Driver 1** (LiDAR over-clustering, 268–463 clusters → ~53 objects vs 9 real) is assessed after this validates. See DR-059; BUG_FIXES Fix #826. Counts SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #121 (Issue #826 — velocity-reliability gate). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

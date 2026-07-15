@@ -3386,3 +3386,21 @@ the first commit. Bug C — CI ThreadSanitizer leg on PR #782.
 3. Rate-limit / debounce floors must be recorded on the *dominant* outcome
    path, not just the success path — for a stuck-thread tool the dominant
    path is timeout.
+
+---
+
+### Fix #826 — Spurious LiDAR-cluster velocities flood & seal the planning grid (Issue #826)
+
+**Date:** 2026-07-14
+**Severity:** High — denial-of-navigation (mission stall) on the Cosys-AirSim LiDAR scenario. Distinct root from #824.
+**Files:** `process2_perception/include/perception/ukf_fusion_engine.h`, `process2_perception/src/ukf_fusion_engine.cpp`, `process2_perception/src/main.cpp`, `config/default.json`.
+
+**Symptom & how it was found.** On `cosys_static` (scenario 30, Cosys-AirSim/UE5, run with `--gui`), the drone took off but moved erratically, never rounded the obstacle course (reached only waypoint 2/3), returned near start, hovered, and landed — user-observed and telemetry-confirmed: `[D*Lite] No path` = **932 ticks**, `dynamic(peak)=8013`, `static(peak)=500` (= `max_static_cells` cap), `predictions(peak)=34980`, 10× `NAVIGATE_UNSTUCK`. The #824 radius flood-guard (Fix A) **fired** (`radius_clamped=89`) but did not help.
+
+**Root cause.** `CosysRadar` is LiDAR-as-radar (8192 pts/scan → 268–463 clusters → ~53 objects vs **9 real obstacles**). On a *static* scene, ~90% of these clusters carried spurious velocities > 0.5 m/s (cluster-association jitter, not real motion). The occupancy grid's velocity-based prediction inflation (`occupancy_grid_3d.h`, Issue #256) fires for any object with speed > 0.5 m/s, walking a `prediction_dt_s=2 s` swath (up to 200 cell-steps) and inflating a disk at each — ~31 predicting objects/tick, each spraying a swath → the grid floods and seals. The velocity was *unreliable at the source*: the emit path (`fused.velocity_3d = ukf.velocity()`) copied the raw UKF state velocity with no reliability check.
+
+**Fix (perception root — no grid backstop, deliberately).** Gate the emitted velocity on the UKF's own uncertainty: added `ObjectUKF::velocity_covariance()` (= `P` velocity block); `UKFFusionEngine::gated_velocity()` zeroes the velocity when its max covariance diagonal exceeds `velocity_reliability_max_cov` (config, default 2.0 (m/s)², 0 disables). `P` inits to 50·I, so a fresh/jittery track (cov=50) is always gated until it converges; a real mover converges < 2.0 and predicts normally. No backstop was added — so the next Cosys run's `predictions`/`dynamic` telemetry directly measures whether the root fix worked (a grid cap would mask it). `[VelGate] gated=/emitted=` canary added beside the #816 `[GroundGate]` line. See DR-059.
+
+**Scope.** Fixes **Driver 2** (spurious-velocity prediction inflation — dominant). **Driver 1** (LiDAR over-clustering: 268–463 → ~53 objects vs 9) is a separate root, assessed after this validates.
+
+**Found by:** Cosys `--gui` validation of #824 Fix A (which fired but was insufficient) + `[Grid]`/`[D*Lite]` telemetry. **Prevention:** the `[VelGate]` canary surfaces the gated fraction per run so a regression is visible; +3 `Issue826VelocityGate` unit tests.

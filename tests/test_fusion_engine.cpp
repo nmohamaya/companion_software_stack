@@ -3064,3 +3064,72 @@ TEST(RadarGroundGateAttitude, InstrumentationCanaryFlipsUnderPitch) {
         << "the canary MUST fire — some naive verdicts differ from attitude-aware";
     EXPECT_GT(engine.max_attitude_correction_mm(), 0u);
 }
+
+// ─── Issue #826 — velocity-reliability gate ──────────────────────────────────
+// Spurious velocities from jittery/immature tracks (e.g. LiDAR clusters on a
+// static scene) drove the planner's prediction inflation and sealed the grid
+// (Cosys scenario 30). The fix zeroes a track's velocity at the fusion source
+// whenever the UKF's velocity covariance says the estimate is unreliable.
+
+TEST(Issue826VelocityGate, ReliableGateLogic) {
+    RadarNoiseConfig cfg;
+    cfg.velocity_reliability_max_cov = 2.0f;
+    EXPECT_TRUE(cfg.velocity_reliable(0.0f));    // certain → reliable
+    EXPECT_TRUE(cfg.velocity_reliable(2.0f));    // at threshold → reliable
+    EXPECT_FALSE(cfg.velocity_reliable(2.5f));   // above threshold → gated
+    cfg.velocity_reliability_max_cov = 0.0f;     // disabled
+    EXPECT_TRUE(cfg.velocity_reliable(1.0e6f));  // always reliable when disabled
+}
+
+TEST(Issue826VelocityGate, FreshTrackVelocityIsGated) {
+    // A fresh UKF track's velocity covariance = P_init (50·I) >> the 2.0 threshold,
+    // so its unreliable velocity is zeroed at the source.
+    RadarNoiseConfig cfg;  // default velocity_reliability_max_cov = 2.0
+    UKFFusionEngine  engine(make_test_calib(), cfg, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 240.0f};
+    trk.bbox_w       = 30.0f;
+    trk.bbox_h       = 60.0f;
+    trk.velocity_2d  = {5.0f, 3.0f};  // apparent image motion
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_GT(engine.velocity_gated_count(), 0u);                 // the gate fired
+    EXPECT_FLOAT_EQ(result.objects[0].velocity_3d.norm(), 0.0f);  // velocity zeroed
+}
+
+TEST(Issue826VelocityGate, DisabledEmitsRawVelocity) {
+    // With the gate disabled (0), the same fresh track's velocity is never zeroed.
+    RadarNoiseConfig cfg;
+    cfg.velocity_reliability_max_cov = 0.0f;  // disabled
+    UKFFusionEngine engine(make_test_calib(), cfg, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 240.0f};
+    trk.bbox_w       = 30.0f;
+    trk.bbox_h       = 60.0f;
+    trk.velocity_2d  = {5.0f, 3.0f};
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_EQ(engine.velocity_gated_count(), 0u);  // gate never fires when disabled
+}

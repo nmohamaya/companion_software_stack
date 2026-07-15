@@ -449,6 +449,10 @@ Eigen::Matrix3f ObjectUKF::position_covariance() const {
     return P_.block<3, 3>(0, 0);
 }
 
+Eigen::Matrix3f ObjectUKF::velocity_covariance() const {
+    return P_.block<3, 3>(3, 3);  // state = [x,y,z,vx,vy,vz]; velocity block (Issue #826)
+}
+
 // ═══════════════════════════════════════════════════════════
 // UKFFusionEngine
 // ═══════════════════════════════════════════════════════════
@@ -746,6 +750,22 @@ Eigen::Vector3f UKFFusionEngine::body_to_world(const Eigen::Vector3f& body) cons
     const float sin_y = std::sin(drone_yaw_);
     return {drone_north_ + body.x() * cos_y - body.y() * sin_y,
             drone_east_ + body.x() * sin_y + body.y() * cos_y, drone_up_ - body.z()};
+}
+
+// Issue #826 — emit a track's velocity only when the UKF is confident about it.
+// A jittery / re-associated track (e.g. an unstable LiDAR cluster on a static
+// scene) keeps a high velocity covariance; its spurious velocity would otherwise
+// drive the planner's speculative prediction inflation and seal the grid. Zeroing
+// it at the source is the root fix (no downstream backstop). Fail-safe: a real
+// moving obstacle's velocity converges well below the threshold and is retained.
+Eigen::Vector3f UKFFusionEngine::gated_velocity(const ObjectUKF& ukf) {
+    ++velocity_considered_count_;
+    const float max_vel_var = ukf.velocity_covariance().diagonal().maxCoeff();
+    if (!radar_cfg_.velocity_reliable(max_vel_var)) {
+        ++velocity_gated_count_;
+        return Eigen::Vector3f::Zero();
+    }
+    return ukf.velocity();
 }
 
 // ── Issue #799 Phase A — radar-orphan M-of-N confirmation (PR #814 review) ──
@@ -1469,7 +1489,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.class_id            = trk.class_id;
         fused.confidence          = trk.confidence;
         fused.position_3d         = ukf.position();
-        fused.velocity_3d         = ukf.velocity();
+        fused.velocity_3d         = gated_velocity(ukf);
         fused.heading             = 0.0f;
         fused.has_camera          = true;
         fused.has_radar           = matched_radar || radar_init_used;
@@ -1539,7 +1559,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 fused.class_id            = ObjectClass::UNKNOWN;
                 fused.confidence          = 0.8f;  // radar re-association confidence
                 fused.position_3d         = ukf.position();
-                fused.velocity_3d         = ukf.velocity();
+                fused.velocity_3d         = gated_velocity(ukf);
                 fused.heading             = 0.0f;
                 fused.has_camera          = false;
                 fused.has_radar           = true;
@@ -1669,7 +1689,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             fused.class_id            = ObjectClass::UNKNOWN;
             fused.confidence          = rdet.confidence;
             fused.position_3d         = ukf.position();
-            fused.velocity_3d         = ukf.velocity();
+            fused.velocity_3d         = gated_velocity(ukf);
             fused.heading             = 0.0f;
             fused.has_camera          = false;
             fused.has_radar           = true;
@@ -1771,6 +1791,13 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
             }
             radar_cfg.altitude_gate_m = cfg->get<float>("perception.fusion.radar.altitude_gate_m",
                                                         radar_cfg.altitude_gate_m);
+            // Issue #826 — velocity-reliability gate: emit a track's velocity only
+            // when its UKF velocity covariance is at/below this ((m/s)²). 0 disables
+            // (legacy raw velocity). Clamped >= 0 — a negative would disable via the
+            // struct helper, but keep it explicit.
+            radar_cfg.velocity_reliability_max_cov = std::max(
+                0.0f, cfg->get<float>("perception.fusion.radar.velocity_reliability_max_cov",
+                                      radar_cfg.velocity_reliability_max_cov));
             radar_cfg.radar_orphan_proximity_m = cfg->get<float>(
                 "perception.fusion.radar.orphan_proximity_m", radar_cfg.radar_orphan_proximity_m);
             radar_cfg.radar_adopt_gate_m = cfg->get<float>("perception.fusion.radar.adopt_gate_m",

@@ -78,6 +78,22 @@
                 "process_noise_factor": 0.05,
                 "measurement_noise_range": 0.1,
                 "measurement_noise_bearing": 0.05
+            },
+            "_comment_radar": "Issue #826 — switched radar.backend cosys_airsim → cosys_echo. cosys_airsim is the LiDAR-EMULATION CosysRadarBackend (polls getLidarData: 8192 dense pts → 356-463 clusters/scan → ~32 radar-only tracks vs 9 real obstacles, 17 in free space → grid sealed, drone can't round the block). cosys_echo is the proper Cosys-Lab Echo sensor (type 7, physical FMCW-style radar with beam pattern + multipath), which the lidar-emulation was a workaround for (#702/#705 ground-clutter root cause). Scenario 33 already made this switch; scenario 30 was left behind. Echo sensor must be declared in config/cosys_settings.json (deployed to ~/Documents/AirSim/settings.json). Revert to cosys_airsim_groundtruth for the per-object oracle, or cosys_airsim for the lidar-emulation code path.",
+            "radar": {
+                "backend": "cosys_echo",
+                "echo_name": "echo",
+                "vehicle_name": "Drone0",
+                "max_range_m": 50.0,
+                "min_range_m": 0.5,
+                "fov_azimuth_rad": 1.0472,
+                "fov_elevation_rad": 0.2618,
+                "update_rate_hz": 20,
+                "cluster_range_m": 1.0,
+                "cluster_az_rad": 0.0873,
+                "cluster_el_rad": 0.0873,
+                "_comment_substrings": "Issue #826 — BLOCKLIST mode: emit every in-FOV Echo bin EXCEPT ground/floor/sky. No include allowlist: is_excluded's allowlist match is case-sensitive substring, and the Echo groundtruth annotation labels are not the asset names we'd guess (a wrong allowlist skipped ALL 9 real objects → 0 emitted). The Echo already narrows to ~9 in-FOV bins (the real scene objects), so excluding Ground/Floor/Sky is sufficient and label-agnostic.",
+                "exclude_substrings": "Ground,Sky,SkyDome,Floor"
             }
         },
         "slam": {
@@ -132,14 +148,14 @@
                 "path_aware_bypass_hysteresis_m": 0.5,
                 "log_corrections": true
             },
+            "_comment": "Issue #826 — MEASUREMENT BASELINE for the obstacle-dimension-estimation follow-up, NOT a fix. resolution_m 2.0→1.0 is the load-bearing change (the coarse 2 m grid was too blunt to represent gaps / keep goals-near-obstacles reachable → drone couldn't move at all); max_static_cells 500→1500 follows the finer grid. inflation_radius_m is left at a nominal 1.5 m but NOTE it does NOT affect the echo (radar-only) obstacles — those inflate by estimated_radius_m, which for radar-only obstacles is a fixed default (config perception.fusion.radar.default_radius_m, default 1.5 m) applied to every radar obstacle regardless of true size, NOT this config. So the ONLY remaining reason the drone can't route around the blocks is that radar obstacles are all stamped that 1.5 m default (a 4 m wall reads as a 1.5 m dot → drone clips it). The dimension-estimation follow-up replaces that fixed default with the measured per-object extent; against this stable baseline its effect is cleanly visible (obstacles resize to their real footprint, drone routes around them). Do NOT hand-tune inflation to route the scene — fix the sizing at the source.",
             "occupancy_grid": {
-                "_comment": "Scenario 30 grid tuning post-#513 color_contour switch: previous run hit max_static_cells=1000 cap with 8725 total occupied cells — D*Lite saw walls everywhere and couldn't find a path. Raised promotion_hits 5→10 so a cell needs more confident observations before sticking; reduced max_static_cells 1000→500 so the grid stays tractable for D*Lite search. inflation_radius_m kept at 2.5 (drone footprint + margin).",
-                "resolution_m": 2.0,
-                "inflation_radius_m": 2.5,
+                "resolution_m": 1.0,
+                "inflation_radius_m": 1.5,
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
                 "promotion_hits": 10,
-                "max_static_cells": 500
+                "max_static_cells": 1500
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via radar+camera+depth fusion — the RPC-spawned scene objects are the world.",
