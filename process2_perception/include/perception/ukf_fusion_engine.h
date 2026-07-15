@@ -100,7 +100,7 @@ struct RadarNoiseConfig {
     // associated LiDAR cluster on a static scene) keeps a high velocity covariance,
     // so its spurious velocity is zeroed instead of driving the planner's speculative
     // prediction inflation (which floods and seals the grid — Cosys scenario 30).
-    // P is initialised to 10·I, so a fresh track (cov=10) is always gated until it
+    // P is initialised to 50·I, so a fresh track (cov=50) is always gated until it
     // converges. 0 = disabled (emit raw velocity, legacy). Real moving obstacles
     // converge well below this and predict normally. Bias: drop unreliable velocity
     // (over-caution is cheap; a phantom prediction swath sealing the grid is not).
@@ -111,9 +111,10 @@ struct RadarNoiseConfig {
         return negate_azimuth ? -raw_azimuth_rad : raw_azimuth_rad;
     }
 
-    /// Issue #826 — return the UKF velocity if the estimate is reliable, else zero.
-    /// `max_vel_var` is the max diagonal of the velocity covariance block. Disabled
-    /// (returns the raw velocity) when the threshold is 0.
+    /// Issue #826 — true iff the estimated velocity is reliable enough to emit
+    /// (false ⇒ the caller zeroes it). `max_vel_var` is the max diagonal of the
+    /// velocity covariance block; reliable when `<= velocity_reliability_max_cov`.
+    /// A threshold of 0 disables the gate (always reliable ⇒ callers emit raw).
     [[nodiscard]] bool velocity_reliable(float max_vel_var) const {
         return velocity_reliability_max_cov <= 0.0f || max_vel_var <= velocity_reliability_max_cov;
     }
@@ -333,12 +334,14 @@ public:
     }
 
     /// Issue #826 — velocity-reliability gate telemetry. `gated` = velocities
-    /// zeroed as unreliable; `emitted` = total considered. A persistently high
-    /// gated fraction on a static scene means the fix is doing its job (killing
-    /// the spurious LiDAR-cluster velocities that drove prediction inflation).
+    /// zeroed as unreliable; `considered` = total velocities evaluated by the
+    /// gate (so `gated` ⊆ `considered`, NOT a disjoint count). A persistently
+    /// high gated/considered fraction on a static scene means the fix is doing
+    /// its job (killing the spurious LiDAR-cluster velocities that drove
+    /// prediction inflation).
     [[nodiscard]] uint64_t velocity_gated_count() const noexcept { return velocity_gated_count_; }
-    [[nodiscard]] uint64_t velocity_emitted_count() const noexcept {
-        return velocity_emitted_count_;
+    [[nodiscard]] uint64_t velocity_considered_count() const noexcept {
+        return velocity_considered_count_;
     }
 
     /// Issue #816 — attitude-aware ground gate.  Returns true if a radar return
@@ -372,8 +375,8 @@ private:
     // Issue #826 — velocity-reliability gate telemetry. fuse() runs on the single
     // fusion thread, so plain counters (no atomics). Surfaced periodically so the
     // scenario run-report can confirm how many spurious velocities were zeroed.
-    uint64_t velocity_gated_count_{0};    // velocities zeroed as unreliable
-    uint64_t velocity_emitted_count_{0};  // total velocities considered
+    uint64_t velocity_gated_count_{0};       // velocities zeroed as unreliable
+    uint64_t velocity_considered_count_{0};  // total velocities considered
 
     /// Issue #826 — the fused object's velocity, zeroed when the UKF's velocity
     /// covariance says the estimate is unreliable (immature / jittery track). This

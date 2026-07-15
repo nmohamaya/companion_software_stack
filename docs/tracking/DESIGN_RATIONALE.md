@@ -1595,7 +1595,7 @@ no userspace trace — leaves every recurrence a shrug.
 **Decision — gate the emitted velocity on `P`'s velocity block:**
 
 1. **Add `ObjectUKF::velocity_covariance()` = `P_.block<3,3>(3,3)`** (state = `[x,y,z,vx,vy,vz]`). At each of the three fusion emit sites, route the velocity through `gated_velocity()`: if `max diagonal of velocity_covariance > velocity_reliability_max_cov`, emit **zero** velocity instead of the raw estimate.
-2. **`P` is initialised to `10·I`**, so a fresh / poorly-observed track (cov = 10) is *always* gated until it converges. A genuinely moving, well-tracked obstacle converges well below the `2.0 (m/s)²` default and predicts normally. This is the load-bearing property: the gate keys off *observation-driven convergence*, not a heuristic about the sensor.
+2. **`P` is initialised to `50·I`**, so a fresh / poorly-observed track (cov = 50) is *always* gated until it converges. A genuinely moving, well-tracked obstacle converges well below the `2.0 (m/s)²` default and predicts normally. This is the load-bearing property: the gate keys off *observation-driven convergence*, not a heuristic about the sensor.
 3. **Config-clamped, fail-safe.** `velocity_reliability_max_cov` (default 2.0, `0` disables) is `>= 0`. Bias: **drop an unreliable velocity** (a stationary/over-cautious obstacle is cheap; a phantom 2 s prediction swath sealing the grid is not). Zeroing velocity is *more* correct than propagating noise for every consumer, not just the grid.
 
 **Arguments considered:**

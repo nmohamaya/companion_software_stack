@@ -101,8 +101,9 @@ inline const std::shared_ptr<CosysRpcClient>& get_shared_cosys_client(const dron
         auto port = cfg.get<uint16_t>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451);
         // Issue #826 — bound per-call RPC timeout (default 5 s, was AirSim's 60 s) so a
         // stalled sensor poll can't hold the shared rpc_mtx_ and freeze the whole stack.
-        auto rpc_timeout = cfg.get<float>("cosys_airsim.rpc_timeout_sec", 5.0f);
-        auto c           = std::make_shared<CosysRpcClient>(host, port, rpc_timeout);
+        auto rpc_timeout =
+            cfg.get<float>(std::string(drone::cfg_key::cosys_airsim::RPC_TIMEOUT_SEC), 5.0f);
+        auto c = std::make_shared<CosysRpcClient>(host, port, rpc_timeout);
         if (!c->connect()) {
             DRONE_LOG_WARN("[HAL] CosysRpcClient initial connect failed — backends will retry");
         }

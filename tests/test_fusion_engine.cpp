@@ -3082,7 +3082,7 @@ TEST(Issue826VelocityGate, ReliableGateLogic) {
 }
 
 TEST(Issue826VelocityGate, FreshTrackVelocityIsGated) {
-    // A fresh UKF track's velocity covariance = P_init (10·I) >> the 2.0 threshold,
+    // A fresh UKF track's velocity covariance = P_init (50·I) >> the 2.0 threshold,
     // so its unreliable velocity is zeroed at the source.
     RadarNoiseConfig cfg;  // default velocity_reliability_max_cov = 2.0
     UKFFusionEngine  engine(make_test_calib(), cfg, false);

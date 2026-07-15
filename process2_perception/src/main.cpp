@@ -764,9 +764,9 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                 // Issue #826 — velocity-reliability gate canary. A high gated
                 // fraction on a static scene = spurious LiDAR-cluster velocities
                 // are being zeroed at the source (no prediction-inflation flood).
-                DRONE_LOG_INFO("[VelGate] gated={} emitted={} (Issue #826)",
+                DRONE_LOG_INFO("[VelGate] gated={} considered={} (Issue #826)",
                                ukf_engine->velocity_gated_count(),
-                               ukf_engine->velocity_emitted_count());
+                               ukf_engine->velocity_considered_count());
             }
 
             // Log IPC latency from the thread that owns receive()

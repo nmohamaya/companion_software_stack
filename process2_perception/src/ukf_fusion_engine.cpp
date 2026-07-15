@@ -759,7 +759,7 @@ Eigen::Vector3f UKFFusionEngine::body_to_world(const Eigen::Vector3f& body) cons
 // it at the source is the root fix (no downstream backstop). Fail-safe: a real
 // moving obstacle's velocity converges well below the threshold and is retained.
 Eigen::Vector3f UKFFusionEngine::gated_velocity(const ObjectUKF& ukf) {
-    ++velocity_emitted_count_;
+    ++velocity_considered_count_;
     const float max_vel_var = ukf.velocity_covariance().diagonal().maxCoeff();
     if (!radar_cfg_.velocity_reliable(max_vel_var)) {
         ++velocity_gated_count_;
