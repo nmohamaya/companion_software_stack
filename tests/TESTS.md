@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2197 (no SDK, 8 Cosys-SDK tests skipped) / 2205 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #821 Phase 1 (planner responsiveness diagnostics) +3 tests — new `Issue821PlannerDiag` suite in `test_dstar_lite_planner.cpp` (now 112): no-path increments the counter, shadow-A* probe leaves the trajectory byte-identical (observation-only proof), goal-flip counts as a re-init. `ctest -N --test-dir build` reports **2197** (no SDK, live SSOT) / **2205** (+SDK). Previous PR (#816 PR2): +5 `GazeboRadarGroundGate` tests. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2198 (no SDK, 8 Cosys-SDK tests skipped) / 2206 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #816 PR #819 review follow-up +1 test — `GazeboRadarGroundGate.MountAngleClampGuardsTypos` in `test_gazebo_radar.cpp` (now 23): mount extrinsics sanity-clamped to [-π,π] + WARN so a `-8.7`-for-`-0.087` typo can't silently mis-project every ray. `ctest -N --test-dir build` reports **2198** (no SDK, live SSOT) / **2206** (+SDK). Previous PR (#821 Phase 1): +3 `Issue821PlannerDiag` tests. For earlier deltas see PROGRESS.md. |
 
 ---
 
@@ -504,7 +504,7 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ---
 
-### test_gazebo_radar.cpp — 22 tests
+### test_gazebo_radar.cpp — 23 tests
 
 **What it tests:** `GazeboRadarBackend` — Gazebo radar HAL that converts gpu_lidar rays + odometry into `RadarDetectionList` with noise and Doppler.
 
@@ -512,7 +512,7 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 |-------|-------|-------------------|
 | `GazeboRadarTest` | 15 | Factory creation, topic-based naming, subscription via `init()`, double-init rejection, empty read before data, message counts, `ray_to_detection()` conversion (zero velocity, forward Doppler, oblique Doppler, vertical Doppler), SNR vs range, FOV mapping (single ray, multi-ray horizontal, vertical), factory gazebo/simulated backends |
 | `GazeboRadarFallbackTest` | 2 | Fallback to simulated when `HAVE_GAZEBO` is not defined; gazebo backend throws `std::runtime_error` |
-| `GazeboRadarGroundGate` | 5 | Issue #816 PR2 — HAL attitude-aware ground gate (first HAL ground-filter coverage): mount rotation emits body-frame angles, real 1.7 m obstacle kept across a ±25° pitch sweep, level-flight near ground rejected, no-attitude/no-altitude fail-safe keeps, floor-height return kept (margin false-accept bias) |
+| `GazeboRadarGroundGate` | 6 | Issue #816 PR2 — HAL attitude-aware ground gate (first HAL ground-filter coverage): mount rotation emits body-frame angles, real 1.7 m obstacle kept across a ±25° pitch sweep, level-flight near ground rejected, no-attitude/no-altitude fail-safe keeps, floor-height return kept (margin false-accept bias). PR #819 review follow-up (#816): `MountAngleClampGuardsTypos` — mount extrinsics clamped to [-π,π] so a `-8.7`-for-`-0.087` typo can't silently mis-project every ray |
 
 **Key files under test:** `hal/gazebo_radar.h`, `hal/hal_factory.h`
 

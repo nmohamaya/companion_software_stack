@@ -80,9 +80,34 @@ public:
         // Issue #816 PR2 — the HAL owns the sensor→body mount rotation: emitted
         // az/el are BODY-frame (mount-compensated), so no downstream consumer
         // needs to know the extrinsics.  x500_companion lidar: pitch −0.087.
-        const float mr    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_ROLL_RAD, 0.0f);
-        const float mp    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_PITCH_RAD, -0.087f);
-        const float my    = cfg.get<float>(section + drone::cfg_key::hal::MOUNT_YAW_RAD, 0.0f);
+        //
+        // PR #819 review (Minor 3) — sanity-clamp the mount extrinsics to
+        // [-π, π] and WARN, mirroring the attitude-margin clamp below.  Unlike
+        // the margin (bounded [0,0.35]) these were UNVALIDATED config, yet a
+        // mis-entered mount angle silently mis-projects EVERY ray for the whole
+        // run: a "-8.7" typo for "-0.087" rotates returns by ~500° instead of
+        // −5°, corrupting the body-frame az/el the entire downstream stack
+        // trusts.  |angle|>π is never a real physical mount (rotations wrap), so
+        // clamping there converts a silent corruption into a loud WARN.  Bias:
+        // keep the clamped value rather than fail hard — a typo degrades to a
+        // bounded mis-projection the WARN surfaces, not a crash mid-flight.
+        const auto clamp_mount_rad = [](const char* name, float raw) -> float {
+            const float clamped = clamp_mount_angle_rad(raw);
+            if (clamped != raw) {
+                DRONE_LOG_WARN("[GazeboRadar] {}={} rad out of range [-pi,pi] - likely a typo "
+                               "(e.g. -8.7 for -0.087); clamping to {}. Every ray is "
+                               "mis-projected until corrected.",
+                               name, raw, clamped);
+            }
+            return clamped;
+        };
+        const float mr = clamp_mount_rad(
+            "mount_roll_rad", cfg.get<float>(section + drone::cfg_key::hal::MOUNT_ROLL_RAD, 0.0f));
+        const float mp = clamp_mount_rad(
+            "mount_pitch_rad",
+            cfg.get<float>(section + drone::cfg_key::hal::MOUNT_PITCH_RAD, -0.087f));
+        const float my = clamp_mount_rad(
+            "mount_yaw_rad", cfg.get<float>(section + drone::cfg_key::hal::MOUNT_YAW_RAD, 0.0f));
         sensor_to_body_q_ = drone::util::quat_from_rpy(mr, mp, my);
         // Widen the post-noise angle clamps by the mount's TOTAL rotation
         // angle (PR #819 review): a general 3D mount couples roll/pitch/yaw
@@ -237,6 +262,17 @@ public:
         const float           az_b  = std::atan2(dir_b.y(), dir_b.x());
         const float           el_b  = std::asin(std::clamp(dir_b.z(), -1.0f, 1.0f));
         return {az_b, el_b};
+    }
+
+    /// Issue #816 PR #819 review (Minor 3) — sanity-clamp a mount extrinsic
+    /// angle to the physical range [-π, π].  |angle| > π is never a real mount
+    /// (rotations wrap) and indicates a config typo (e.g. -8.7 for -0.087),
+    /// which would silently mis-project EVERY emitted ray.  Pure + static so the
+    /// clamp is directly unit-testable (same pattern as ground_gate_should_reject);
+    /// the constructor pairs it with a WARN when the value was out of range.
+    [[nodiscard]] static float clamp_mount_angle_rad(float raw) {
+        constexpr float kPiRad = 3.14159265358979323846f;
+        return std::clamp(raw, -kPiRad, kPiRad);
     }
 
     /// Issue #816 — attitude-aware HAL ground gate (shares the math with the

@@ -4342,4 +4342,18 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #120 — #816 attitude-gate review follow-ups: mount-angle clamp + DR-057 hardening (PR #819 review)
+
+**Date:** 2026-07-14  
+**Category:** Perception / HAL — safety hardening + design-rationale audit trail (review follow-up on the merged #816 PRs #818/#819)  
+**Files Modified:**
+- `common/hal/include/hal/gazebo_radar.h` — **Minor 3 (the one behaviour change):** the fail-safe attitude margin was clamped `[0,0.35]` but the mount extrinsics (`mount_roll_rad`/`mount_pitch_rad`/`mount_yaw_rad`) were **unvalidated** — a `-8.7`-for-`-0.087` typo would silently rotate *every* emitted ray by ~500°, corrupting the body-frame az/el the whole downstream stack trusts. Added a pure, testable `static clamp_mount_angle_rad()` (clamps to `[-π,π]` — beyond that is never a real mount, rotations wrap) wired into the ctor with a WARN, mirroring the margin's clamp+WARN pattern. Bias: keep the clamped value (bounded mis-projection the WARN surfaces) rather than crash mid-flight.
+- `process2_perception/src/ukf_fusion_engine.cpp` — **Minor 4:** documented that the fusion ground-filter outer guard checks only `has_altitude_` (not `has_pose_`); harmless because `is_ground_return()` re-checks both internally and fail-safe KEEPs when either is missing (pose lives at the single authoritative point inside the gate).
+- `docs/tracking/DESIGN_RATIONALE.md` (DR-057) — **P2 (binding):** added a **BINDING pre-hardware gate** — `attitude_uncertainty_rad` MUST be re-derived from *measured* VIO attitude error (p99 residual) before the first hardware flight that arms with the gate active; the 0.02 default is Gazebo-ground-truth-calibrated and too-small-a-margin silently reintroduces the exact P1 obstacle-suppression #816 fixed. Lean conservative (≥ measured p99). **Minor 1:** noted the gate composes mount **rotation** only, not the lever-arm **translation** (≤0.1 m on x500, dominated by the margin) — revisit if a future airframe booms the radar far from the CG. **Minor 2:** noted the `ground_gate_attitude_flips` canary conflates the rotation and the margin's near-band KEEP, so it slightly over-attributes to attitude (observability-only, drives no control).
+- `tests/test_gazebo_radar.cpp` — +1 `GazeboRadarGroundGate.MountAngleClampGuardsTypos`: in-range values (incl. ±π extremes) pass through, out-of-range typos clamp to the ±π bound.
+
+**What/Why:** Follow-up on the merged #816 attitude-gate review. The mount clamp closes the last unvalidated-config hole in the #816 gate (the margin was already clamped; the mount angles weren't) and follows the CLAUDE.md perception-suppression-gate rule that safety-relevant config typos must fail loud, not silently mis-project. The DR-057 additions convert an *implied* "tune the margin on hardware" into a *binding* merge/flight gate and record two known-and-accepted approximations (rotation-only, canary conflation) so they can't be mistaken for oversights. Test count SSOT in [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+*Last updated after Improvement #120 (Issue #816 — PR #819 review follow-ups: mount-angle clamp + DR-057 hardening). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

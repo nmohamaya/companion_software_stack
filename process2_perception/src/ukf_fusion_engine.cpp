@@ -1098,6 +1098,15 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         // minimum altitude.  Issue #816 — attitude-aware via is_ground_return()
         // (accounts for drone pitch/roll + sensor mount; was `drone_alt +
         // range·sin(el)`, which dropped real obstacles under nose-up pitch).
+        //
+        // PR #819 review (Minor 4): this outer guard checks only has_altitude_,
+        // NOT has_pose_ — but the two are coupled and this is deliberately
+        // harmless.  is_ground_return() re-checks `!has_pose_ || !has_altitude_`
+        // internally and returns false (KEEP) if either is missing, so with
+        // altitude-but-no-pose the loop still runs but rejects nothing (fail
+        // safe, the only cost is a few no-op iterations before VIO locks).
+        // Gating on has_altitude_ here mirrors the historical guard intent; the
+        // pose check lives at the single authoritative point inside the gate.
         if (radar_cfg_.ground_filter_enabled && has_altitude_) {
             int filtered = 0;
             for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {

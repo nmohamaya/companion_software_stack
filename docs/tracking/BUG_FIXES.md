@@ -3386,3 +3386,34 @@ the first commit. Bug C — CI ThreadSanitizer leg on PR #782.
 3. Rate-limit / debounce floors must be recorded on the *dominant* outcome
    path, not just the success path — for a stuck-thread tool the dominant
    path is timeout.
+
+---
+
+### Fix — cmake 4.3→4.4 upgrade silently broke the ENTIRE test suite (build-infra; no GitHub issue)
+
+**Date:** 2026-07-14
+**Severity:** High (P2) — environment/build-infra; no shipped code affected, but every local test target was un-runnable until repaired
+**Files:** none in-tree — the breakage is in generated (gitignored) `build/**/build.make` files; the permanent guard is proposed in `deploy/build.sh` (see IMPROVEMENTS.md 2026-07-14)
+
+**What:** Discovered while verifying the #816 review follow-ups. A local `build/` dir configured by cmake **4.3** stopped producing test binaries after cmake was upgraded to **4.4**. Every test target failed at the post-link `gtest_discover_tests` step, and — because that step is part of the target's link rule — `make` then **deleted the just-linked binary**. So `make test_X` reported failure and left `build/bin/test_X` absent, making it look like the build silently produced nothing. A plain `cmake .` reconfigure did **not** fix it.
+
+**Error messages (searchable):**
+- `CMake Error: Not a file: /usr/share/cmake-4.3/Modules/GoogleTestAddTests.cmake`
+- `CMake Error: Error processing file: /usr/share/cmake-4.3/Modules/GoogleTestAddTests.cmake`
+- Symptom without a visible error: `make test_foo` exits non-zero, `Linking CXX executable ../bin/test_foo` appears, yet `build/bin/test_foo` does not exist afterwards.
+
+**Reproduce:**
+1. Configure a build dir with cmake N (`cmake .. && make`).
+2. Upgrade cmake to N+1 (the old `/usr/share/cmake-N/` module dir is removed by the package manager).
+3. `make test_<anything>` — the link succeeds, then `gtest_discover_tests` invokes the removed `/usr/share/cmake-N/Modules/GoogleTestAddTests.cmake`, fails, and the binary is deleted.
+
+**Why (Root Cause):** `gtest_discover_tests` (DISCOVERY_MODE POST_BUILD) bakes an **absolute** path to `GoogleTestAddTests.cmake` — resolved from `CMAKE_ROOT` at generate time — into each target's `build.make` POST_BUILD command (`-P /usr/share/cmake-4.3/Modules/GoogleTestAddTests.cmake`). When cmake is upgraded, that path disappears (module now lives under `cmake-4.4/`). Crucially, a `cmake .` reconfigure updates `CMAKE_ROOT` in the cache **but does not rewrite the already-generated `build.make` POST_BUILD commands**, so the stale absolute path persists. Only `cmake --fresh` (or `rm -rf build/*`) regenerates them.
+
+**How (Fix):** Repaired the current build dir in place by rewriting the 73 stale project `build.make` files (`sed -i 's#/usr/share/cmake-4.3/#/usr/share/cmake-4.4/#g'`), then rebuilt — targets finalize and keep their binaries, `ctest` registration restored. The **permanent** fix is a clean `cmake --fresh` / `rm -rf build/*` reconfigure after any cmake version bump; a `deploy/build.sh` guard that compares `CMAKE_CACHE_MAJOR/MINOR_VERSION` against `cmake --version` and auto-`--fresh`es on mismatch is filed in IMPROVEMENTS.md (2026-07-14, P2).
+
+**Found by:** manual investigation while verifying #816 review follow-ups — the fusion/gazebo test binaries "vanished" after linking, which surfaced the stale cmake-4.3 path.
+
+**Lessons learned:**
+1. A build tool upgraded out from under a configured build dir can fail *silently and destructively* — a POST_BUILD failure attached to a link rule makes `make` delete the binary, so "no binary produced" can mean "post-build step failed", not "compile failed".
+2. `cmake .` is not sufficient after a cmake version bump — it refreshes the cache but not already-generated per-target makefiles. Use `cmake --fresh` (or a clean build dir) when the toolchain version changes.
+3. Test-discovery breakage is invisible to a green compile: the code was fine; only test *registration* was broken.
