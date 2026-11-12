@@ -1,5 +1,10 @@
 # Roadmap — Drone Companion Software Stack
 
+## Systems-engineering pilot — charter under review
+
+[#830](https://github.com/nmohamaya/companion_software_stack/issues/830): simulation-only readiness pilot. [Draft charter](../systems-engineering/pilot/charter.md) and [advisory review](../systems-engineering/pilot/reports/charter-review.md) are prepared; owner acceptance and all measurement/execution gates remain open. Platform [P1 #7](https://github.com/nmohamaya/systems-engineering-platform/issues/7) owns charter disposition.
+
+
 > From first line of code to real drone deployment.  
 > This document tracks **completed milestones** and **planned phases** in a single place.
 

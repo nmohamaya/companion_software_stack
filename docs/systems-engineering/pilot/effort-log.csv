@@ -1,0 +1,2 @@
+entry_id,started_utc,ended_utc,work_item,producer,mode,elapsed_wall_s,human_active_s,tool_wait_s,review_rework_s,expected_impacts,observed_impacts,notes
+P1-001,2026-11-12T14:08:44Z,2026-11-12T14:21:09Z,platform#7,assistant,assisted-drafting,745,unknown,unknown,unknown,charter scope; review roles; baseline gates,2 charter wording clarifications; no engineering impact measurement,"Observed drafting/review interval, including waiting; earlier preparation and later publication time unmeasured. Agent wall time is not human effort."
