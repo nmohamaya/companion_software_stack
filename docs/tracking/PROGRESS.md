@@ -4342,4 +4342,16 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #120 — Simulation-only readiness pilot charter and advisory review (Issue #830)
+
+**Date:** 2026-11-12
+**Category:** Systems engineering / planning
+**Files:** `docs/systems-engineering/pilot/{charter.md,effort-log.csv,reports/charter-review.md}`, `docs/README.md`, `docs/tracking/ROADMAP.md`.
+
+**What/why:** Drafted the closed-loop readiness pilot: identify a gap, implement a bounded companion fix, compare against controlled evidence, then retain/revise/reject under owner authority. Confirmed simulation-only scope and nmohamaya review with three advisory agent lenses; recorded two wording clarifications and prospective baseline/storage/measurement gates. Started an effort log separating assistant elapsed time from unknown human effort.
+
+**Validation:** Document/source-reference checks and scoped model reviews only. No code, tests or operational configuration changed; no builds, scenarios, hardware checks or reliability claims. The charter is not accepted and platform P1 #7 remains open pending owner disposition.
+
+---
+
+*Last updated after Improvement #120 (Issue #830 — draft simulation-only pilot charter). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
