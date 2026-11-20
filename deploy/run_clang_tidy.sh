@@ -32,10 +32,11 @@ if [ -z "$TIDY" ]; then
     exit 0
 fi
 
-CDB="build/compile_commands.json"
+BUILD_DIR="${CI_COMPILE_DB:-build}"
+CDB="$BUILD_DIR/compile_commands.json"
 if [ ! -f "$CDB" ]; then
     echo "== generating compile_commands.json (cmake configure) =="
-    if ! cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DALLOW_INSECURE_ZENOH=ON >/dev/null 2>&1; then
+    if ! cmake -S . -B "$BUILD_DIR" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DALLOW_INSECURE_ZENOH=ON >/dev/null 2>&1; then
         echo "cmake configure failed — cannot run clang-tidy; skipping" >&2
         exit 0
     fi
@@ -56,7 +57,7 @@ echo "== clang-tidy on ${#FILES[@]} file(s) ($MODE mode) =="
 rc=0
 for f in "${FILES[@]}"; do
     echo "--- $f"
-    "$TIDY" -p build --quiet "$f" || rc=1
+    "$TIDY" -p "$BUILD_DIR" --quiet "$f" || rc=1
 done
 [ "$rc" -eq 0 ] && echo "clang-tidy: clean."
 exit "$rc"

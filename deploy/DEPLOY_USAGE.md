@@ -158,19 +158,20 @@ sudo ./deploy/uninstall_systemd.sh --keep-logs                 # preserve /var/l
 
 ## `run_ci_local.sh` — Run CI Checks Locally
 
-Runs the same matrix of checks as GitHub Actions CI, locally. Useful for
-validating before pushing.
+Runs the repository checks shared with GitHub Actions. Use the full run
+before requesting review. The quick run covers formatting, documentation and
+Release tests.
 
 ```bash
-bash deploy/run_ci_local.sh               # All jobs (format + build + sanitizers + coverage)
-bash deploy/run_ci_local.sh --quick       # Format + build only (fast)
-bash deploy/run_ci_local.sh --job FMT     # Single job by tag
-bash deploy/run_ci_local.sh --job ASAN    # ASan only
-bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log   # Save output
+bash deploy/run_ci_local.sh
+bash deploy/run_ci_local.sh --quick
+bash deploy/run_ci_local.sh --job ASAN
 ```
 
-| Tag | Description |
-|-----|-------------|
+See the [CI guide](../docs/how-to/CI_SETUP.md#automated-deployrun_ci_localsh)
+for dependencies, job tags and evidence paths.
+
+-----|-------------|
 | `FMT` | clang-format-18 check |
 | `BUILD` | Debug build + test |
 | `ASAN` | AddressSanitizer |

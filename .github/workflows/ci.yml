@@ -7,63 +7,37 @@ on:
     branches: [main, 'integration/**']
 
 env:
-  BUILD_TYPE: Release
-  ZENOH_VERSION: "1.7.2"
+  CI_BASE: origin/${{ github.base_ref || 'main' }}
 
 jobs:
-  # ── Fast gate: format check ──────────────────────────────────────
   format-check:
     runs-on: ubuntu-24.04
     name: format-check
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Install clang-format
-      run: |
+    - uses: actions/checkout@v4
+    - run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends clang-format-18
+    - run: bash deploy/ci_job.sh FMT
 
-    - name: Check clang-format
-      run: |
-        find common process[1-7]_* tests tools \( -name '*.h' -o -name '*.cpp' \) -print0 \
-          | xargs -0 clang-format-18 --dry-run --Werror 2>&1
-
-  # ── Doc SSOT gate: no hardcoded test-count totals (ADR-016) ──────
-  # Lints only ADDED lines vs the base, so it blocks NEW drift without
-  # failing on the existing backlog. tests/TESTS.md is the canonical source.
   doc-lint:
     runs-on: ubuntu-24.04
     name: doc-lint
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    - name: Lint docs for hardcoded test-count totals
-      run: |
-        BASE_REF="${{ github.base_ref || 'main' }}"
-        git fetch -q origin "${BASE_REF}" || true
-        bash deploy/lint_docs_ssot.sh --changed "origin/${BASE_REF}"
+    - run: bash deploy/ci_job.sh DOC
 
-  # ── Static analysis: cppcheck (advisory, non-blocking) ───────────
   cppcheck:
     runs-on: ubuntu-24.04
     name: cppcheck (advisory)
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Install cppcheck
-      run: |
+    - uses: actions/checkout@v4
+    - run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends cppcheck
-    - name: Run cppcheck (advisory — non-blocking)
-      run: |
-        # Issue #804 — capture the full cppcheck output as evidence.
-        set -o pipefail
-        EV_DIR="$(source deploy/lib_evidence.sh && evidence_run_dir static-analysis ci-cppcheck)"
-        bash deploy/run_cppcheck.sh 2>&1 | tee "${EV_DIR}/cppcheck.log" \
-          || echo "::warning::cppcheck reported issues (advisory, non-blocking — triage tracked in docs/tracking/IMPROVEMENTS.md)"
+    - run: bash deploy/ci_job.sh CPPCHECK
     - name: Upload static-analysis evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -72,21 +46,12 @@ jobs:
         path: evidence/static-analysis/
         retention-days: 14
 
-  # ── Safety-critical C++ audit (advisory, non-blocking) ───────────
-  # Issue #804 — runs deploy/safety_audit.sh (28 CLAUDE.md safety rules)
-  # and stores the markdown report as evidence. ADVISORY for now: main
-  # carries a known backlog (3 failing rules — see IMPROVEMENTS.md);
-  # promote to blocking once the backlog is triaged (ADR-016 pattern).
   safety-audit:
     runs-on: ubuntu-24.04
     name: safety-audit (advisory)
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Run safety audit (advisory — non-blocking)
-      run: |
-        bash deploy/safety_audit.sh \
-          || echo "::warning::safety audit reported violations (advisory, non-blocking — triage tracked in docs/tracking/IMPROVEMENTS.md)"
+    - uses: actions/checkout@v4
+    - run: bash deploy/ci_job.sh AUDIT
     - name: Upload safety-audit evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -95,221 +60,53 @@ jobs:
         path: evidence/safety-audit/
         retention-days: 14
 
-  # ── Build + test matrix ──────────────────────────────────────────
-  # Intentionally NOT `needs: format-check` — see docs/how-to/CI_SETUP.md
-  # § "Gate ordering" and Issue #758. A red format-check used to mask red
-  # sanitizer legs by skipping the whole matrix; now both gates run in
-  # parallel and independently block merge.
+  # Keep these independent of formatting so a format failure cannot hide a
+  # sanitizer failure.
   build-and-test:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        sanitizer: [none, asan, tsan, ubsan]
-
-    name: build (${{ matrix.sanitizer == 'none' && 'default' || matrix.sanitizer }})
-
+        include:
+        - {variant: default, job: BUILD}
+        - {variant: asan, job: ASAN}
+        - {variant: tsan, job: TSAN}
+        - {variant: ubsan, job: UBSAN}
+    name: build (${{ matrix.variant }})
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
+    - uses: actions/checkout@v4
+    - run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          build-essential cmake \
-          libspdlog-dev \
-          libeigen3-dev \
-          nlohmann-json3-dev \
-          libgtest-dev \
-          unzip
-
-    - name: Install Zenoh
-      run: |
-        wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip" \
-          -O /tmp/zenohc.zip
-        unzip -o /tmp/zenohc.zip -d /tmp/zenohc-debs
-        sudo dpkg -i /tmp/zenohc-debs/*.deb
-
-        git clone --depth 1 --branch "${ZENOH_VERSION}" \
-          https://github.com/eclipse-zenoh/zenoh-cpp.git /tmp/zenoh-cpp
-        cd /tmp/zenoh-cpp
-        cmake -B build -DZENOHCXX_ZENOHC=ON -DZENOHCXX_ZENOHPICO=OFF
-        sudo cmake --install build/
-
+          build-essential cmake libspdlog-dev libeigen3-dev nlohmann-json3-dev libgtest-dev unzip
     - name: Fix ASLR for TSan
-      if: matrix.sanitizer == 'tsan'
+      if: matrix.variant == 'tsan'
       run: sudo sysctl vm.mmap_rnd_bits=28
-
-    - name: Configure CMake
-      run: |
-        SANITIZER_FLAGS=""
-        BUILD_TYPE="${{ env.BUILD_TYPE }}"
-        if [ "${{ matrix.sanitizer }}" = "asan" ]; then
-          SANITIZER_FLAGS="-DENABLE_ASAN=ON"
-          BUILD_TYPE="Debug"
-        elif [ "${{ matrix.sanitizer }}" = "tsan" ]; then
-          SANITIZER_FLAGS="-DENABLE_TSAN=ON"
-          BUILD_TYPE="Debug"
-        elif [ "${{ matrix.sanitizer }}" = "ubsan" ]; then
-          SANITIZER_FLAGS="-DENABLE_UBSAN=ON"
-          BUILD_TYPE="Debug"
-        fi
-
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-          -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
-          -DALLOW_INSECURE_ZENOH=ON \
-          ${SANITIZER_FLAGS}
-
-    - name: Build
-      run: cmake --build build -j$(nproc)
-
-    - name: Run tests
-      working-directory: build
-      run: |
-        # Issue #804 — full ctest output is teed into the evidence store
-        # and uploaded as a workflow artifact (evidence-tests-<variant>).
-        # pipefail keeps ctest's exit code authoritative through the tee.
-        set -o pipefail
-        EV_DIR="$(cd .. && source deploy/lib_evidence.sh && evidence_run_dir tests "ci-build-${{ matrix.sanitizer }}")"
-        CTEST_EXCLUDE=""
-        if [ "${{ matrix.sanitizer }}" = "tsan" ]; then
-          # Exclude tests that create Zenoh sessions — libzenohc internal threading
-          # produces TSan false positives (memcpy race in ListenersUnicastIP).
-          # Our code is correctly synchronized (mutex/atomic around all Zenoh calls).
-          # Any test creating ZenohMessageBus/ZenohSession can trigger this:
-          # MessageBus, TopicResolver, ProcessContext, IpcRoundTrip, FaultCascade.
-          # Also excludes MAVSDK/YOLO (external library threading).
-          CTEST_EXCLUDE="Zenoh|Mavlink|Yolo|Liveliness|MessageBus|TopicResolver|ProcessContext|IpcRoundTrip|FaultCascade"
-        fi
-        VARIANT="${{ matrix.sanitizer == 'none' && 'default' || matrix.sanitizer }}"
-        if [ -n "${CTEST_EXCLUDE}" ]; then
-          ctest --output-on-failure -j"$(nproc)" -E "${CTEST_EXCLUDE}" 2>&1 | tee "${EV_DIR}/ctest_${VARIANT}.log"
-        else
-          ctest --output-on-failure -j"$(nproc)" 2>&1 | tee "${EV_DIR}/ctest_${VARIANT}.log"
-        fi
-
+    - name: Build and test
+      env:
+        MATRIX_JOB: ${{ matrix.job }}
+      run: bash deploy/ci_job.sh "$MATRIX_JOB"
     - name: Upload test evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: evidence-tests-${{ matrix.sanitizer == 'none' && 'default' || matrix.sanitizer }}
+        name: evidence-tests-${{ matrix.variant }}
         path: evidence/tests/
         retention-days: 14
 
-  # ── Code coverage report ─────────────────────────────────────────
   coverage:
     runs-on: ubuntu-24.04
     name: coverage
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-
-    - name: Install dependencies
-      run: |
+    - run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          build-essential cmake \
-          libspdlog-dev \
-          libeigen3-dev \
-          nlohmann-json3-dev \
-          libgtest-dev \
-          lcov unzip
-
-    - name: Install Zenoh
-      run: |
-        wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip" \
-          -O /tmp/zenohc.zip
-        unzip -o /tmp/zenohc.zip -d /tmp/zenohc-debs
-        sudo dpkg -i /tmp/zenohc-debs/*.deb
-
-        git clone --depth 1 --branch "${ZENOH_VERSION}" \
-          https://github.com/eclipse-zenoh/zenoh-cpp.git /tmp/zenoh-cpp
-        cd /tmp/zenoh-cpp
-        cmake -B build -DZENOHCXX_ZENOHC=ON -DZENOHCXX_ZENOHPICO=OFF
-        sudo cmake --install build/
-
-    - name: Configure CMake (coverage)
-      run: |
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DENABLE_COVERAGE=ON \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-          -DALLOW_INSECURE_ZENOH=ON
-
-    - name: Build
-      run: cmake --build build -j$(nproc)
-
-    - name: clang-tidy changed files (advisory)
-      continue-on-error: true
-      run: |
+          build-essential cmake libspdlog-dev libeigen3-dev nlohmann-json3-dev libgtest-dev lcov unzip
         sudo apt-get install -y --no-install-recommends clang-tidy-18 || true
-        BASE_REF="${{ github.base_ref || 'main' }}"
-        git fetch -q origin "${BASE_REF}" || true
-        bash deploy/run_clang_tidy.sh --changed "origin/${BASE_REF}"
-
-    - name: Zero counters
-      run: lcov --zerocounters --directory build
-
-    - name: Run tests
-      working-directory: build
-      run: ctest --output-on-failure -j$(nproc)
-
-    - name: Capture coverage
-      run: |
-        lcov --capture --directory build --output-file coverage-raw.info \
-          --ignore-errors mismatch,negative \
-          --rc lcov_branch_coverage=1
-        lcov --remove coverage-raw.info \
-          '/usr/*' \
-          '*/googletest/*' \
-          '*/gtest/*' \
-          '*/test/*' \
-          '*/tests/*' \
-          '*_test.cpp' \
-          '*_test.h' \
-          --output-file coverage.info \
-          --ignore-errors unused \
-          --rc lcov_branch_coverage=1
-        lcov --list coverage.info --rc lcov_branch_coverage=1
-
-    - name: Changed-line coverage delta (advisory)
-      continue-on-error: true
-      run: |
-        BASE_REF="${{ github.base_ref || 'main' }}"
-        git fetch -q origin "${BASE_REF}" || true
-        python3 deploy/coverage_delta.py --coverage coverage.info --base "origin/${BASE_REF}"
-
-    - name: Enforce coverage threshold
-      run: |
-        LCOV_SUMMARY=$(lcov --summary coverage.info 2>&1) || true
-        COVERAGE=$(echo "$LCOV_SUMMARY" | sed -n 's/.*lines\.\.\.\.\.\.: \([0-9.]*\)%.*/\1/p')
-        if [ -z "$COVERAGE" ] || ! echo "$COVERAGE" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-          echo "::error::Failed to parse line coverage from lcov summary"
-          echo "$LCOV_SUMMARY"
-          exit 1
-        fi
-        echo "Line coverage: ${COVERAGE}%"
-        if awk "BEGIN { exit !(${COVERAGE} < 70.0) }"; then
-          echo "::error::Line coverage ${COVERAGE}% is below 70% threshold"
-          exit 1
-        fi
-
-    - name: Generate HTML report
-      run: genhtml coverage.info --output-directory coverage-report --title "Companion Stack Coverage" --rc genhtml_branch_coverage=1
-
-    - name: Assemble coverage evidence
-      if: always()
-      run: |
-        # Issue #804 — lcov data + summary + HTML under evidence/coverage/.
-        EV_DIR="$(source deploy/lib_evidence.sh && evidence_run_dir coverage ci-coverage)"
-        [ -f coverage.info ] && cp coverage.info "${EV_DIR}/coverage.info"
-        lcov --summary coverage.info > "${EV_DIR}/summary.txt" 2>&1 || true
-        [ -d coverage-report ] && cp -r coverage-report "${EV_DIR}/html" || true
-
+    - run: bash deploy/ci_job.sh COV
     - name: Upload coverage evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -318,21 +115,12 @@ jobs:
         path: evidence/coverage/
         retention-days: 14
 
-  # ── Orchestrator Python tests ─────────────────────────────────────
   orchestrator-tests:
     runs-on: ubuntu-24.04
     name: orchestrator-tests
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
       with:
-        python-version: "3.12"
-
-    - name: Install dependencies
-      run: pip install .[dev]
-
-    - name: Run orchestrator tests
-      run: python -m pytest tests/test_orchestrator/ -v --tb=short
+        python-version: '3.12'
+    - run: bash deploy/ci_job.sh PYTHON

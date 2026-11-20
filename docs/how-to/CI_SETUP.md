@@ -375,47 +375,49 @@ To add a new sanitizer combination:
 
 ### Automated: `deploy/run_ci_local.sh`
 
-The easiest way to verify CI will pass is the local CI runner script. It mirrors
-the exact same jobs, flags, and exclusions as `.github/workflows/ci.yml`.
+Run the full set of repository checks on Ubuntu 24.04 x86-64. The Actions
+workflows and local runner execute [the same job script](../../deploy/ci_job.sh).
+The first build downloads the pinned Zenoh C and C++ release into an isolated
+build directory. Optional workstation SDKs are disabled for these builds.
+Later runs reuse the dependency prefix and the build directory for each variant.
 
 ```bash
-# Quick check — format + build+test (~40 s)
-bash deploy/run_ci_local.sh --quick
+sudo apt-get install build-essential cmake libspdlog-dev libeigen3-dev \
+  nlohmann-json3-dev libgtest-dev git wget unzip util-linux clang-format-18 \
+  cppcheck clang-tidy-18 lcov python3.12-venv
 
-# Full CI — all 6 jobs (format + build + 3 sanitizers + coverage)
 bash deploy/run_ci_local.sh
-
-# Run a single job by tag
-bash deploy/run_ci_local.sh --job FMT         # clang-format check
-bash deploy/run_ci_local.sh --job BUILD       # Debug build + test
-bash deploy/run_ci_local.sh --job ASAN        # AddressSanitizer
-bash deploy/run_ci_local.sh --job TSAN        # ThreadSanitizer
-bash deploy/run_ci_local.sh --job UBSAN       # UBSanitizer
-bash deploy/run_ci_local.sh --job COV         # Coverage build + lcov report
+bash deploy/run_ci_local.sh --quick
+bash deploy/run_ci_local.sh --job TSAN
+CI_BASE=origin/integration/example CI_JOBS=6 bash deploy/run_ci_local.sh
 ```
 
-#### Available Job Tags
+Fetch the target branch before running CI and commit the changes you want included
+in branch-diff checks. `CI_BASE` defaults to `origin/main`. `CI_JOBS` controls
+build and test parallelism. `CI_BUILD_ROOT` defaults to `build-ci` in the
+checkout and keeps local development builds separate.
 
-| Tag | CI Equivalent | Description |
-|-----|---------------|-------------|
-| `FMT` | `format-check` | clang-format-18 dry-run with `--Werror` |
-| `BUILD` | `build (default)` | Debug build + all tests |
-| `ASAN` | `build (asan)` | AddressSanitizer |
-| `TSAN` | `build (tsan)` | ThreadSanitizer (excludes Zenoh/Mavlink/Yolo tests) |
-| `UBSAN` | `build (ubsan)` | UndefinedBehaviorSanitizer |
-| `COV` | `coverage` | Coverage build + lcov report |
+| Tag | Check |
+|---|---|
+| `FMT`, `DOC` | Formatting and documentation lint |
+| `BUILD` | Release build and CTest |
+| `ASAN`, `TSAN`, `UBSAN` | Independent Debug sanitizer builds and CTest |
+| `COV` | Coverage build, CTest, 70% line gate, HTML and advisory clang-tidy and coverage delta |
+| `CPPCHECK`, `AUDIT` | Advisory static analysis and safety audit |
+| `PYTHON` | Python 3.12 orchestrator tests |
+| `PR_SIZE`, `BOUNDARIES` | Branch size gate and advisory agent scope check |
 
-The script prints a color-coded summary at the end:
+`--quick` runs only FMT, DOC and BUILD. The full runner reports each job and
+returns failure if a required job fails. Local evidence remains under
+`evidence/`. GitHub Actions also uploads that evidence and posts check status
+to the PR. The cloud GPU advisory workflow requires its own provisioned runner
+and credentials.
 
-```
-  CI Summary
-  Total : 6
-  Passed: 6
-  Failed: 0
-  Time  : 312s
-
-✓ CI would PASS
-```
+GitHub sets `vm.mmap_rnd_bits=28` for TSan. The local runner uses a
+process-scoped ASLR workaround when the host setting is higher or unavailable.
+That workaround must be permitted by the host. A host that prohibits it reports
+a failed TSan job. A successful local run exercises the same check commands.
+Runner images, package updates and GitHub service behavior can still differ.
 
 ### Manual: Reproducing a Single CI Leg
 

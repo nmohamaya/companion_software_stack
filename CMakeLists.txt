@@ -162,6 +162,16 @@ endif()
 message(STATUS "  Zenoh        : REQUIRED (zenohc ${zenohc_VERSION})")
 
 # ── Optional dependencies (simulator / real-hardware backends) ──
+option(CI_DEPENDENCY_PROFILE "Use the dependency set installed by the CI workflow" OFF)
+if(CI_DEPENDENCY_PROFILE)
+    set(CMAKE_DISABLE_FIND_PACKAGE_MAVSDK TRUE)
+    set(CMAKE_DISABLE_FIND_PACKAGE_OpenCV TRUE)
+    set(CMAKE_DISABLE_FIND_PACKAGE_gz-transport14 TRUE)
+    set(CMAKE_DISABLE_FIND_PACKAGE_gz-msgs11 TRUE)
+    set(CMAKE_DISABLE_FIND_PACKAGE_gz-transport13 TRUE)
+    set(CMAKE_DISABLE_FIND_PACKAGE_gz-msgs10 TRUE)
+endif()
+
 find_package(MAVSDK QUIET)
 if(MAVSDK_FOUND)
     message(STATUS "  MAVSDK       : ${MAVSDK_VERSION} — MavlinkFCLink backend available")
@@ -204,7 +214,11 @@ endif()
 # Uses ExternalProject_Add for flag isolation (AirSim's CommonSetup.cmake
 # mutates global CXX_FLAGS which would break our -Werror policy).
 # See cmake/FindAirSim.cmake for details.
-include(cmake/FindAirSim.cmake)
+if(CI_DEPENDENCY_PROFILE)
+    set(COSYS_AIRSIM_FOUND FALSE)
+else()
+    include(cmake/FindAirSim.cmake)
+endif()
 
 # ── ML model presets ───────────────────────────────────────
 include(cmake/ModelPresets.cmake)
