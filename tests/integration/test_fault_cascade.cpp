@@ -7,17 +7,18 @@
 //   - System health messages (SystemHealth with fault flags)
 //   - Battery status messages
 //
-// NOTE: These tests validate IPC wire format and pub/sub plumbing for fault
-// messages — they do NOT instantiate real fault detection logic (FaultManager,
-// MissionFSM).  A bug in fault escalation code would not be caught here.
-// For actual fault logic coverage, see test_fault_manager.cpp and
-// test_fault_response_executor.cpp.
+// The propagation cases construct messages directly. The fault-response cases
+// exercise the P4 request and P5 backend dispatch code with a fake backend.
 //
 // See: Issue #292 (Epic #284 — Platform Modularity)
+#include "comms/fc_response_dispatch.h"
+#include "hal/simulated_fc_link.h"
 #include "integration/integration_harness.h"
 #include "ipc/ipc_types.h"
 #include "ipc/ipublisher.h"
 #include "ipc/isubscriber.h"
+#include "planner/fault_response_executor.h"
+#include "planner/fc_command_sender.h"
 
 #include <chrono>
 #include <thread>
@@ -392,4 +393,129 @@ TEST_F(FaultCascadeTest, FaultLogsCaptured) {
     EXPECT_TRUE(harness_.logger()->contains("Escalation timeout"));
     EXPECT_EQ(harness_.logger()->count_at(drone::log::Level::Warn), 1u);
     EXPECT_EQ(harness_.logger()->count_at(drone::log::Level::Error), 1u);
+}
+
+namespace {
+
+class FakeResponseLink : public drone::hal::SimulatedFCLink {
+public:
+    bool send_mode(uint8_t mode) override {
+        requested_mode = mode;
+        return submit_successfully;
+    }
+
+    uint8_t requested_mode{0};
+    bool    submit_successfully{false};
+};
+
+}  // namespace
+
+TEST_F(FaultCascadeTest, BackendFailureReachesPlannerAndBlocksStaleTrajectory) {
+    const auto cmd_topic = IntegrationTestHarness::unique_topic(ipc::topics::FC_COMMANDS);
+    const auto outcome_topic =
+        IntegrationTestHarness::unique_topic(ipc::topics::FC_COMMAND_OUTCOME);
+    auto cmd_pub     = harness_.bus().advertise<ipc::FCCommand>(cmd_topic);
+    auto cmd_sub     = harness_.bus().subscribe<ipc::FCCommand>(cmd_topic);
+    auto outcome_pub = harness_.bus().advertise<ipc::FCCommandOutcome>(outcome_topic);
+    auto outcome_sub = harness_.bus().subscribe<ipc::FCCommandOutcome>(outcome_topic);
+    auto traj_pub    = harness_.bus().advertise<ipc::TrajectoryCmd>(
+        IntegrationTestHarness::unique_topic(ipc::topics::TRAJECTORY_CMD));
+
+    drone::planner::FCCommandSender sender(*cmd_pub);
+    drone::planner::MissionFSM      fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2, 3, false}});
+    fsm.on_arm();
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    drone::planner::SharedFlightState flight_state;
+    drone::planner::FaultState        fault{};
+    fault.recommended_action = ipc::FaultAction::RTL;
+
+    harness_.clock().advance_ms(10);
+    drone::planner::FaultResponseExecutor executor;
+    executor.execute(
+        fault, fsm,
+        [&](ipc::FCCommandType command, float param) {
+            sender.send_fault_response(command, param);
+        },
+        *traj_pub, flight_state, harness_.clock().now_ns());
+    EXPECT_TRUE(harness_.logger()->contains("backend=unconfirmed"));
+
+    wait_delivery();
+    ipc::FCCommand request{};
+    ASSERT_TRUE(cmd_sub->receive(request));
+    EXPECT_EQ(request.command, ipc::FCCommandType::RTL);
+
+    harness_.clock().advance_ms(10);
+    FakeResponseLink backend;
+    uint64_t         last_trajectory_timestamp = 1;
+    outcome_pub->publish(
+        drone::comms::dispatch_fc_response(backend, request, last_trajectory_timestamp));
+    EXPECT_EQ(backend.requested_mode, 3u);
+    EXPECT_EQ(last_trajectory_timestamp, UINT64_MAX);
+    EXPECT_FALSE(harness_.logger()->contains("[FaultResponse] backend failed"));
+
+    wait_delivery();
+    ipc::FCCommandOutcome outcome{};
+    ASSERT_TRUE(outcome_sub->receive(outcome));
+    ASSERT_EQ(outcome.backend_outcome, ipc::FCBackendOutcome::FAILED);
+    sender.observe_outcome(outcome);
+    EXPECT_TRUE(harness_.logger()->contains("[FaultResponse] backend failed"));
+}
+
+TEST_F(FaultCascadeTest, SuccessfulBackendCallLeavesControllerUnconfirmed) {
+    const auto cmd_topic = IntegrationTestHarness::unique_topic(ipc::topics::FC_COMMANDS);
+    auto       cmd_pub   = harness_.bus().advertise<ipc::FCCommand>(cmd_topic);
+    auto       cmd_sub   = harness_.bus().subscribe<ipc::FCCommand>(cmd_topic);
+    drone::planner::FCCommandSender sender(*cmd_pub);
+    harness_.clock().advance_ms(10);
+    sender.send_fault_response(ipc::FCCommandType::LAND, 0.0f);
+
+    wait_delivery();
+    ipc::FCCommand request{};
+    ASSERT_TRUE(cmd_sub->receive(request));
+    FakeResponseLink backend;
+    backend.submit_successfully          = true;
+    uint64_t   last_trajectory_timestamp = 1;
+    const auto outcome                   = drone::comms::dispatch_fc_response(backend, request,
+                                                                              last_trajectory_timestamp);
+    EXPECT_EQ(backend.requested_mode, 2u);
+    EXPECT_EQ(last_trajectory_timestamp, UINT64_MAX);
+    sender.observe_outcome(outcome);
+    EXPECT_TRUE(harness_.logger()->contains("controller=unconfirmed"));
+}
+
+TEST_F(FaultCascadeTest, OlderOutcomeCannotResolveNewRequestAfterPlannerRestart) {
+    const auto cmd_topic = IntegrationTestHarness::unique_topic(ipc::topics::FC_COMMANDS);
+    auto       cmd_pub   = harness_.bus().advertise<ipc::FCCommand>(cmd_topic);
+    auto       cmd_sub   = harness_.bus().subscribe<ipc::FCCommand>(cmd_topic);
+    drone::planner::FCCommandSender old_sender(*cmd_pub);
+    harness_.clock().advance_ms(10);
+    old_sender.send_fault_response(ipc::FCCommandType::RTL, 0.0f);
+
+    wait_delivery();
+    ipc::FCCommand old_request{};
+    ASSERT_TRUE(cmd_sub->receive(old_request));
+
+    drone::planner::FCCommandSender new_sender(*cmd_pub);
+    harness_.clock().advance_ms(10);
+    new_sender.send_fault_response(ipc::FCCommandType::RTL, 0.0f);
+
+    wait_delivery();
+    ipc::FCCommand new_request{};
+    ASSERT_TRUE(cmd_sub->receive(new_request));
+    ASSERT_EQ(old_request.sequence_id, new_request.sequence_id);
+    ASSERT_NE(old_request.timestamp_ns, new_request.timestamp_ns);
+
+    FakeResponseLink backend;
+    uint64_t         last_trajectory_timestamp = 1;
+    const auto       late_outcome = drone::comms::dispatch_fc_response(backend, old_request,
+                                                                       last_trajectory_timestamp);
+    new_sender.observe_outcome(late_outcome);
+    EXPECT_FALSE(harness_.logger()->contains("[FaultResponse] backend failed"));
+
+    backend.submit_successfully = true;
+    new_sender.observe_outcome(
+        drone::comms::dispatch_fc_response(backend, new_request, last_trajectory_timestamp));
+    EXPECT_TRUE(harness_.logger()->contains("controller=unconfirmed"));
 }

@@ -4342,4 +4342,14 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 
 ---
 
-*Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #120 — Fault-response backend outcome (Issue #832)
+
+**Date** 2026-11-20
+
+P5 reports the backend return for RTL and LAND on a dedicated IPC topic. P4
+matches the response by command, timestamp and sequence, then logs failure or
+submission. Backend submission leaves controller execution unconfirmed. The
+existing trajectory guard applies to both outcomes. Regression cases cover
+backend failure, submission without controller evidence and late results across
+a planner restart. See the [API contract](../design/API.md#fccommandoutcome) and
+[test inventory](../../tests/TESTS.md#integration-tests).

@@ -127,6 +127,7 @@ public:
             {"/trajectory_cmd", "drone/mission/trajectory"},
             {"/payload_commands", "drone/mission/payload_command"},
             {"/fc_commands", "drone/comms/fc_command"},
+            {"/fc_command_outcome", "drone/comms/fc_command_outcome"},
             {"/fc_state", "drone/comms/fc_state"},
             {"/gcs_commands", "drone/comms/gcs_command"},
             {"/mission_upload", "drone/mission/upload"},

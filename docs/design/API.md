@@ -139,6 +139,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/trajectory_cmd` | `drone/mission/trajectory` |
 | `/payload_commands` | `drone/mission/payload_command` |
 | `/fc_commands` | `drone/comms/fc_command` |
+| `/fc_command_outcome` | `drone/comms/fc_command_outcome` |
 | `/fc_state` | `drone/comms/fc_state` |
 | `/gcs_commands` | `drone/comms/gcs_command` |
 | `/mission_upload` | `drone/mission/upload` |
@@ -570,6 +571,31 @@ Flight controller command (P4 to P5).
 | `valid` | `bool` | Message validity flag |
 
 **Topic:** `/fc_commands` to Zenoh key `drone/comms/fc_command`
+
+### `FCCommandOutcome`
+
+P5 publishes the backend result of a dispatched RTL or LAND request. For a
+fault-triggered response, P4 matches the result against the pending command and
+logs the outcome in `[FaultResponse]` diagnostics.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `timestamp_ns` | `uint64_t` | Monotonic time when the backend call returned |
+| `request_timestamp_ns` | `uint64_t` | P4 command timestamp on the same host boot |
+| `sequence_id` | `uint64_t` | P4 command sequence, matched with timestamp and command |
+| `command` | `FCCommandType` | RTL or LAND |
+| `backend_outcome` | `FCBackendOutcome` | FAILED (backend returned false) or SUBMITTED (backend returned true) |
+
+An absent outcome leaves the request unconfirmed. The planner ignores outcomes
+from superseded requests and clears the pending identity on fault reset. The
+result channel uses the same last-value delivery as the command channel.
+
+The simulated backend updates its internal mode. MAVSDK reports an Action result
+and groups LAND, HOLD, TAKEOFF and MISSION under one telemetry mode. The Cosys
+backend submits an asynchronous RPC and echoes the requested mode. Treat
+SUBMITTED as a backend result. Confirm controller behavior through independent
+backend-specific observations. P5 applies the existing stale-trajectory guard
+for either outcome.
 
 ### `FCState`
 

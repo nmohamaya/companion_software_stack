@@ -11,6 +11,7 @@
     { "topic": "/trajectory_cmd", "struct": "TrajectoryCmd", "sizeof_bytes": 56 },
     { "topic": "/payload_commands", "struct": "PayloadCommand", "sizeof_bytes": 48 },
     { "topic": "/fc_commands", "struct": "FCCommand", "sizeof_bytes": 40 },
+    { "topic": "/fc_command_outcome", "struct": "FCCommandOutcome", "sizeof_bytes": 32 },
     { "topic": "/fc_state", "struct": "FCState", "sizeof_bytes": 64 },
     { "topic": "/gcs_commands", "struct": "GCSCommand", "sizeof_bytes": 48 },
     { "topic": "/mission_upload", "struct": "MissionUpload", "sizeof_bytes": 920 },
