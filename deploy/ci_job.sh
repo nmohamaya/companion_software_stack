@@ -107,7 +107,8 @@ coverage() {
         --ignore-errors mismatch,negative --rc lcov_branch_coverage=1
     evidence="$(evidence_run_dir coverage ci-coverage)"
     lcov --remove "$coverage_dir/coverage-raw.info" \
-        '/usr/*' '*/googletest/*' '*/gtest/*' '*/test/*' '*/tests/*' '*_test.cpp' '*_test.h' \
+        '/usr/*' "$zenoh_prefix/*" '*/googletest/*' '*/gtest/*' '*/test/*' '*/tests/*' \
+        '*_test.cpp' '*_test.h' \
         --output-file "$coverage_dir/coverage.info" \
         --ignore-errors unused --rc lcov_branch_coverage=1
     cp "$coverage_dir/coverage.info" "$evidence/coverage.info"
