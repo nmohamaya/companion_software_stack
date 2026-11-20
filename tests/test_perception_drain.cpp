@@ -8,6 +8,8 @@
 // Each test uses std::atomic<int> shutdown_phase and TripleBuffer to simulate
 // the pipeline stages without needing real HAL backends or IPC.
 
+#include "perception/drain_timeout.h"
+#include "util/mock_clock.h"
 #include "util/triple_buffer.h"
 
 #include <atomic>
@@ -128,74 +130,22 @@ TEST(PerceptionDrainTest, TrackerDrainsBeforeStopping) {
 // If the TripleBuffer somehow keeps producing data during drain,
 // the drain timeout should force the thread to exit.
 TEST(PerceptionDrainTest, DrainTimeoutPreventsHanging) {
-    std::atomic<int>  shutdown_phase{0};
-    TripleBuffer<int> buffer;
+    drone::util::ScopedMockClock clock;
+    const auto                   start   = clock.mock().now();
+    constexpr auto               timeout = std::chrono::milliseconds(100);
+    TripleBuffer<int>            buffer;
 
-    constexpr int kDrainTimeoutMs = 100;  // Short timeout for test speed
-
-    // Continuously feed data to simulate a pathological case
-    std::atomic<bool> feeder_running{true};
-    std::thread       feeder([&] {
-        int counter = 0;
-        while (feeder_running.load(std::memory_order_acquire)) {
-            buffer.write(++counter);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    });
-
-    bool timed_out = false;
-
-    // Simulated tracker with drain timeout
-    // The feeder continuously writes, so the tracker should never see "no data"
-    // during drain — it should only exit via the timeout.
-    std::thread t_tracker([&] {
-        bool          tracker_draining    = false;
-        int           consecutive_no_data = 0;
-        constexpr int kDrainEmpty         = 5;  // consecutive empty reads to consider drained
-        auto          tracker_drain_start = std::chrono::steady_clock::now();
-
-        while (shutdown_phase.load(std::memory_order_acquire) < 2) {
-            if (!tracker_draining && shutdown_phase.load(std::memory_order_acquire) >= 1) {
-                tracker_draining    = true;
-                tracker_drain_start = std::chrono::steady_clock::now();
-            }
-
-            auto val = buffer.read();
-            if (!val.has_value() && tracker_draining) {
-                ++consecutive_no_data;
-                if (consecutive_no_data >= kDrainEmpty) {
-                    break;  // upstream genuinely drained
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            } else if (val.has_value()) {
-                consecutive_no_data = 0;
-            }
-
-            if (tracker_draining) {
-                const auto elapsed = std::chrono::steady_clock::now() - tracker_drain_start;
-                if (elapsed >= std::chrono::milliseconds(kDrainTimeoutMs)) {
-                    timed_out = true;
-                    break;
-                }
-            } else if (!val.has_value()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-        }
-    });
-
-    // Start draining
-    shutdown_phase.store(1, std::memory_order_release);
-
-    // Wait for tracker to hit the timeout (with generous margin)
-    t_tracker.join();
-
-    // Stop the feeder
-    feeder_running.store(false, std::memory_order_release);
-    feeder.join();
-
-    // The tracker should have timed out because feeder kept writing
-    EXPECT_TRUE(timed_out);
+    // Supply data deterministically on each iteration so the production
+    // timeout predicate is tested independently of the scheduler.
+    for (int elapsed_ms = 0; elapsed_ms < timeout.count(); ++elapsed_ms) {
+        buffer.write(elapsed_ms);
+        ASSERT_TRUE(buffer.read().has_value());
+        EXPECT_FALSE(drone::perception::drain_timed_out(start, timeout));
+        clock.mock().advance_ms(1);
+    }
+    buffer.write(42);
+    ASSERT_TRUE(buffer.read().has_value());
+    EXPECT_TRUE(drone::perception::drain_timed_out(start, timeout));
 }
 
 // ── Test 4: Fusion drains after tracker stops ───────────────

@@ -11,6 +11,7 @@
 #include "hal/simulated_sam_backend.h"
 #include "ipc/ipc_types.h"
 #include "perception/detector_interface.h"
+#include "perception/drain_timeout.h"
 #include "perception/fusion_engine.h"
 #include "perception/ifusion_engine.h"
 #include "perception/itracker.h"
@@ -475,7 +476,7 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
 
     // Drain state: track when we enter drain mode and enforce a timeout.
     bool tracker_draining    = false;
-    auto tracker_drain_start = std::chrono::steady_clock::now();
+    auto tracker_drain_start = drone::util::get_clock().now();
 
     while (shutdown_phase.load(std::memory_order_acquire) < 2) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -483,7 +484,7 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
         // Enter drain mode when inference has stopped (phase >= 1)
         if (!tracker_draining && shutdown_phase.load(std::memory_order_acquire) >= 1) {
             tracker_draining    = true;
-            tracker_drain_start = std::chrono::steady_clock::now();
+            tracker_drain_start = drone::util::get_clock().now();
             DRONE_LOG_INFO("[Tracker] Entering drain mode — consuming remaining detections");
         }
 
@@ -523,12 +524,11 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
 
         // Drain timeout: prevent hanging if TripleBuffer keeps producing
         // stale reads during shutdown.
-        if (tracker_draining) {
-            const auto elapsed = std::chrono::steady_clock::now() - tracker_drain_start;
-            if (elapsed >= std::chrono::milliseconds(drain_timeout_ms)) {
-                DRONE_LOG_WARN("[Tracker] Drain timeout ({}ms) — forcing exit", drain_timeout_ms);
-                break;
-            }
+        if (tracker_draining &&
+            drone::perception::drain_timed_out(tracker_drain_start,
+                                               std::chrono::milliseconds(drain_timeout_ms))) {
+            DRONE_LOG_WARN("[Tracker] Drain timeout ({}ms) — forcing exit", drain_timeout_ms);
+            break;
         }
     }
     DRONE_LOG_INFO("[Tracker] Thread stopped — {} cycles, {} writes", cycle_count,
@@ -572,7 +572,7 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 
     // Drain tracking: once phase >= 2 (tracker stopped), consume remaining data.
     bool fusion_draining    = false;
-    auto fusion_drain_start = std::chrono::steady_clock::now();
+    auto fusion_drain_start = drone::util::get_clock().now();
 
     while (shutdown_phase.load(std::memory_order_acquire) < 3) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -580,7 +580,7 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
         // Enter drain mode when tracker has stopped (phase >= 2)
         if (!fusion_draining && shutdown_phase.load(std::memory_order_acquire) >= 2) {
             fusion_draining    = true;
-            fusion_drain_start = std::chrono::steady_clock::now();
+            fusion_drain_start = drone::util::get_clock().now();
             DRONE_LOG_INFO("[Fusion] Entering drain mode — consuming remaining tracked data");
         }
 
@@ -774,12 +774,11 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 
         // Drain timeout: prevent hanging if TripleBuffer keeps producing
         // stale reads during shutdown.
-        if (fusion_draining) {
-            const auto elapsed = std::chrono::steady_clock::now() - fusion_drain_start;
-            if (elapsed >= std::chrono::milliseconds(drain_timeout_ms)) {
-                DRONE_LOG_WARN("[Fusion] Drain timeout ({}ms) — forcing exit", drain_timeout_ms);
-                break;
-            }
+        if (fusion_draining &&
+            drone::perception::drain_timed_out(fusion_drain_start,
+                                               std::chrono::milliseconds(drain_timeout_ms))) {
+            DRONE_LOG_WARN("[Fusion] Drain timeout ({}ms) — forcing exit", drain_timeout_ms);
+            break;
         }
 
         // Rate-limited sleep — reset next_tick if we fell behind to avoid
