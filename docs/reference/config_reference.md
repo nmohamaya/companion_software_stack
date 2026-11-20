@@ -239,6 +239,7 @@ transitions (LOITER → RTL → LAND).
 | `fault_manager.battery_rtl_percent` | `float` | `20.0` | 0–100 | Battery level that triggers automatic RTL |
 | `fault_manager.battery_crit_percent` | `float` | `10.0` | 0–100 | Battery level that triggers immediate LAND |
 | `fault_manager.fc_link_lost_timeout_ms` | `int` | `3000` | 500–30000 | ms FC link silent before heartbeat-loss fault |
+| `fault_manager.fc_response_observation_timeout_ms` | `int` | `5000` | 100–60000 | ms from a fault-response request to the observation deadline |
 | `fault_manager.fc_link_rtl_timeout_ms` | `int` | `15000` | 1000–60000 | ms FC link lost before escalation to RTL |
 | `fault_manager.loiter_escalation_timeout_s` | `int` | `30` | 5–300 | s in LOITER before auto-escalating to RTL |
 

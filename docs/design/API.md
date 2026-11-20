@@ -140,6 +140,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/payload_commands` | `drone/mission/payload_command` |
 | `/fc_commands` | `drone/comms/fc_command` |
 | `/fc_command_outcome` | `drone/comms/fc_command_outcome` |
+| `/fc_mode_observation` | `drone/comms/fc_mode_observation` |
 | `/fc_state` | `drone/comms/fc_state` |
 | `/gcs_commands` | `drone/comms/gcs_command` |
 | `/mission_upload` | `drone/mission/upload` |
@@ -596,6 +597,21 @@ backend submits an asynchronous RPC and echoes the requested mode. Treat
 SUBMITTED as a backend result. Confirm controller behavior through independent
 backend-specific observations. P5 applies the existing stale-trajectory guard
 for either outcome.
+
+### `FCModeObservation`
+
+P5 forwards MAVSDK mode observations on a dedicated topic. The timestamp
+records when the mode callback ran on the companion monotonic clock. The mode
+is UNKNOWN, OTHER, RTL or LAND. HOLD, TAKEOFF and MISSION map to OTHER.
+Cosys and the built-in simulated backend provide no independent mode samples. [MAVSDK heartbeat source](https://github.com/mavlink/MAVSDK/blob/v2.12.12/src/mavsdk/plugins/telemetry/telemetry_impl.cpp#L1152-L1174)
+
+After a matched successful backend outcome, P4 accepts a matching mode sample
+observed after the request and received within the configured observation
+window. It reports the sample time as evidence of mode engagement. Physical
+completion requires separate evidence. The observation deadline starts at
+request emission. Missing or conflicting telemetry leaves the controller
+unconfirmed at that deadline. Supersession and fault reset clear the pending
+request. The diagnostics do not drive recovery or retries.
 
 ### `FCState`
 

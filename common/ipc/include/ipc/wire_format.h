@@ -58,9 +58,10 @@ enum class WireMessageType : uint16_t {
     FC_COMMAND      = 33,  // FCCommand
 
     // ── Comms (Process 5) ────────────────────────────
-    FC_STATE           = 40,  // FCState
-    GCS_COMMAND        = 41,  // GCSCommand
-    FC_COMMAND_OUTCOME = 42,  // FCCommandOutcome
+    FC_STATE            = 40,  // FCState
+    GCS_COMMAND         = 41,  // GCSCommand
+    FC_COMMAND_OUTCOME  = 42,  // FCCommandOutcome
+    FC_MODE_OBSERVATION = 43,  // FCModeObservation
 
     // ── Payload Manager (Process 6) ──────────────────
     PAYLOAD_STATUS = 50,  // PayloadStatus
@@ -224,6 +225,7 @@ template<typename T>
     if (key == "drone/mission/payload_command") return WireMessageType::PAYLOAD_COMMAND;
     if (key == "drone/comms/fc_command") return WireMessageType::FC_COMMAND;
     if (key == "drone/comms/fc_command_outcome") return WireMessageType::FC_COMMAND_OUTCOME;
+    if (key == "drone/comms/fc_mode_observation") return WireMessageType::FC_MODE_OBSERVATION;
     if (key == "drone/comms/fc_state") return WireMessageType::FC_STATE;
     if (key == "drone/comms/gcs_command") return WireMessageType::GCS_COMMAND;
     if (key == "drone/payload/status") return WireMessageType::PAYLOAD_STATUS;

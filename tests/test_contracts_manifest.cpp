@@ -62,6 +62,8 @@ const Binding kBinding[] = {
     {PAYLOAD_COMMANDS, "PayloadCommand", sizeof(drone::ipc::PayloadCommand)},
     {FC_COMMANDS, "FCCommand", sizeof(drone::ipc::FCCommand)},
     {FC_COMMAND_OUTCOME, "FCCommandOutcome", sizeof(drone::ipc::FCCommandOutcome)},
+    {drone::ipc::topics::FC_MODE_OBSERVATION, "FCModeObservation",
+     sizeof(drone::FCModeObservation)},
     {FC_STATE, "FCState", sizeof(drone::ipc::FCState)},
     {GCS_COMMANDS, "GCSCommand", sizeof(drone::ipc::GCSCommand)},
     {MISSION_UPLOAD, "MissionUpload", sizeof(drone::ipc::MissionUpload)},

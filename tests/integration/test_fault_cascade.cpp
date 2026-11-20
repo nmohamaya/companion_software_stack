@@ -459,7 +459,7 @@ TEST_F(FaultCascadeTest, BackendFailureReachesPlannerAndBlocksStaleTrajectory) {
     ipc::FCCommandOutcome outcome{};
     ASSERT_TRUE(outcome_sub->receive(outcome));
     ASSERT_EQ(outcome.backend_outcome, ipc::FCBackendOutcome::FAILED);
-    sender.observe_outcome(outcome);
+    sender.observe_outcome(outcome, harness_.clock().now_ns());
     EXPECT_TRUE(harness_.logger()->contains("[FaultResponse] backend failed"));
 }
 
@@ -481,7 +481,7 @@ TEST_F(FaultCascadeTest, SuccessfulBackendCallLeavesControllerUnconfirmed) {
                                                                               last_trajectory_timestamp);
     EXPECT_EQ(backend.requested_mode, 2u);
     EXPECT_EQ(last_trajectory_timestamp, UINT64_MAX);
-    sender.observe_outcome(outcome);
+    sender.observe_outcome(outcome, harness_.clock().now_ns());
     EXPECT_TRUE(harness_.logger()->contains("controller=unconfirmed"));
 }
 
@@ -511,11 +511,77 @@ TEST_F(FaultCascadeTest, OlderOutcomeCannotResolveNewRequestAfterPlannerRestart)
     uint64_t         last_trajectory_timestamp = 1;
     const auto       late_outcome = drone::comms::dispatch_fc_response(backend, old_request,
                                                                        last_trajectory_timestamp);
-    new_sender.observe_outcome(late_outcome);
+    new_sender.observe_outcome(late_outcome, harness_.clock().now_ns());
     EXPECT_FALSE(harness_.logger()->contains("[FaultResponse] backend failed"));
 
     backend.submit_successfully = true;
-    new_sender.observe_outcome(
-        drone::comms::dispatch_fc_response(backend, new_request, last_trajectory_timestamp));
+    const auto current_outcome  = drone::comms::dispatch_fc_response(backend, new_request,
+                                                                     last_trajectory_timestamp);
+    new_sender.observe_outcome(current_outcome, harness_.clock().now_ns());
     EXPECT_TRUE(harness_.logger()->contains("controller=unconfirmed"));
+}
+
+TEST_F(FaultCascadeTest, LandRequiresIndependentModeObservedAfterRequest) {
+    using drone::FCModeObservation;
+    using drone::FCObservedMode;
+    const auto cmd_topic  = IntegrationTestHarness::unique_topic(ipc::topics::FC_COMMANDS);
+    const auto mode_topic = IntegrationTestHarness::unique_topic(ipc::topics::FC_MODE_OBSERVATION);
+    auto       cmd_pub    = harness_.bus().advertise<ipc::FCCommand>(cmd_topic);
+    auto       cmd_sub    = harness_.bus().subscribe<ipc::FCCommand>(cmd_topic);
+    auto       mode_pub   = harness_.bus().advertise<FCModeObservation>(mode_topic);
+    auto       mode_sub   = harness_.bus().subscribe<FCModeObservation>(mode_topic);
+    drone::planner::FCCommandSender sender(*cmd_pub);
+    auto&                           clock = harness_.clock();
+    clock.advance_ms(10);
+    sender.send_fault_response(ipc::FCCommandType::LAND, 0.0f);
+    wait_delivery();
+    ipc::FCCommand request{};
+    ASSERT_TRUE(cmd_sub->receive(request));
+
+    clock.advance_ms(10);
+    sender.observe_mode({clock.now_ns(), FCObservedMode::LAND}, clock.now_ns());
+    EXPECT_FALSE(harness_.logger()->contains("controller mode observed"));
+
+    const ipc::FCCommandOutcome submitted{clock.now_ns(), request.timestamp_ns, request.sequence_id,
+                                          request.command, ipc::FCBackendOutcome::SUBMITTED};
+    sender.observe_outcome(submitted, clock.now_ns());
+    sender.observe_mode({request.timestamp_ns, FCObservedMode::LAND}, clock.now_ns());
+    sender.observe_mode({clock.now_ns(), FCObservedMode::OTHER}, clock.now_ns());
+    sender.observe_mode({clock.now_ns(), FCObservedMode::UNKNOWN}, clock.now_ns());
+    sender.observe_mode({clock.now_ns() + 1, FCObservedMode::LAND}, clock.now_ns());
+    EXPECT_FALSE(harness_.logger()->contains("controller mode observed"));
+
+    clock.advance_ms(10);
+    mode_pub->publish({clock.now_ns(), FCObservedMode::LAND});
+    wait_delivery();
+    FCModeObservation observation{};
+    ASSERT_TRUE(mode_sub->receive(observation));
+    sender.observe_mode(observation, clock.now_ns());
+    EXPECT_TRUE(harness_.logger()->contains("controller mode observed"));
+}
+
+TEST_F(FaultCascadeTest, MissingControllerModeExpiresAtDeadline) {
+    const auto cmd_topic = IntegrationTestHarness::unique_topic(ipc::topics::FC_COMMANDS);
+    auto       cmd_pub   = harness_.bus().advertise<ipc::FCCommand>(cmd_topic);
+    auto       cmd_sub   = harness_.bus().subscribe<ipc::FCCommand>(cmd_topic);
+    drone::planner::FCCommandSender sender(*cmd_pub, std::chrono::milliseconds(100));
+    auto&                           clock = harness_.clock();
+    clock.advance_ms(10);
+    sender.send_fault_response(ipc::FCCommandType::RTL, 0.0f);
+    wait_delivery();
+    ipc::FCCommand request{};
+    ASSERT_TRUE(cmd_sub->receive(request));
+
+    clock.advance_ms(10);
+    const ipc::FCCommandOutcome submitted{clock.now_ns(), request.timestamp_ns, request.sequence_id,
+                                          request.command, ipc::FCBackendOutcome::SUBMITTED};
+    sender.observe_outcome(submitted, clock.now_ns());
+    clock.advance_ms(89);
+    sender.observe_mode({}, clock.now_ns());
+    EXPECT_FALSE(harness_.logger()->contains("controller unconfirmed at observation deadline"));
+    clock.advance_ms(1);
+    sender.observe_mode({}, clock.now_ns());
+    EXPECT_TRUE(harness_.logger()->contains("controller unconfirmed at observation deadline"));
+    sender.observe_mode({clock.now_ns(), drone::FCObservedMode::RTL}, clock.now_ns());
+    EXPECT_FALSE(harness_.logger()->contains("controller mode observed"));
 }
