@@ -395,6 +395,14 @@ When `ZENOH_CONFIG_PATH` is set, it's compiled in as `ZENOH_CONFIG_PATH="/path/t
 
 ## Perception (Process 2)
 
+### Perception drain timeout test flake (Issue #507)
+
+The timeout test used a sleeping feeder thread to keep a buffer nonempty. Under
+TSan or parallel load, a scheduling pause could empty the buffer and cause the
+test to exit before exercising the deadline. The tracker and fusion paths now
+share the deadline check with the test, which advances a mock clock while
+providing data on each iteration. Found again during the local CI parity run.
+
 ---
 
 ### Fix #4 — Uninitialized `total_cost` in HungarianSolver::Result

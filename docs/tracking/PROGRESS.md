@@ -4343,3 +4343,9 @@ inventory remain SSOT in [tests/TESTS.md](../../tests/TESTS.md).
 ---
 
 *Last updated after Improvement #119 (Issue #821 Phase 1 — planner responsiveness diagnostics). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+
+### Perception drain timeout regression (Issue #507)
+
+The tracker and fusion shutdown paths share a mock-clock-compatible expiry
+check. The regression feeds the buffer deterministically and tests the exact
+timeout boundary. No test was removed from the TSan filter.
