@@ -4353,3 +4353,13 @@ existing trajectory guard applies to both outcomes. Regression cases cover
 backend failure, submission without controller evidence and late results across
 a planner restart. See the [API contract](../design/API.md#fccommandoutcome) and
 [test inventory](../../tests/TESTS.md#integration-tests).
+
+### Improvement #121 — Controller mode evidence for fault responses (Issue #832)
+
+**Date** 2026-11-20
+
+P5 forwards an independent MAVSDK flight-mode sample with its observation time.
+After backend submission, P4 records a matching post-request RTL or LAND
+observation or reports an unconfirmed deadline. The new input only affects
+diagnostics. Tests exercise stale, ambiguous and missing samples. See the
+[IPC contract](../design/API.md#fcmodeobservation).

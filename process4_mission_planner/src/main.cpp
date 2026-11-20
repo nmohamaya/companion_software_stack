@@ -132,6 +132,12 @@ int main(int argc, char* argv[]) {
         DRONE_LOG_WARN("[Planner] FC command outcome subscription unavailable");
     }
 
+    auto fc_mode_sub = ctx.bus.subscribe_optional<drone::FCModeObservation>(
+        drone::ipc::topics::FC_MODE_OBSERVATION);
+    if (!fc_mode_sub->is_connected()) {
+        DRONE_LOG_WARN("[Planner] FC mode observation subscription unavailable");
+    }
+
     auto gcs_sub =
         ctx.bus.subscribe_optional<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
     auto mission_upload_sub =
@@ -605,8 +611,11 @@ int main(int argc, char* argv[]) {
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
-    FCCommandSender       command_sender(*fc_cmd_pub);
-    const FCSendFn        send_fc = [&](drone::ipc::FCCommandType cmd, float param) {
+    const int             response_timeout_ms = validate_and_clamp<int>(
+        ctx.cfg, drone::cfg_key::fault_manager::FC_RESPONSE_OBSERVATION_TIMEOUT_MS, 5000, 100,
+        60000, "fc_response_observation_timeout_ms");
+    FCCommandSender command_sender(*fc_cmd_pub, std::chrono::milliseconds{response_timeout_ms});
+    const FCSendFn  send_fc = [&](drone::ipc::FCCommandType cmd, float param) {
         command_sender.send(cmd, param);
     };
     const FCSendFn send_fault_response = [&](drone::ipc::FCCommandType cmd, float param) {
@@ -1132,9 +1141,14 @@ int main(int argc, char* argv[]) {
                            now_ns);
         fault_exec.log_new_faults(fault.active_faults);
         drone::ipc::FCCommandOutcome outcome{};
+        drone::FCModeObservation     mode{};
+        const auto                   observed_at = drone::util::get_clock().now_ns();
         if (fc_outcome_sub->receive(outcome)) {
-            command_sender.observe_outcome(outcome);
+            command_sender.observe_outcome(outcome, observed_at);
         }
+        fc_mode_sub->receive(mode);
+        command_sender.observe_mode(fc_state.connected ? mode : drone::FCModeObservation{},
+                                    observed_at);
 
         // ── 7. GCS commands ─────────────────────────────────
         gcs_handler.process(*gcs_sub, *mission_upload_sub, fsm, send_fc, *traj_pub,

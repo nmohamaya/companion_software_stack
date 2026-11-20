@@ -4,6 +4,8 @@
 //                  MavlinkFCLink   (MAVSDK + PX4 SITL or real Pixhawk, Tier 2),
 //                  CosysFCLink     (AirSim SimpleFlight RPC,            Tier 3).
 #pragma once
+#include "util/fc_mode_observation.h"
+
 #include <cstdint>
 #include <string>
 
@@ -66,6 +68,8 @@ struct FCState {
     float vx{0.0f};
     float vy{0.0f};
     float vz{0.0f};
+
+    FCModeObservation mode_observation{};  // Independent telemetry when available
 };
 
 /// Abstract flight controller link interface.

@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2076 (GitHub Release dependency profile) / 2200 (with MAVSDK, OpenCV and Gazebo) / 2208 (also with Cosys SDK) + 42 + 29 + 250+** | Issue #832 adds three cases in `integration/test_fault_cascade.cpp`. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2078 (GitHub Release dependency profile) / 2203 (with MAVSDK, OpenCV and Gazebo) / 2211 (also with Cosys SDK) + 42 + 29 + 250+** | Issue #832 adds fault-response regression cases in `integration/test_fault_cascade.cpp` and MAVSDK mode mapping coverage. |
 
 ---
 
@@ -1504,6 +1504,9 @@ dispatch with a fake controller link. They verify that a failure reaches the
 planner over Zenoh and preserves the trajectory guard, backend submission
 leaves controller execution unconfirmed, and a late result cannot resolve a
 new planner's request even when both requests have the same sequence.
+The mode observation cases exercise independent telemetry over Zenoh, invalid
+or stale samples, and expiry without confirmation. The MAVSDK-only mapping
+case verifies that HOLD, TAKEOFF and MISSION cannot confirm LAND.
 
 ### test_zenoh_e2e.sh — 42 checks
 

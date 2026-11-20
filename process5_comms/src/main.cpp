@@ -33,13 +33,15 @@ static std::atomic<bool> g_running{true};
 
 // ── FC receive thread (10 Hz) ───────────────────────────────
 static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::ipc::FCState>& pub,
-                         drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub) {
+                         drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub,
+                         drone::ipc::IPublisher<drone::FCModeObservation>&    mode_pub) {
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
     DRONE_LOG_INFO("[Comms] fc_rx thread started using {}", fc.name());
 
     // When FC link is overridden to disconnected, freeze the timestamp
     // so the FaultManager sees a stale heartbeat (simulates real link loss).
-    uint64_t frozen_ts = 0;
+    uint64_t                 frozen_ts = 0;
+    drone::FCModeObservation last_mode{};
 
     auto hb = drone::util::ScopedHeartbeat("fc_rx", true);
 
@@ -107,6 +109,22 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
         }
 
         pub.publish(state);
+
+        // This stream uses controller mode callbacks. The legacy FCState mode
+        // may group distinct modes or echo a request, depending on the backend.
+        auto mode = hb.mode_observation;
+        if (!state.connected && last_mode.mode != drone::FCObservedMode::UNKNOWN) {
+            mode = {drone::util::get_clock().now_ns(), drone::FCObservedMode::UNKNOWN};
+        }
+        if (mode.timestamp_ns > last_mode.timestamp_ns &&
+            (state.connected || mode.mode == drone::FCObservedMode::UNKNOWN)) {
+            last_mode = mode;
+            try {
+                mode_pub.publish(mode);
+            } catch (const std::exception& error) {
+                DRONE_LOG_WARN("[Comms] FC mode observation publish failed: {}", error.what());
+            }
+        }
 
         // Log IPC latency from the thread that owns fault_sub.receive()
         fault_sub.log_latency_if_due();
@@ -484,6 +502,11 @@ int main(int argc, char* argv[]) {
 
     // ── Publishers ──────────────────────────────────────────
     auto fc_pub = ctx.bus.advertise<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto mode_pub =
+        ctx.bus.advertise<drone::FCModeObservation>(drone::ipc::topics::FC_MODE_OBSERVATION);
+    if (!mode_pub->is_ready()) {
+        DRONE_LOG_WARN("[Comms] FC mode observation publishing unavailable");
+    }
     auto outcome_pub =
         ctx.bus.advertise<drone::ipc::FCCommandOutcome>(drone::ipc::topics::FC_COMMAND_OUTCOME);
     if (!outcome_pub->is_ready()) {
@@ -514,7 +537,8 @@ int main(int argc, char* argv[]) {
     drone::systemd::notify_ready();
 
     // ── Launch threads ──────────────────────────────────────
-    std::thread t1(fc_rx_thread, std::ref(*fc_link), std::ref(*fc_pub), std::ref(*fault_sub));
+    std::thread t1(fc_rx_thread, std::ref(*fc_link), std::ref(*fc_pub), std::ref(*fault_sub),
+                   std::ref(*mode_pub));
     std::thread t2(fc_tx_thread, std::ref(*fc_link), std::ref(*traj_sub), std::ref(*fc_cmd_sub),
                    std::ref(*outcome_pub));
     std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(*gcs_cmd_pub));

@@ -2,6 +2,8 @@
 // Shared data structures for inter-process communication.
 // All types MUST be trivially copyable (no std::string, std::vector, etc.)
 #pragma once
+#include "util/fc_mode_observation.h"
+
 #include <atomic>
 #include <cmath>
 #include <cstddef>  // offsetof (wire-format ABI static_asserts)
@@ -815,7 +817,8 @@ constexpr const char* SYSTEM_HEALTH     = "/system_health";
 constexpr const char* FAULT_OVERRIDES   = "/fault_overrides";
 constexpr const char* RADAR_DETECTIONS  = "/radar_detections";
 
-constexpr const char* FC_COMMAND_OUTCOME = "/fc_command_outcome";
+constexpr const char* FC_COMMAND_OUTCOME  = "/fc_command_outcome";
+constexpr const char* FC_MODE_OBSERVATION = "/fc_mode_observation";
 
 // ── Per-process thread health channels ──────────────────
 constexpr const char* THREAD_HEALTH_VIDEO_CAPTURE   = "/drone_thread_health_video_capture";

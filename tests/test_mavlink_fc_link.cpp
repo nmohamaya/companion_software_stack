@@ -62,6 +62,17 @@ static MavlinkTempCleanup g_mavlink_cleanup;
 
 #ifdef HAVE_MAVSDK
 
+TEST(MavlinkFCLinkTest, ModeObservationDistinguishesLandFromOtherAutoModes) {
+    using drone::FCObservedMode;
+    using Mode = mavsdk::Telemetry::FlightMode;
+    EXPECT_EQ(drone::hal::observe_mavsdk_mode(Mode::Land), FCObservedMode::LAND);
+    EXPECT_EQ(drone::hal::observe_mavsdk_mode(Mode::Hold), FCObservedMode::OTHER);
+    EXPECT_EQ(drone::hal::observe_mavsdk_mode(Mode::Mission), FCObservedMode::OTHER);
+    EXPECT_EQ(drone::hal::observe_mavsdk_mode(Mode::Takeoff), FCObservedMode::OTHER);
+    EXPECT_EQ(drone::hal::observe_mavsdk_mode(Mode::ReturnToLaunch), FCObservedMode::RTL);
+    EXPECT_EQ(drone::hal::observe_mavsdk_mode(Mode::Unknown), FCObservedMode::UNKNOWN);
+}
+
 #include "hal/mavlink_fc_link.h"
 
 // ── Basic construction and name ────────────────────────────

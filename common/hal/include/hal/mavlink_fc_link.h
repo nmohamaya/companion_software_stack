@@ -18,6 +18,7 @@
 #ifdef HAVE_MAVSDK
 
 #include "hal/ifc_link.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
 #include "util/math_constants.h"  // kDegToRad — for MAVSDK attitude_euler conversion
 
@@ -34,6 +35,16 @@
 #include <mavsdk/plugins/telemetry/telemetry.h>
 
 namespace drone::hal {
+
+[[nodiscard]] inline FCObservedMode observe_mavsdk_mode(mavsdk::Telemetry::FlightMode mode) {
+    using FlightMode = mavsdk::Telemetry::FlightMode;
+    switch (mode) {
+        case FlightMode::ReturnToLaunch: return FCObservedMode::RTL;
+        case FlightMode::Land: return FCObservedMode::LAND;
+        case FlightMode::Unknown: return FCObservedMode::UNKNOWN;
+        default: return FCObservedMode::OTHER;
+    }
+}
 
 /// MAVLink flight controller link using MAVSDK.
 ///
@@ -319,7 +330,8 @@ private:
         // Flight mode
         telemetry_->subscribe_flight_mode([this](mavsdk::Telemetry::FlightMode fm) {
             std::lock_guard<std::mutex> lock(state_mtx_);
-            cached_state_.flight_mode = map_flight_mode(fm);
+            cached_state_.flight_mode      = map_flight_mode(fm);
+            cached_state_.mode_observation = {util::get_clock().now_ns(), observe_mavsdk_mode(fm)};
         });
 
         // Armed state
