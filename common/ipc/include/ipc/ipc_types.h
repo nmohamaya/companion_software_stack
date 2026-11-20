@@ -475,6 +475,28 @@ struct FCCommand {
 };
 
 // ═══════════════════════════════════════════════════════════
+// FC Command Outcome (Process 5 → Process 4)
+// ═══════════════════════════════════════════════════════════
+enum class FCBackendOutcome : uint8_t { FAILED = 1, SUBMITTED = 2 };
+
+struct FCCommandOutcome {
+    uint64_t         timestamp_ns{0};          // P5 backend call completion
+    uint64_t         request_timestamp_ns{0};  // Original P4 request, monotonic within a host boot
+    uint64_t         sequence_id{0};           // Original command sequence
+    FCCommandType    command{FCCommandType::NONE};
+    FCBackendOutcome backend_outcome{};
+    uint8_t          reserved[6]{};  // Explicit zero-filled wire padding
+
+    [[nodiscard]] bool validate() const {
+        return request_timestamp_ns > 0 && timestamp_ns >= request_timestamp_ns &&
+               sequence_id > 0 &&
+               (command == FCCommandType::RTL || command == FCCommandType::LAND) &&
+               (backend_outcome == FCBackendOutcome::FAILED ||
+                backend_outcome == FCBackendOutcome::SUBMITTED);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════
 // FC State (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
 struct FCState {
@@ -792,6 +814,8 @@ constexpr const char* PAYLOAD_STATUS    = "/payload_status";
 constexpr const char* SYSTEM_HEALTH     = "/system_health";
 constexpr const char* FAULT_OVERRIDES   = "/fault_overrides";
 constexpr const char* RADAR_DETECTIONS  = "/radar_detections";
+
+constexpr const char* FC_COMMAND_OUTCOME = "/fc_command_outcome";
 
 // ── Per-process thread health channels ──────────────────
 constexpr const char* THREAD_HEALTH_VIDEO_CAPTURE   = "/drone_thread_health_video_capture";

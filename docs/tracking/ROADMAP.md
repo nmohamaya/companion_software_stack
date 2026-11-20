@@ -663,6 +663,7 @@ Mono mission cam (gimbaled, payload-only):
 | [#250](https://github.com/nmohamaya/companion_software_stack/issues/250) | D* Lite 3D grid (26-connected) | Open |
 | [#273](https://github.com/nmohamaya/companion_software_stack/issues/273) | Full S-matrix gating for all radar association | Open |
 | [#274](https://github.com/nmohamaya/companion_software_stack/issues/274) | Safety-critical C++ audit — scan codebase against full rule set | Open |
+| [#832](https://github.com/nmohamaya/companion_software_stack/issues/832) | Fault-response execution confirmation | First phase reports the backend outcome. Controller confirmation and recovery policy remain open. |
 
 ### Zenoh IPC Migration (Phase 12) — ✅ COMPLETE
 

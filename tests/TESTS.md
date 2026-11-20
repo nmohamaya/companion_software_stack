@@ -143,7 +143,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **107 C++ + 5 shell + 1 Python** | **2197 (no SDK, 8 Cosys-SDK tests skipped) / 2205 (+SDK) + 42 + 29 + 250+** | Current PR: Issue #821 Phase 1 (planner responsiveness diagnostics) +3 tests — new `Issue821PlannerDiag` suite in `test_dstar_lite_planner.cpp` (now 112): no-path increments the counter, shadow-A* probe leaves the trajectory byte-identical (observation-only proof), goal-flip counts as a re-init. `ctest -N --test-dir build` reports **2197** (no SDK, live SSOT) / **2205** (+SDK). Previous PR (#816 PR2): +5 `GazeboRadarGroundGate` tests. For earlier deltas see PROGRESS.md. |
+| **Total** | **107 C++ + 5 shell + 1 Python** | **2076 (GitHub Release dependency profile) / 2200 (with MAVSDK, OpenCV and Gazebo) / 2208 (also with Cosys SDK) + 42 + 29 + 250+** | Issue #832 adds three cases in `integration/test_fault_cascade.cpp`. |
 
 ---
 
@@ -1496,6 +1496,14 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 ---
 
 ## Integration Tests
+
+### integration/test_fault_cascade.cpp
+
+The fault-response regression cases use P4's request code and P5's backend
+dispatch with a fake controller link. They verify that a failure reaches the
+planner over Zenoh and preserves the trajectory guard, backend submission
+leaves controller execution unconfirmed, and a late result cannot resolve a
+new planner's request even when both requests have the same sequence.
 
 ### test_zenoh_e2e.sh — 42 checks
 

@@ -7,6 +7,7 @@
 #include "planner/dstar_lite_planner.h"  // #821 — DStarLitePlanner* for the diag counters
 #include "planner/fault_manager.h"
 #include "planner/fault_response_executor.h"
+#include "planner/fc_command_sender.h"
 #include "planner/gcs_command_handler.h"
 #include "planner/geofence.h"
 #include "planner/grid_planner_base.h"
@@ -19,7 +20,6 @@
 #include "planner/planner_stall_handler.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/config_keys.h"
-#include "util/correlation.h"
 #include "util/diagnostic.h"
 #include "util/iclock.h"
 #include "util/latency_profiler.h"
@@ -83,26 +83,6 @@ T validate_and_clamp(const drone::Config& cfg, const char* key, T default_val, T
 
 static std::atomic<bool> g_running{true};
 
-/// Monotonic sequence counter for FC commands (dedup in comms)
-static uint64_t fc_cmd_seq = 0;
-
-/// Publish an FC command to the FC command channel.
-/// Carries the current thread-local correlation ID.
-static void send_fc_command(drone::ipc::IPublisher<drone::ipc::FCCommand>& pub,
-                            drone::ipc::FCCommandType cmd, float param1 = 0.0f) {
-    drone::ipc::FCCommand fc_cmd{};
-    fc_cmd.timestamp_ns =
-        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now().time_since_epoch())
-                                  .count());
-    fc_cmd.correlation_id = drone::util::CorrelationContext::get();
-    fc_cmd.command        = cmd;
-    fc_cmd.param1         = param1;
-    fc_cmd.sequence_id    = ++fc_cmd_seq;
-    fc_cmd.valid          = true;
-    pub.publish(fc_cmd);
-}
-
 // ═══════════════════════════════════════════════════════════
 // main()
 // ═══════════════════════════════════════════════════════════
@@ -144,6 +124,12 @@ int main(int argc, char* argv[]) {
     if (!fc_state_sub->is_connected()) {
         DRONE_LOG_ERROR("Cannot connect to FC state — comms may not be running");
         return 1;
+    }
+
+    auto fc_outcome_sub = ctx.bus.subscribe_optional<drone::ipc::FCCommandOutcome>(
+        drone::ipc::topics::FC_COMMAND_OUTCOME);
+    if (!fc_outcome_sub->is_connected()) {
+        DRONE_LOG_WARN("[Planner] FC command outcome subscription unavailable");
     }
 
     auto gcs_sub =
@@ -619,8 +605,12 @@ int main(int argc, char* argv[]) {
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
-    auto                  send_fc = [&](drone::ipc::FCCommandType cmd, float p) {
-        send_fc_command(*fc_cmd_pub, cmd, p);
+    FCCommandSender       command_sender(*fc_cmd_pub);
+    const FCSendFn        send_fc = [&](drone::ipc::FCCommandType cmd, float param) {
+        command_sender.send(cmd, param);
+    };
+    const FCSendFn send_fault_response = [&](drone::ipc::FCCommandType cmd, float param) {
+        command_sender.send_fault_response(cmd, param);
     };
 
     // ── Create fault manager (config-driven thresholds) ────
@@ -1138,8 +1128,13 @@ int main(int argc, char* argv[]) {
         }();
 
         // ── 6. Fault execute ────────────────────────────────
-        fault_exec.execute(fault, fsm, send_fc, *traj_pub, state_tick.flight_state(), now_ns);
+        fault_exec.execute(fault, fsm, send_fault_response, *traj_pub, state_tick.flight_state(),
+                           now_ns);
         fault_exec.log_new_faults(fault.active_faults);
+        drone::ipc::FCCommandOutcome outcome{};
+        if (fc_outcome_sub->receive(outcome)) {
+            command_sender.observe_outcome(outcome);
+        }
 
         // ── 7. GCS commands ─────────────────────────────────
         gcs_handler.process(*gcs_sub, *mission_upload_sub, fsm, send_fc, *traj_pub,
@@ -1168,6 +1163,7 @@ int main(int argc, char* argv[]) {
         if (state_tick.consume_fault_reset()) {
             fault_mgr.reset();
             fault_exec.reset();
+            command_sender.reset_fault_response();
         }
 
         // ── 9. Publish status + health + diagnostics ────────

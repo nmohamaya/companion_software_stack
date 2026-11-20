@@ -25,6 +25,7 @@ namespace {
 using drone::ipc::topics::DETECTED_OBJECTS;
 using drone::ipc::topics::FAULT_OVERRIDES;
 using drone::ipc::topics::FC_COMMANDS;
+using drone::ipc::topics::FC_COMMAND_OUTCOME;
 using drone::ipc::topics::FC_STATE;
 using drone::ipc::topics::GCS_COMMANDS;
 using drone::ipc::topics::MISSION_STATUS;
@@ -60,6 +61,7 @@ const Binding kBinding[] = {
     {TRAJECTORY_CMD, "TrajectoryCmd", sizeof(drone::ipc::TrajectoryCmd)},
     {PAYLOAD_COMMANDS, "PayloadCommand", sizeof(drone::ipc::PayloadCommand)},
     {FC_COMMANDS, "FCCommand", sizeof(drone::ipc::FCCommand)},
+    {FC_COMMAND_OUTCOME, "FCCommandOutcome", sizeof(drone::ipc::FCCommandOutcome)},
     {FC_STATE, "FCState", sizeof(drone::ipc::FCState)},
     {GCS_COMMANDS, "GCSCommand", sizeof(drone::ipc::GCSCommand)},
     {MISSION_UPLOAD, "MissionUpload", sizeof(drone::ipc::MissionUpload)},

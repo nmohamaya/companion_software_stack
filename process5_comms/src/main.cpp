@@ -8,6 +8,7 @@
 //   gcs_rx   — polls GCS for commands, publishes GCSCommand
 //   gcs_tx   — reads mission status + pose, sends telemetry to GCS
 
+#include "comms/fc_response_dispatch.h"
 #include "comms/heartbeat_decision.h"
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
@@ -25,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <thread>
 
 static std::atomic<bool> g_running{true};
@@ -119,9 +121,10 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
 // PR #651 P2 review: docstring previously said 20 Hz but the loop-period
 // fix in #651 brought us to 25 ms (40 Hz) so the heartbeat path can fire
 // inside SimpleFlight's 60 ms api_goal_timeout window.
-static void fc_tx_thread(drone::hal::IFCLink&                                fc,
-                         drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>& traj_sub,
-                         drone::ipc::ISubscriber<drone::ipc::FCCommand>&     cmd_sub) {
+static void fc_tx_thread(drone::hal::IFCLink&                                  fc,
+                         drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>&   traj_sub,
+                         drone::ipc::ISubscriber<drone::ipc::FCCommand>&       cmd_sub,
+                         drone::ipc::IPublisher<drone::ipc::FCCommandOutcome>& outcome_pub) {
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
     DRONE_LOG_INFO("[Comms] fc_tx thread started using {}", fc.name());
 
@@ -216,15 +219,18 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                     cmd_ok = fc.send_mode(static_cast<uint8_t>(fc_cmd.param1));
                     break;
                 case drone::ipc::FCCommandType::RTL:
-                    DRONE_LOG_INFO("[Comms] FC cmd: RTL corr={:#x}", fc_cmd.correlation_id);
-                    cmd_ok       = fc.send_mode(3);  // 3 = RTL
-                    last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
+                case drone::ipc::FCCommandType::LAND: {
+                    const auto outcome = drone::comms::dispatch_fc_response(fc, fc_cmd,
+                                                                            last_traj_ts);
+                    cmd_ok = outcome.backend_outcome == drone::ipc::FCBackendOutcome::SUBMITTED;
+                    try {
+                        outcome_pub.publish(outcome);
+                    } catch (const std::exception& error) {
+                        DRONE_LOG_WARN("[Comms] FC outcome publish failed seq={}: {}",
+                                       outcome.sequence_id, error.what());
+                    }
                     break;
-                case drone::ipc::FCCommandType::LAND:
-                    DRONE_LOG_INFO("[Comms] FC cmd: LAND corr={:#x}", fc_cmd.correlation_id);
-                    cmd_ok       = fc.send_mode(2);  // 2 = AUTO (Hold/Land)
-                    last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
-                    break;
+                }
                 default: break;
             }
             if (!cmd_ok) {
@@ -477,7 +483,12 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
     // ── Publishers ──────────────────────────────────────────
-    auto fc_pub      = ctx.bus.advertise<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto fc_pub = ctx.bus.advertise<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto outcome_pub =
+        ctx.bus.advertise<drone::ipc::FCCommandOutcome>(drone::ipc::topics::FC_COMMAND_OUTCOME);
+    if (!outcome_pub->is_ready()) {
+        DRONE_LOG_WARN("[Comms] FC command outcome publishing unavailable");
+    }
     auto gcs_cmd_pub = ctx.bus.advertise<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
     auto mission_upload_pub =
         ctx.bus.advertise<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
@@ -504,7 +515,8 @@ int main(int argc, char* argv[]) {
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t1(fc_rx_thread, std::ref(*fc_link), std::ref(*fc_pub), std::ref(*fault_sub));
-    std::thread t2(fc_tx_thread, std::ref(*fc_link), std::ref(*traj_sub), std::ref(*fc_cmd_sub));
+    std::thread t2(fc_tx_thread, std::ref(*fc_link), std::ref(*traj_sub), std::ref(*fc_cmd_sub),
+                   std::ref(*outcome_pub));
     std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(*gcs_cmd_pub));
     std::thread t4(gcs_tx_thread, std::ref(*gcs_link), std::ref(*pose_sub), std::ref(*mission_sub),
                    std::ref(*fc_sub));

@@ -1726,6 +1726,17 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 ## Comms (Process 5)
 
+### Fix #67 — Fault-response backend failure absent from planner diagnostics (Issue #832)
+
+P4 published a fault-triggered RTL or LAND request and recorded its local
+decision. P5 knew whether the backend call failed, and only P5 logged that
+outcome. The issue was found during static review of the P4-to-P5 control path.
+
+P5 now publishes a correlated backend outcome and P4 exposes the result in
+fault-response diagnostics. The P4/P5 regression exercises the real request
+and dispatch functions with a failing fake backend and Zenoh IPC. See
+[Issue #832](https://github.com/nmohamaya/companion_software_stack/issues/832).
+
 ---
 
 ### Fix #18 — Fault Flags Never Logged on Escalation
