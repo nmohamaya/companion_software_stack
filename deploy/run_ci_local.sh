@@ -1,356 +1,59 @@
 #!/usr/bin/env bash
-# deploy/run_ci_local.sh — Run the same checks as GitHub Actions CI, locally.
-#
-# Usage:
-#   bash deploy/run_ci_local.sh            # Run all CI jobs (format + build + sanitizers + coverage)
-#   bash deploy/run_ci_local.sh --quick    # Format + build (no sanitizers, no coverage)
-#   bash deploy/run_ci_local.sh --job FMT  # Run a single job by tag
-#
-# Jobs (tags):
-#   FMT       clang-format-18 check
-#   DOC       doc-SSOT lint (no hardcoded test-count totals) — gate
-#   BUILD     Debug build + test (Zenoh)
-#   CPPCHECK  cppcheck static analysis (advisory)
-#   TIDY      clang-tidy on changed files (advisory)
-#   ASAN      AddressSanitizer
-#   TSAN      ThreadSanitizer
-#   UBSAN     UBSanitizer
-#   COV       Coverage build + lcov report
-#   COVDELTA  changed-line coverage delta (advisory; needs COV first)
-#
-# The script mirrors the CI matrix in .github/workflows/ci.yml.
-# If you want to save the results, pipe to a file: bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log
+# Run the same repository checks as GitHub Actions with independent job results.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="${PROJECT_DIR}/build"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+all_jobs=(FMT DOC BUILD ASAN TSAN UBSAN COV CPPCHECK AUDIT PYTHON PR_SIZE BOUNDARIES)
+selected=("${all_jobs[@]}")
 
-# Issue #804 — evidence store for generated reports (ctest logs, coverage).
-# One tests run-dir per invocation, created lazily on first use.
-source "${SCRIPT_DIR}/lib_evidence.sh"
-EVIDENCE_TESTS_DIR=""
-tests_evidence_dir() {
-    if [[ -z "$EVIDENCE_TESTS_DIR" ]]; then
-        EVIDENCE_TESTS_DIR="$(evidence_run_dir tests run_ci_local.sh)"
-        echo "  evidence: ${EVIDENCE_TESTS_DIR}" >&2
-    fi
-    echo "$EVIDENCE_TESTS_DIR"
-}
-
-# ── Colors ───────────────────────────────────────────────────
-if [[ -t 1 ]]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    BOLD='\033[1m'
-    RESET='\033[0m'
-else
-    RED='' GREEN='' BOLD='' RESET=''
+case "${1:-}" in
+    '') ;;
+    --quick|-q) selected=(FMT DOC BUILD) ;;
+    --job|-j)
+        case "${2:-}" in
+            FMT|DOC|BUILD|ASAN|TSAN|UBSAN|COV|CPPCHECK|AUDIT|PYTHON|PR_SIZE|BOUNDARIES|TIDY|COVDELTA)
+                selected=("$2") ;;
+            *) echo "Unknown CI job: ${2:-<missing>}" >&2; exit 2 ;;
+        esac
+        shift
+        ;;
+    --help|-h)
+        echo "Usage: bash deploy/run_ci_local.sh [--quick | --job TAG]"
+        echo "Full run: ${all_jobs[*]}"
+        echo "Quick run: FMT DOC BUILD"
+        echo "Standalone advisory jobs: TIDY COVDELTA"
+        exit 0
+        ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+esac
+if (( $# > 1 )); then
+    echo "Use --help for supported arguments" >&2
+    exit 2
 fi
 
-# ── Parse arguments ──────────────────────────────────────────
-MODE="all"          # all | quick | single
-SINGLE_JOB=""
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --quick|-q)   MODE="quick" ;;
-        --job|-j)     MODE="single"; SINGLE_JOB="$2"; shift ;;
-        --help|-h)
-            head -17 "$0" | tail -15
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}Unknown option: $1${RESET}"
-            echo "Run: $0 --help"
-            exit 1
-            ;;
-    esac
-    shift
+failed=()
+for job in "${selected[@]}"; do
+    echo "=== $job ==="
+    launcher=()
+    if [[ "$job" == TSAN ]]; then
+        mmap_bits="$(sysctl -n vm.mmap_rnd_bits 2>/dev/null || true)"
+        if [[ ! "$mmap_bits" =~ ^[0-9]+$ ]] || (( mmap_bits > 28 )); then
+            echo "TSan runner: using process-local ASLR workaround (Actions uses vm.mmap_rnd_bits=28)"
+            launcher=(setarch "$(uname -m)" -R)
+        fi
+    fi
+    # A separate Bash process preserves errexit inside the job while allowing
+    # the orchestrator to keep running other independent jobs after failure.
+    if "${launcher[@]}" bash "$script_dir/ci_job.sh" "$job"; then
+        echo "PASS $job"
+    else
+        failed+=("$job")
+        echo "FAIL $job"
+    fi
 done
 
-# ── Job definitions ──────────────────────────────────────────
-PASS=0
-FAIL=0
-TOTAL=0
-FAILED_JOBS=()
-
-run_job() {
-    local tag="$1"
-    local label="$2"
-    shift 2
-
-    TOTAL=$((TOTAL + 1))
-    echo ""
-    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}  [${tag}] ${label}${RESET}"
-    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-
-    local start
-    start=$(date +%s)
-
-    if "$@"; then
-        local elapsed=$(( $(date +%s) - start ))
-        echo -e "${GREEN}${BOLD}  ✓ [${tag}] PASSED${RESET} (${elapsed}s)"
-        PASS=$((PASS + 1))
-    else
-        local elapsed=$(( $(date +%s) - start ))
-        echo -e "${RED}${BOLD}  ✗ [${tag}] FAILED${RESET} (${elapsed}s)"
-        FAIL=$((FAIL + 1))
-        FAILED_JOBS+=("$tag")
-    fi
-}
-
-should_run() {
-    local tag="$1"
-    if [[ "$MODE" == "single" ]]; then
-        [[ "$SINGLE_JOB" == "$tag" ]]
-    elif [[ "$MODE" == "quick" ]]; then
-        [[ "$tag" == "FMT" || "$tag" == "DOC" || "$tag" == "BUILD" ]]
-    else
-        return 0  # all
-    fi
-}
-
-# ── Helper: build + test ────────────────────────────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-build_and_test() {
-    local build_type="$1"
-    shift
-    # Remaining args are extra cmake flags
-    local cmake_flags=("$@")
-
-    # Determine ctest exclusions (mirrors CI) + evidence log variant name
-    local ctest_exclude=""
-    local variant="default"
-    for flag in "${cmake_flags[@]}"; do
-        case "$flag" in
-            -DENABLE_TSAN=ON)
-                ctest_exclude="Zenoh|Mavlink|Yolo|Liveliness|MessageBus"
-                variant="tsan" ;;
-            -DENABLE_ASAN=ON)  variant="asan" ;;
-            -DENABLE_UBSAN=ON) variant="ubsan" ;;
-        esac
-    done
-
-    echo "  cmake -B build -DCMAKE_BUILD_TYPE=${build_type} -DALLOW_INSECURE_ZENOH=ON ${cmake_flags[*]}"
-    # shellcheck disable=SC2086
-    cmake -B "${BUILD_DIR}" \
-        -DCMAKE_BUILD_TYPE="${build_type}" \
-        -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
-        -DALLOW_INSECURE_ZENOH=ON \
-        "${cmake_flags[@]}" 2>&1
-
-    echo "  cmake --build build -j$(nproc)"
-    cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1
-
-    echo ""
-    # Issue #804 — full ctest output is teed into the evidence store.
-    # `set -o pipefail` (script header) keeps ctest's exit code authoritative.
-    local ctest_log
-    ctest_log="$(tests_evidence_dir)/ctest_${variant}.log"
-    if [[ -n "$ctest_exclude" ]]; then
-        echo "  ctest (excluding: ${ctest_exclude})"
-        ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" -E "${ctest_exclude}" \
-            2>&1 | tee "${ctest_log}"
-    else
-        echo "  ctest --output-on-failure"
-        ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" \
-            2>&1 | tee "${ctest_log}"
-    fi
-}
-
-# ── Job: FMT ─────────────────────────────────────────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_fmt() {
-    cd "$PROJECT_DIR"
-    find common process[1-7]_* tests tools \( -name '*.h' -o -name '*.cpp' \) -print0 \
-        | xargs -0 clang-format-18 --dry-run --Werror 2>&1
-    echo "  All files formatted correctly."
-}
-
-# ── Job: Build + test ────────────────────────────────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_build()    { cd "$PROJECT_DIR" && build_and_test Debug; }
-# shellcheck disable=SC2317
-job_asan()     { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_ASAN=ON; }
-# shellcheck disable=SC2317
-job_tsan()     { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_TSAN=ON; }
-# shellcheck disable=SC2317
-job_ubsan()    { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_UBSAN=ON; }
-
-# ── Helper: coverage report generation (mirrors CI) ─────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-generate_coverage_report() {
-    echo ""
-    echo "  Capturing coverage data..."
-    lcov --capture --directory "${BUILD_DIR}" --output-file "${BUILD_DIR}/coverage-raw.info" \
-        --ignore-errors mismatch,negative --rc lcov_branch_coverage=1 2>/dev/null
-    lcov --remove "${BUILD_DIR}/coverage-raw.info" \
-        '/usr/*' '*/googletest/*' '*/gtest/*' '*/test/*' '*/tests/*' '*_test.cpp' '*_test.h' \
-        --output-file "${BUILD_DIR}/coverage.info" \
-        --ignore-errors unused --rc lcov_branch_coverage=1 2>/dev/null
-
-    # Print summary
-    echo ""
-    echo "  Coverage summary:"
-    lcov --list "${BUILD_DIR}/coverage.info" --rc lcov_branch_coverage=1 2>/dev/null | tail -5
-    echo ""
-
-    # Enforce coverage threshold (mirrors CI)
-    local lcov_summary
-    lcov_summary=$(lcov --summary "${BUILD_DIR}/coverage.info" 2>&1) || true
-    local coverage
-    coverage=$(echo "$lcov_summary" | sed -n 's/.*lines\.\.\.\.\.\.: \([0-9.]*\)%.*/\1/p')
-    if [[ -z "$coverage" ]] || ! echo "$coverage" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-        echo -e "${RED}  ERROR: Failed to parse line coverage from lcov summary${RESET}"
-        echo "  lcov output was:"
-        echo "$lcov_summary"
-        return 1
-    fi
-    echo "  Line coverage: ${coverage}%"
-    if awk "BEGIN { exit !(${coverage} < 70.0) }"; then
-        echo -e "${RED}  ERROR: Line coverage ${coverage}% is below 70% threshold${RESET}"
-        return 1
-    fi
-    echo -e "${GREEN}  Coverage threshold (70%) met.${RESET}"
-
-    # Generate HTML report
-    if command -v genhtml &>/dev/null; then
-        echo ""
-        echo "  Generating HTML report..."
-        genhtml "${BUILD_DIR}/coverage.info" \
-            --output-directory "${BUILD_DIR}/coverage-report" \
-            --title "Companion Stack Coverage" \
-            --rc genhtml_branch_coverage=1 \
-            --legend --highlight --demangle-cpp 2>/dev/null
-        echo "  Coverage report: ${BUILD_DIR}/coverage-report/index.html"
-    else
-        echo "  genhtml not found — raw coverage in ${BUILD_DIR}/coverage.info"
-    fi
-
-    # Issue #804 — persist coverage evidence (lcov data + summary + HTML).
-    local ev_dir
-    ev_dir="$(evidence_run_dir coverage run_ci_local.sh)"
-    cp "${BUILD_DIR}/coverage.info" "${ev_dir}/coverage.info"
-    echo "$lcov_summary" > "${ev_dir}/summary.txt"
-    if [[ -d "${BUILD_DIR}/coverage-report" ]]; then
-        cp -r "${BUILD_DIR}/coverage-report" "${ev_dir}/html"
-    fi
-    echo "  evidence: ${ev_dir}"
-}
-
-# ── Job: Coverage ────────────────────────────────────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_cov() {
-    cd "$PROJECT_DIR"
-
-    # Configure + build (without running tests — avoid double test run)
-    echo "  cmake -B build -DCMAKE_BUILD_TYPE=Debug -DALLOW_INSECURE_ZENOH=ON -DENABLE_COVERAGE=ON"
-    cmake -B "${BUILD_DIR}" \
-        -DCMAKE_BUILD_TYPE=Debug \
-        -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
-        -DALLOW_INSECURE_ZENOH=ON \
-        -DENABLE_COVERAGE=ON 2>&1
-
-    echo "  cmake --build build -j$(nproc)"
-    cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1
-
-    # Zero counters before the single test run
-    echo ""
-    echo "  Zeroing counters..."
-    lcov --zerocounters --directory "${BUILD_DIR}" 2>/dev/null
-
-    # Run tests once for clean coverage (log teed to evidence — #804)
-    echo "  ctest --output-on-failure"
-    ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)" \
-        2>&1 | tee "$(tests_evidence_dir)/ctest_coverage.log"
-
-    generate_coverage_report
-}
-
-# ── Job: doc-SSOT lint (gate) ────────────────────────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_doc() {
-    cd "$PROJECT_DIR"
-    bash deploy/lint_docs_ssot.sh --changed "${CI_BASE:-origin/main}"
-}
-
-# ── Job: cppcheck (advisory — never fails local CI) ──────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_cppcheck() {
-    cd "$PROJECT_DIR"
-    # Issue #804 — capture the full cppcheck output as evidence (mirrors CI).
-    local ev_dir
-    ev_dir="$(evidence_run_dir static-analysis run_ci_local.sh)"
-    bash deploy/run_cppcheck.sh 2>&1 | tee "${ev_dir}/cppcheck.log" \
-        || echo "  (cppcheck advisory — findings above do not fail local CI)"
-    echo "  evidence: ${ev_dir}"
-    return 0
-}
-
-# ── Job: clang-tidy on changed files (advisory) ──────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_tidy() {
-    cd "$PROJECT_DIR"
-    bash deploy/run_clang_tidy.sh --changed "${CI_BASE:-origin/main}" \
-        || echo "  (clang-tidy advisory — findings above do not fail local CI)"
-    return 0
-}
-
-# ── Job: changed-line coverage delta (advisory; needs COV) ───
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_covdelta() {
-    cd "$PROJECT_DIR"
-    if [[ -f "${BUILD_DIR}/coverage.info" ]]; then
-        python3 deploy/coverage_delta.py --coverage "${BUILD_DIR}/coverage.info" \
-            --base "${CI_BASE:-origin/main}" || true
-    else
-        echo "  (no ${BUILD_DIR}/coverage.info — run the COV job first; skipping)"
-    fi
-    return 0
-}
-
-# ── Run selected jobs ────────────────────────────────────────
-echo -e "${BOLD}══════════════════════════════════════════════════════${RESET}"
-echo -e "${BOLD}  Local CI Runner  (mode: ${MODE})${RESET}"
-echo -e "${BOLD}══════════════════════════════════════════════════════${RESET}"
-
-START_ALL=$(date +%s)
-
-should_run "FMT"      && run_job "FMT"      "Format check (clang-format-18)"   job_fmt
-should_run "DOC"      && run_job "DOC"      "Doc-SSOT lint (gate)"             job_doc
-should_run "BUILD"    && run_job "BUILD"    "Build + test (Debug)"             job_build
-should_run "CPPCHECK" && run_job "CPPCHECK" "cppcheck (advisory)"             job_cppcheck
-should_run "TIDY"     && run_job "TIDY"     "clang-tidy changed (advisory)"   job_tidy
-should_run "ASAN"     && run_job "ASAN"     "Build + test (ASan)"             job_asan
-should_run "TSAN"     && run_job "TSAN"     "Build + test (TSan)"             job_tsan
-should_run "UBSAN"    && run_job "UBSAN"    "Build + test (UBSan)"            job_ubsan
-should_run "COV"      && run_job "COV"      "Coverage (Debug + lcov)"         job_cov
-should_run "COVDELTA" && run_job "COVDELTA" "Coverage delta (advisory)"       job_covdelta
-
-# ── Summary ──────────────────────────────────────────────────
-ELAPSED_ALL=$(( $(date +%s) - START_ALL ))
-
-echo ""
-echo -e "${BOLD}══════════════════════════════════════════════════════${RESET}"
-echo -e "${BOLD}  CI Summary${RESET}"
-echo -e "${BOLD}══════════════════════════════════════════════════════${RESET}"
-echo -e "  Total : ${TOTAL}"
-echo -e "  Passed: ${GREEN}${PASS}${RESET}"
-if [[ "$FAIL" -gt 0 ]]; then
-    echo -e "  Failed: ${RED}${FAIL}${RESET}  (${FAILED_JOBS[*]})"
-else
-    echo -e "  Failed: 0"
-fi
-echo -e "  Time  : ${ELAPSED_ALL}s"
-echo ""
-
-if [[ "$FAIL" -gt 0 ]]; then
-    echo -e "${RED}${BOLD}✗ CI would FAIL${RESET}"
+if (( ${#failed[@]} > 0 )); then
+    echo "Failed jobs: ${failed[*]}" >&2
     exit 1
-else
-    echo -e "${GREEN}${BOLD}✓ CI would PASS${RESET}"
-    exit 0
 fi
+echo "Passed jobs: ${selected[*]}"
