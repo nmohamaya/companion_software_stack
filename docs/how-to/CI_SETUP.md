@@ -35,44 +35,30 @@
   - [Local Reproduction](#local-reproduction)
     - [Automated: `deploy/run_ci_local.sh`](#automated-deployrun_ci_localsh)
       - [Available Job Tags](#available-job-tags)
-    - [Manual: Reproducing a Single CI Leg](#manual-reproducing-a-single-ci-leg)
+    - [Reproducing a single CI leg](#reproducing-a-single-ci-leg)
 
 ---
 
 ## Pipeline Overview
 
-The CI pipeline has **3 jobs** totalling **6 parallel runners** at peak:
+The GitHub workflows and local runner call the shared commands in
+[`deploy/ci_job.sh`](../../deploy/ci_job.sh).
 
-| Job | Purpose | Runners | Gate? |
-|-----|---------|---------|-------|
-| `format-check` | Verify all C++ files match `.clang-format` | 1 | Yes — blocks `build-and-test` |
-| `build-and-test` | Compile + run tests for each sanitizer variant | 4 | No — `fail-fast: false`, all legs run |
-| `coverage` | Build with gcov, run tests, upload lcov report | 1 | No — independent |
-
-**IPC backend:** Zenoh is the sole IPC backend (SHM was removed in Issue #126). All CI jobs build with Zenoh and `ALLOW_INSECURE_ZENOH=ON`.
-
-**Total wall-clock time:** ~4–6 minutes (format-check ~30 s, then build matrix ~3–5 min in parallel).
-
----
+| Check | Purpose | Failure policy |
+|---|---|---|
+| `format-check`, `doc-lint` | C++ formatting and documentation lint | Fails the check |
+| `build-and-test` | Release and three Debug sanitizer builds and tests | Fails the affected leg |
+| `coverage` | Coverage build, test run, 70% line gate and report | Fails the check |
+| `orchestrator-tests` | Python 3.12 orchestrator tests | Fails the check |
+| `cppcheck`, `safety-audit` | Static analysis and safety audit | Advisory |
+| `pr-size`, `agent-boundaries` | PR size and branch scope | Size gate and scope advisory |
 
 ## Job Dependency Graph
 
-```
-                  ┌─────────────┐
-                  │format-check │  ← Fast gate (~30 s)
-                  └──────┬──────┘
-                         │ needs: format-check
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-   ┌─────────────┐ ┌──────────┐ ┌──────────┐
-   │   build     │ │  build   │ │  build   │  ... (4 legs total)
-   │  (default)  │ │  (asan)  │ │  (tsan)  │
-   └─────────────┘ └──────────┘ └──────────┘
-
-   ┌────────────────┐
-   │    coverage    │  ← Independent, no gate dependency
-   └────────────────┘
-```
+Formatting, documentation, the matrix, coverage and Python jobs can run
+independently. The build matrix keeps running its remaining legs when one
+fails. Coverage runs clang-tidy and changed-line coverage as advisories in its
+own job.
 
 ---
 
@@ -231,22 +217,11 @@ genhtml coverage.info --output-directory coverage-report
 
 ## Zenoh Installation on CI
 
-Zenoh is not available via `apt`, so the CI installs it from GitHub releases:
-
-1. **zenohc** (C library) — Pre-built `.deb` packages from [eclipse-zenoh/zenoh-c releases](https://github.com/eclipse-zenoh/zenoh-c/releases). Currently pinned to **v1.7.2**.
-   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](../tracking/CI_ISSUES.md).
-   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](../tracking/CI_ISSUES.md).
-
-2. **zenoh-cpp** (header-only C++ bindings) — Cloned from GitHub at the matching version tag, installed via `cmake --install`.
-
-**Upgrading Zenoh version:**
-```yaml
-# In ci.yml, update:
-ZENOH_VERSION="1.8.0"  # example
-# And update the zenoh-cpp clone tag to match
-```
-
-Test locally first — Zenoh API breaking changes are common between minor versions.
+The shared job script extracts the pinned Zenoh C release package and
+installs the matching C++ headers under the CI build root. Both entry points
+use that prefix for compilation and linking. Update the version in the shared
+script when upgrading Zenoh and run the full local matrix before requesting
+review.
 
 ---
 
@@ -419,34 +394,9 @@ That workaround must be permitted by the host. A host that prohibits it reports
 a failed TSan job. A successful local run exercises the same check commands.
 Runner images, package updates and GitHub service behavior can still differ.
 
-### Manual: Reproducing a Single CI Leg
+### Reproducing a single CI leg
 
-To reproduce a specific CI failure manually, match the CI environment:
-
-```bash
-# 1. Use the same Ubuntu version (or close to it)
-#    CI uses ubuntu-24.04
-
-# 2. Install the same dependencies
-sudo apt-get install -y build-essential cmake libspdlog-dev \
-  libeigen3-dev nlohmann-json3-dev libgtest-dev
-
-# 3. Build with the same flags as the failing leg
-#    Example: reproducing an asan failure
-cmake -B build \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
-  -DALLOW_INSECURE_ZENOH=ON \
-  -DENABLE_ASAN=ON
-cmake --build build -j$(nproc)
-ctest --test-dir build --output-on-failure -j$(nproc)
-```
-
-**Common local vs CI differences:**
-- Anaconda `LD_LIBRARY_PATH` can mask system libraries locally
-- Local machine may have additional packages (MAVSDK, OpenCV, Gazebo) that CI lacks
-- Kernel ASLR bits differ (local kernel >=6.17 may need `vm.mmap_rnd_bits=28` for TSan)
-
----
-
-*Last updated: 2026-03-19 — updated to reflect Zenoh-only pipeline (SHM backend removed in Issue #126). 3 jobs, 4-leg sanitizer matrix, 6 local CI tags.*
+Use `bash deploy/run_ci_local.sh --job ASAN`, replacing ASAN with the tag
+for the failing job. The corresponding build tree remains under
+`build-ci/` for investigation. A direct CMake configuration may select
+workstation SDKs or a different Zenoh installation.
